@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import {ERC20} from "@openzeppelin-contracts-5.2.0/token/ERC20/ERC20.sol";
+import {Ownable} from "@openzeppelin-contracts-5.2.0/access/Ownable.sol";
 
 /**
  * @title MockERC20

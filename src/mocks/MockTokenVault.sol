@@ -2,9 +2,9 @@
 pragma solidity ^0.8.20;
 
 import {IVault} from "../interfaces/IVault.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20, IERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {IERC20} from "@openzeppelin-contracts-5.2.0/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin-contracts-5.2.0/token/ERC20/utils/SafeERC20.sol";
+import {Ownable} from "@openzeppelin-contracts-5.2.0/access/Ownable.sol";
 
 /**
  * @title MockTokenVault
@@ -37,7 +37,7 @@ contract MockTokenVault is IVault, Ownable {
      * @notice Mock calculation: returns a fixed default amount per NFT.
      * @dev Ignores the user and collection address for simplicity in this mock.
      */
-    function getPendingYield(address user, address collectionAddress, uint256 nftCount)
+    function getPendingYield(address, /* user */ address, /* collectionAddress */ uint256 nftCount)
         public
         view
         override
@@ -96,7 +96,7 @@ contract MockTokenVault is IVault, Ownable {
     /**
      * @notice Helper to fund the mock vault with yield tokens.
      */
-    function fundVault(uint256 amount) external payable {
+    function fundVault(uint256 /* amount */ ) external payable {
         // Allow funding via ETH transfer if yieldToken is WETH, or require direct ERC20 transfer
         // For simplicity, assuming direct ERC20 transfer is handled externally by tests
         require(msg.value == 0, "MockTokenVault: Use direct ERC20 transfer to fund");
