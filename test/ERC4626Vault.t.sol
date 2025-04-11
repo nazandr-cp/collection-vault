@@ -91,8 +91,7 @@ contract ERC4626VaultTest is Test {
 
     function test_Withdraw_Success() public {
         uint256 depositAmount = 500 ether;
-        uint256 initialTotalAssets = lendingManager.totalAssets();
-        uint256 totalAssetsAfterDeposit = initialTotalAssets + depositAmount;
+        // uint256 initialTotalAssets = lendingManager.totalAssets(); // Not strictly needed for this test's assertions
 
         vm.expectCall(
             address(lendingManager),
@@ -104,7 +103,10 @@ contract ERC4626VaultTest is Test {
         uint256 sharesAlice = vault.deposit(depositAmount, USER_ALICE);
 
         uint256 withdrawAmount = 100 ether;
-        uint256 expectedTotalAssetsAfterWithdraw = totalAssetsAfterDeposit - withdrawAmount;
+        uint256 vaultTotalAssetsBeforeWithdraw = vault.totalAssets(); // Get state before withdraw
+
+        // Calculate expected shares *before* the state changes
+        uint256 expectedSharesToWithdraw = vault.previewWithdraw(withdrawAmount);
 
         vm.expectCall(
             address(lendingManager),
@@ -117,7 +119,7 @@ contract ERC4626VaultTest is Test {
         uint256 sharesBurned = vault.withdraw(withdrawAmount, USER_ALICE, USER_ALICE);
         vm.stopPrank();
 
-        uint256 expectedSharesToWithdraw = vault.previewWithdraw(withdrawAmount);
+        assertEq(sharesBurned, expectedSharesToWithdraw, "Shares burned mismatch");
 
         assertEq(
             assetToken.balanceOf(USER_ALICE),
@@ -127,7 +129,10 @@ contract ERC4626VaultTest is Test {
         assertEq(assetToken.balanceOf(address(vault)), 0, "Vault direct asset balance should be 0 after withdraw");
         assertEq(vault.balanceOf(USER_ALICE), sharesAlice - sharesBurned, "Alice shares after withdraw");
 
-        assertEq(vault.totalAssets(), expectedTotalAssetsAfterWithdraw, "Vault total assets after withdraw");
+        // Assert total assets changed correctly
+        assertEq(
+            vault.totalAssets(), vaultTotalAssetsBeforeWithdraw - withdrawAmount, "Vault total assets after withdraw"
+        );
     }
 
     function test_Mint_Success() public {
@@ -216,8 +221,8 @@ contract ERC4626VaultTest is Test {
 
     function test_RevertIf_Withdraw_LMFails() public {
         uint256 depositAmount = 100 ether;
-        uint256 initialTotalAssets = lendingManager.totalAssets();
-        uint256 totalAssetsAfterDeposit = initialTotalAssets + depositAmount;
+        // uint256 initialTotalAssets = lendingManager.totalAssets(); // Unused
+        // uint256 totalAssetsAfterDeposit = initialTotalAssets + depositAmount; // Unused
 
         vm.expectCall(
             address(lendingManager),

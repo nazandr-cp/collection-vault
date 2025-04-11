@@ -27,6 +27,8 @@ contract ERC4626Vault is ERC4626, Ownable {
     error LendingManagerWithdrawFailed();
     error LendingManagerMismatch();
     error WithdrawInsufficientBalance();
+    error ZeroShares();
+    error InsufficientAssetBalance();
 
     // --- Constructor --- //
 
@@ -60,13 +62,14 @@ contract ERC4626Vault is ERC4626, Ownable {
     // --- ERC4626 Overrides --- //
 
     /**
-     * @notice Calculates the total amount of underlying assets managed by the vault.
-     * @dev Overrides the default ERC4626 implementation to query the LendingManager
-     *      for the total underlying balance, including principal and yield.
-     * @return The total underlying assets held via the LendingManager.
+     * @dev See {IERC4626-totalAssets}.
+     *
+     * Overridden to return the total amount of the underlying asset managed by the vault
+     * via the lending manager. Assets held directly by the vault are usually in transit
+     * and not actively managed or yield-generating in the context of this strategy.
      */
     function totalAssets() public view override returns (uint256) {
-        return lendingManager.totalAssets();
+        return lendingManager.totalAssets(); // Only count assets in the lending manager
     }
 
     /**
@@ -117,57 +120,66 @@ contract ERC4626Vault is ERC4626, Ownable {
         override
         returns (uint256 shares)
     {
-        // --- Pre-Withdraw Hook Logic ---
+        // Calculate shares needed based on current state BEFORE withdrawal from LM
+        shares = previewWithdraw(assets); // Shares to burn for the requested assets
+        if (shares == 0 && assets > 0) {
+            revert ZeroShares();
+        }
+        if (assets == 0 && shares == 0) {
+            emit Withdraw(msg.sender, receiver, owner, 0, 0);
+            return 0;
+        }
+
+        // Check owner balance *before* burning
+        if (shares > balanceOf(owner)) {
+            revert ERC20InsufficientBalance(owner, balanceOf(owner), shares);
+        }
+
+        // --- Pre-Withdraw Hook Logic (Ensure assets are available in the vault) ---
         if (assets > 0) {
-            // How many assets does the vault hold directly?
             uint256 directBalance = IERC20(asset()).balanceOf(address(this));
-
-            // How many assets are available in total (via LM)?
-            uint256 totalAvailable = totalAssets();
-
-            // Calculate required shares *before* potentially withdrawing from LM
-            // This ensures we use the correct pre-withdrawal exchange rate.
-            shares = previewWithdraw(assets);
-
-            // Check if the owner has enough shares FIRST (standard ERC4626 check)
-            // This check is implicitly done in super.withdraw, but we might need it earlier.
-            // require(balanceOf[owner] >= shares, "ERC4626: withdraw exceeds balance"); // Replicated check
-
-            // Check if the requested asset amount is available in the system
-            if (totalAvailable < assets) {
-                revert WithdrawInsufficientBalance(); // Use a specific error
-            }
-
-            // Do we need to pull funds from the Lending Manager?
             if (directBalance < assets) {
+                uint256 totalAvailable = totalAssets(); // Use overridden totalAssets
+                if (totalAvailable < assets) {
+                    revert InsufficientAssetBalance();
+                }
                 uint256 amountToWithdrawFromLM = assets - directBalance;
-
-                // Request withdrawal from LendingManager
                 bool success = lendingManager.withdrawFromLendingProtocol(amountToWithdrawFromLM);
                 if (!success) {
                     revert LendingManagerWithdrawFailed();
                 }
-
-                // Sanity check: Vault should now have enough direct balance
-                uint256 balanceAfterLMWithdraw = IERC20(asset()).balanceOf(address(this));
-                require(balanceAfterLMWithdraw >= assets, "Vault: Insufficient balance post-LM withdraw");
+                require(
+                    IERC20(asset()).balanceOf(address(this)) >= assets, "Vault: Insufficient balance post-LM withdraw"
+                );
             }
-        } else {
-            // If assets == 0, previewWithdraw would return 0 shares
-            shares = 0;
         }
         // --- End Pre-Withdraw Hook Logic ---
 
-        // Call base withdraw function to handle burning shares and transferring assets
-        // Note: super.withdraw recalculates shares based on the state *after* we potentially withdrew from LM.
-        // This might slightly change the number of shares burned compared to the `shares` calculated above
-        // if the LM withdrawal somehow changed totalAssets significantly (e.g. fees).
-        // For consistency, it might be better to rely *only* on super.withdraw's share calculation.
-        // Let's stick to calling super.withdraw and letting it handle the share burning.
-        shares = super.withdraw(assets, receiver, owner);
+        // Perform the withdrawal logic directly:
 
-        // Event Emission is handled by super.withdraw
-        return shares;
+        // 1. Handle allowance if caller is not owner
+        if (owner != msg.sender) {
+            uint256 currentAllowance = allowance(owner, msg.sender);
+            if (currentAllowance != type(uint256).max) {
+                if (currentAllowance < shares) {
+                    revert ERC20InsufficientAllowance(msg.sender, currentAllowance, shares);
+                }
+                _approve(owner, msg.sender, currentAllowance - shares); // Consume allowance
+            }
+        }
+
+        // 2. Burn the pre-calculated shares
+        _burn(owner, shares);
+
+        // 3. Transfer the originally requested assets
+        if (assets > 0) {
+            SafeERC20.safeTransfer(IERC20(asset()), receiver, assets);
+        }
+
+        // Emit the standard event
+        emit Withdraw(msg.sender, receiver, owner, assets, shares);
+
+        return shares; // Return the shares burned
     }
 
     /**
@@ -255,6 +267,12 @@ contract ERC4626Vault is ERC4626, Ownable {
 
         return assets; // Return the pre-calculated asset amount
     }
+
+    // --- Internal Logic ---
+
+    // Removed _beforeTokenTransfer override and related helpers as they are
+    // not compatible with the base OZ ERC4626 implementation.
+    // Lending manager interactions are handled directly within deposit/mint/withdraw/redeem.
 
     // --- Custom Functions (Optional) ---
     // Add any other custom logic specific to this vault if needed.
