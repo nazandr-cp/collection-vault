@@ -12,7 +12,7 @@ interface IRewardsController {
     struct UserNFTInfo {
         uint256 lastUpdateBlock;
         uint256 lastNFTBalance;
-        uint256 accruedBonus; // Represents the unclaimed bonus portion scaled or calculated in some unit
+        uint256 lastUserRewardIndex;
     }
 
     // --- Events ---

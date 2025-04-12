@@ -16,6 +16,7 @@ contract LendingManagerTest is Test {
     address constant REWARDS_CONTROLLER = address(0xDEF);
     address constant OTHER_USER = address(0x123);
     address constant OWNER = address(0x001);
+    address constant MOCK_NFT_COLLECTION = address(0x111); // Placeholder NFT Collection
     uint256 constant INITIAL_SUPPLY = 1_000_000 ether;
     uint256 constant VAULT_INITIAL_ASSET = 100_000 ether;
     uint256 constant PRECISION = 1e18;
@@ -65,7 +66,7 @@ contract LendingManagerTest is Test {
 
         // Simulate LendingManager calling deposit
         vm.startPrank(VAULT_ADDRESS); // Called by Vault
-        bool success = lendingManager.depositToLendingProtocol(depositAmount);
+        bool success = lendingManager.depositToLendingProtocol(depositAmount, MOCK_NFT_COLLECTION);
         vm.stopPrank();
 
         assertTrue(success, "Deposit should succeed");
@@ -90,7 +91,7 @@ contract LendingManagerTest is Test {
 
         vm.startPrank(VAULT_ADDRESS);
         vm.expectRevert(LendingManager.MintFailed.selector);
-        lendingManager.depositToLendingProtocol(depositAmount);
+        lendingManager.depositToLendingProtocol(depositAmount, MOCK_NFT_COLLECTION);
         vm.stopPrank();
 
         // Ensure assets were pulled but not stuck in LM
@@ -112,7 +113,7 @@ contract LendingManagerTest is Test {
         vm.expectCall(address(cToken), abi.encodeWithSelector(MinimalCTokenInterface.mint.selector, depositAmount), 1);
         cToken.setMintResult(0);
         vm.prank(VAULT_ADDRESS);
-        lendingManager.depositToLendingProtocol(depositAmount);
+        lendingManager.depositToLendingProtocol(depositAmount, MOCK_NFT_COLLECTION);
         uint256 initialVaultBalance = assetToken.balanceOf(VAULT_ADDRESS);
         // Check balance via LM's totalAssets
         assertEq(lendingManager.totalAssets(), depositAmount, "Total assets after deposit");
@@ -151,7 +152,7 @@ contract LendingManagerTest is Test {
         uint256 depositAmount = 10_000 ether;
         vm.expectCall(address(cToken), abi.encodeWithSelector(MinimalCTokenInterface.mint.selector, depositAmount), 1);
         vm.prank(VAULT_ADDRESS);
-        lendingManager.depositToLendingProtocol(depositAmount);
+        lendingManager.depositToLendingProtocol(depositAmount, MOCK_NFT_COLLECTION);
         uint256 initialVaultBalance = assetToken.balanceOf(VAULT_ADDRESS);
 
         // Withdraw attempt, mock redeem failure
@@ -195,7 +196,7 @@ contract LendingManagerTest is Test {
 
         vm.expectCall(address(cToken), abi.encodeWithSelector(MinimalCTokenInterface.mint.selector, depositAmount), 1);
         vm.prank(VAULT_ADDRESS);
-        lendingManager.depositToLendingProtocol(depositAmount);
+        lendingManager.depositToLendingProtocol(depositAmount, MOCK_NFT_COLLECTION);
 
         // Check totalAssets immediately after deposit
         assertEq(lendingManager.totalAssets(), depositAmount, "Total assets mismatch after deposit");
@@ -217,7 +218,7 @@ contract LendingManagerTest is Test {
         uint256 depositAmount = 100_000 ether;
         vm.expectCall(address(cToken), abi.encodeWithSelector(MinimalCTokenInterface.mint.selector, depositAmount), 1);
         vm.prank(VAULT_ADDRESS);
-        lendingManager.depositToLendingProtocol(depositAmount);
+        lendingManager.depositToLendingProtocol(depositAmount, MOCK_NFT_COLLECTION);
 
         // Use the contract's totalAssets to calculate expected reward
         uint256 currentTotalAssets = lendingManager.totalAssets();

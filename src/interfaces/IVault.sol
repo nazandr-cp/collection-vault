@@ -39,7 +39,4 @@ interface IVault {
      * @return success Boolean indicating if the distribution was successful.
      */
     function distributeYield(address user, uint256 amount) external returns (bool success);
-
-    // --- Optional: Events (Vaults might emit their own distribution events if needed) ---
-    // event YieldDistributed(address indexed user, uint256 amount, uint256 timestamp);
 }

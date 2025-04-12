@@ -59,8 +59,13 @@ contract LendingManager is ILendingManager, Ownable {
     /**
      * @notice Deposits assets from the caller (expected to be the Vault) into the Compound protocol.
      * @dev Requires the caller (Vault) to have approved this contract to spend its assets.
+     * @param amount The amount of the underlying asset to deposit.
      */
-    function depositToLendingProtocol(uint256 amount) external override returns (bool success) {
+    function depositToLendingProtocol(uint256 amount, address /* nftCollection */ )
+        external
+        override
+        returns (bool success)
+    {
         // Allow owner for potential recovery/manual deposits
         // require(msg.sender == owner(), "Caller not vault"); // TODO: Add vault address check?
 

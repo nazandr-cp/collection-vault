@@ -10,12 +10,11 @@ import {IERC20} from "@openzeppelin-contracts-5.2.0/token/ERC20/IERC20.sol";
  */
 contract MockLendingManager is ILendingManager {
     IERC20 public immutable asset;
-    uint256 public currentTotalAssets;
-    bool public depositResult = true; // Default success
-    bool public withdrawResult = true; // Default success
-    bool public transferYieldResult = true; // Default success
+    bool public depositResult = true;
+    bool public withdrawResult = true;
+    bool public transferYieldResult = true;
 
-    // Track calls (optional, could use forge cheats)
+    // Track calls
     uint256 public depositCalledCount;
     uint256 public withdrawCalledCount;
     uint256 public transferYieldCalledCount;
@@ -32,41 +31,32 @@ contract MockLendingManager is ILendingManager {
     }
 
     // --- Mock Control Functions ---
-    function setTotalAssets(uint256 _totalAssets) external {
-        currentTotalAssets = _totalAssets;
-    }
-
-    function setExpectedDepositResult(bool _result) external {
+    function setDepositResult(bool _result) external {
         depositResult = _result;
     }
 
-    function setExpectedWithdrawResult(bool _result) external {
+    function setWithdrawResult(bool _result) external {
         withdrawResult = _result;
-    }
-
-    function setExpectedTransferYieldResult(bool _result) external {
-        transferYieldResult = _result;
     }
 
     function setExpectedTransferYield(uint256 _amount, address _recipient, bool _result) external {
         expectedTransferAmount = _amount;
         expectedTransferRecipient = _recipient;
-        transferYieldResult = _result; // Store the expected result
+        transferYieldResult = _result;
         transferYieldExpectationSet = true;
     }
 
     // --- ILendingManager Implementation ---
-    function depositToLendingProtocol(uint256 amount) external override returns (bool success) {
+    function depositToLendingProtocol(uint256 amount, address /* nftCollection */ )
+        external
+        override
+        returns (bool success)
+    {
         depositCalledCount++;
         emit MockDepositCalled(amount);
         success = depositResult;
-        if (success) {
-            // Vault now PUSHES assets via transfer before calling this.
-            // Mock just needs to update its internal asset count.
-            // Remove the transferFrom call.
-            // asset.transferFrom(msg.sender, address(this), amount);
-            currentTotalAssets += amount; // Update internal state on success
-        }
+        // Vault PUSHES assets via transfer before calling this.
+        // No need to mock transferFrom here.
         return success;
     }
 
@@ -75,32 +65,23 @@ contract MockLendingManager is ILendingManager {
         emit MockWithdrawCalled(amount);
         success = withdrawResult;
         if (success) {
-            // Prevent underflow if mock is somehow asked to withdraw more than it has
-            if (currentTotalAssets >= amount) {
-                // Simulate asset transfer FROM mock (address(this)) TO vault (msg.sender)
-                // Requires mock to hold sufficient assets.
-                // Check balance before transfer (basic check)
-                if (asset.balanceOf(address(this)) >= amount) {
-                    asset.transfer(msg.sender, amount);
-                    currentTotalAssets -= amount;
-                } else {
-                    // If mock doesn't have the funds, withdraw fails regardless of withdrawResult flag
-                    success = false;
-                }
+            // Check actual balance before transfer
+            if (asset.balanceOf(address(this)) >= amount) {
+                // Simulate asset transfer FROM mock TO vault
+                asset.transfer(msg.sender, amount);
             } else {
-                success = false; // Cannot withdraw more than total assets
-                currentTotalAssets = 0; // Should not happen if checks are correct before calling
+                // If mock doesn't have the funds, withdraw fails
+                success = false;
             }
         }
         return success;
     }
 
     function totalAssets() external view override returns (uint256) {
-        return currentTotalAssets;
+        return asset.balanceOf(address(this));
     }
 
     function getBaseRewardPerBlock() external pure override returns (uint256) {
-        // Return a fixed value or make configurable for testing RewardsController
         return 0.001 ether; // Example fixed value
     }
 
@@ -108,20 +89,16 @@ contract MockLendingManager is ILendingManager {
         transferYieldCalledCount++;
         emit MockTransferYieldCalled(amount, recipient);
 
-        // If expectation was set, validate and use stored result
         if (transferYieldExpectationSet) {
             require(amount == expectedTransferAmount, "MockLM: Transfer amount mismatch");
             require(recipient == expectedTransferRecipient, "MockLM: Transfer recipient mismatch");
             success = transferYieldResult;
             transferYieldExpectationSet = false; // Reset expectation
         } else {
-            // Default behavior if no expectation was set
-            success = true; // Or use the last set transferYieldResult
+            success = true; // Default behavior
         }
 
-        // Simulate asset transfer only on success
         if (success) {
-            // Check balance before transfer
             if (asset.balanceOf(address(this)) >= amount) {
                 asset.transfer(recipient, amount);
             } else {

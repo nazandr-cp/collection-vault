@@ -18,9 +18,10 @@ interface ILendingManager {
      * @notice Deposits a specified amount of the underlying asset into the lending protocol.
      * @dev Should typically only be called by the Vault.
      * @param amount The amount of the underlying asset to deposit.
+     * @param nftCollection The NFT collection associated with this deposit.
      * @return success Boolean indicating if the deposit was successful.
      */
-    function depositToLendingProtocol(uint256 amount) external returns (bool success);
+    function depositToLendingProtocol(uint256 amount, address nftCollection) external returns (bool success);
 
     /**
      * @notice Withdraws a specified amount of the underlying asset from the lending protocol.
