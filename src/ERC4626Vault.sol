@@ -6,7 +6,7 @@ import {ERC20} from "@openzeppelin-contracts-5.2.0/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin-contracts-5.2.0/token/ERC20/IERC20.sol";
 import {Ownable} from "@openzeppelin-contracts-5.2.0/access/Ownable.sol";
 import {SafeERC20} from "@openzeppelin-contracts-5.2.0/token/ERC20/utils/SafeERC20.sol";
-import {Math} from "@openzeppelin-contracts-5.2.0/utils/math/Math.sol"; // Import Math for safer subtraction
+import {Math} from "@openzeppelin-contracts-5.2.0/utils/math/Math.sol";
 
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
 
@@ -18,15 +18,12 @@ import {ILendingManager} from "./interfaces/ILendingManager.sol";
 contract ERC4626Vault is ERC4626, Ownable {
     using SafeERC20 for IERC20;
 
-    // --- State --- //
     ILendingManager public immutable lendingManager;
 
-    // --- Errors --- //
     error LendingManagerDepositFailed();
     error LendingManagerWithdrawFailed();
     error LendingManagerMismatch();
 
-    // --- Constructor --- //
     constructor(
         IERC20 _asset,
         string memory _name,
@@ -49,8 +46,6 @@ contract ERC4626Vault is ERC4626, Ownable {
         require(success, "Vault: Asset approval failed");
     }
 
-    // --- ERC4626 Overrides --- //
-
     /**
      * @dev Overridden to return the total amount of the underlying asset managed by the vault
      * via the lending manager. Assets held directly by the vault are usually in transit.
@@ -59,8 +54,6 @@ contract ERC4626Vault is ERC4626, Ownable {
         // Rely solely on LM for total assets, as vault balance is transient.
         return super.totalAssets() + lendingManager.totalAssets();
     }
-
-    // --- Public Functions (Simplified Overrides) --- //
 
     function deposit(uint256 assets, address receiver) public virtual override returns (uint256 shares) {
         shares = super.deposit(assets, receiver);
@@ -88,8 +81,6 @@ contract ERC4626Vault is ERC4626, Ownable {
         assets = super.redeem(shares, receiver, owner);
     }
 
-    // --- Internal Hooks for Lending Manager Interaction --- //
-
     /**
      * @dev Hook called after assets are received by the vault (via deposit/mint).
      *      Transfers the received assets to the LendingManager.
@@ -99,12 +90,6 @@ contract ERC4626Vault is ERC4626, Ownable {
         if (assets > 0) {
             // Assets are now held by the vault. Transfer them to the LM.
             IERC20(asset()).safeTransfer(address(lendingManager), assets);
-
-            // Optionally, call LM's deposit function if it needs notification beyond the transfer.
-            // bool success = lendingManager.depositToLendingProtocol(assets);
-            // if (!success) {
-            //     revert LendingManagerDepositFailed();
-            // }
         }
     }
 
@@ -125,8 +110,8 @@ contract ERC4626Vault is ERC4626, Ownable {
             uint256 availableInLM = lendingManager.totalAssets(); // Assuming this reflects withdrawable assets
 
             if (neededFromLM > availableInLM) {
-                // Let the base function handle the revert
-                return;
+                // Let the base function handle the revert for insufficient total assets
+                return; // The base ERC4626 function will revert if assets > totalAssets()
             }
 
             // Request withdrawal from LM to this vault contract

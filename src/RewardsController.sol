@@ -24,7 +24,6 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
     using SafeERC20 for IERC20;
     using EnumerableSet for EnumerableSet.AddressSet;
 
-    // --- Local Structs --- //
     /**
      * @notice Struct to hold reward tracking data per user per collection.
      * @dev Mirrors relevant fields needed for internal logic, distinct from IRewardsController.UserNFTInfo if necessary.
@@ -37,7 +36,6 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
         uint256 lastUpdateBlock; // Block number of the last update
     }
 
-    // --- EIP-712 Type Hashes ---
     // Multi-User Batch Update
     bytes32 public constant USER_BALANCE_UPDATE_DATA_TYPEHASH = keccak256(
         "UserBalanceUpdateData(address user,address collection,uint256 blockNumber,int256 nftDelta,int256 depositDelta)"
@@ -51,33 +49,28 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
     bytes32 public constant USER_BALANCE_UPDATES_TYPEHASH =
         keccak256("UserBalanceUpdates(address user,BalanceUpdateData[] updates,uint256 nonce)");
 
-    // --- Constants --- //
     uint256 private constant PRECISION_FACTOR = 1e18;
-
-    // --- State Variables --- //
 
     ILendingManager public immutable lendingManager;
     IERC4626VaultMinimal public immutable vault;
-    IERC20 public immutable rewardToken; // The token distributed as rewards (should be same as LM asset)
-    address public authorizedUpdater; // Address authorized to submit signed balance updates
+    IERC20 public immutable rewardToken; // The token distributed as rewards (must be same as LM asset)
+    address public authorizedUpdater;
 
     // NFT Collection Management
     EnumerableSet.AddressSet private _whitelistedCollections;
     mapping(address => uint256) public collectionBetas; // collection => beta (reward coefficient)
 
     // User Reward Tracking
-    mapping(address => mapping(address => UserRewardState)) internal userRewardState; // Renamed for clarity
+    mapping(address => mapping(address => UserRewardState)) internal userRewardState;
     mapping(address => EnumerableSet.AddressSet) private _userActiveCollections;
-    mapping(address => uint256) public authorizedUpdaterNonce; // Nonce per authorized updater for replay protection on batch updates
+    mapping(address => uint256) public authorizedUpdaterNonce; // Nonce per authorized updater for replay protection
 
     // Global Reward State
     uint256 public globalRewardIndex;
     uint256 public lastDistributionBlock;
 
-    // --- Events --- //
-    // Note: Events are inherited from the IRewardsController interface.
-    // Additional internal events can be added if needed, but interface events should be emitted correctly.
-    // Removed specific update processed events in favor of batch events from interface.
+    // --- Events ---
+    // Note: Events are inherited from IRewardsController.
     event NFTBalanceUpdateProcessed(
         address indexed user, address indexed collection, uint256 blockNumber, int256 nftDelta, uint256 finalNFTBalance
     );
@@ -89,7 +82,6 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
         uint256 finalDepositAmount
     );
 
-    // --- Errors --- //
     error AddressZero();
     error CollectionNotWhitelisted(address collection);
     error CollectionAlreadyExists(address collection);
@@ -106,10 +98,9 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
     error SimulationUpdateOutOfOrder(uint256 updateBlock, uint256 lastProcessedBlock);
     error SimulationBalanceUpdateUnderflow(uint256 currentValue, uint256 deltaMagnitude);
     error SimulationBlockInPast(uint256 lastBlock, uint256 simBlock);
-    error UserMismatch(address expectedUser, address actualUser); // Added for single-user batch check
-    error CollectionsArrayEmpty(); // Added for preview/get view functions
+    error UserMismatch(address expectedUser, address actualUser);
+    error CollectionsArrayEmpty();
 
-    // --- Modifiers --- //
     modifier onlyWhitelistedCollection(address collection) {
         if (!_whitelistedCollections.contains(collection)) {
             revert CollectionNotWhitelisted(collection);
@@ -117,7 +108,6 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
         _;
     }
 
-    // --- Constructor --- //
     constructor(address initialOwner, address _lendingManagerAddress, address _vaultAddress, address _authorizedUpdater)
         Ownable(initialOwner)
         EIP712("RewardsController", "1")
@@ -138,8 +128,6 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
         lastDistributionBlock = block.number;
         globalRewardIndex = PRECISION_FACTOR;
     }
-
-    // --- Admin Functions --- //
 
     function setAuthorizedUpdater(address _newUpdater) external override onlyOwner {
         if (_newUpdater == address(0)) revert AddressZero();
@@ -179,7 +167,7 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
         emit BetaUpdated(collection, oldBeta, newBeta);
     }
 
-    // --- Balance Update Processing (with Signatures) --- //
+    // --- Balance Update Processing --- //
 
     /**
      * @notice Processes a batch of signed balance updates (NFT and/or deposit) for multiple users/collections.
@@ -192,8 +180,8 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
     {
         if (updates.length == 0) revert EmptyBatch();
 
-        address signer = authorizedUpdater; // Expect signature from the authorized updater
-        uint256 nonce = authorizedUpdaterNonce[signer]; // Use signer (updater) nonce for batch replay protection
+        address signer = authorizedUpdater;
+        uint256 nonce = authorizedUpdaterNonce[signer]; // Use signer's nonce for replay protection
 
         bytes32 updatesHash = _hashUserBalanceUpdates(updates);
         bytes32 structHash = keccak256(abi.encode(BALANCE_UPDATES_TYPEHASH, updatesHash, nonce));
@@ -204,16 +192,15 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
             revert InvalidSignature();
         }
         if (recoveredSigner != authorizedUpdater) {
-            revert InvalidSignature(); // Explicit check against current authorized updater
+            revert InvalidSignature();
         }
-        authorizedUpdaterNonce[signer]++; // Increment signer (updater) nonce
+        authorizedUpdaterNonce[signer]++;
 
         for (uint256 i = 0; i < updates.length; i++) {
             UserBalanceUpdateData memory update = updates[i];
             if (!_whitelistedCollections.contains(update.collection)) {
                 revert CollectionNotWhitelisted(update.collection);
             }
-            // Process update internally
             _processSingleUpdate(
                 update.user, update.collection, update.blockNumber, update.nftDelta, update.depositDelta
             );
@@ -233,11 +220,10 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
     {
         if (updates.length == 0) revert EmptyBatch();
 
-        address signer = authorizedUpdater; // Expect signature from the authorized updater
-        uint256 nonce = authorizedUpdaterNonce[signer]; // Use signer (updater) nonce for batch replay protection
+        address signer = authorizedUpdater;
+        uint256 nonce = authorizedUpdaterNonce[signer]; // Use signer's nonce for replay protection
 
         bytes32 updatesHash = _hashBalanceUpdates(updates);
-        // Note: Hashing includes the 'user' address as specified in USER_BALANCE_UPDATES_TYPEHASH
         bytes32 structHash = keccak256(abi.encode(USER_BALANCE_UPDATES_TYPEHASH, user, updatesHash, nonce));
         bytes32 digest = _hashTypedDataV4(structHash);
         address recoveredSigner = ECDSA.recover(digest, signature);
@@ -246,16 +232,15 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
             revert InvalidSignature();
         }
         if (recoveredSigner != authorizedUpdater) {
-            revert InvalidSignature(); // Explicit check against current authorized updater
+            revert InvalidSignature();
         }
-        authorizedUpdaterNonce[signer]++; // Increment signer (updater) nonce
+        authorizedUpdaterNonce[signer]++;
 
         for (uint256 i = 0; i < updates.length; i++) {
             BalanceUpdateData memory update = updates[i];
             if (!_whitelistedCollections.contains(update.collection)) {
                 revert CollectionNotWhitelisted(update.collection);
             }
-            // Process update internally for the specified user
             _processSingleUpdate(user, update.collection, update.blockNumber, update.nftDelta, update.depositDelta);
         }
 
@@ -276,7 +261,7 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
         address signer = authorizedUpdater;
 
         // Build the message to verify
-        bytes32 structHash = keccak256(abi.encode(BALANCE_UPDATE_DATA_TYPEHASH, collection, blockNumber, nftDelta, 0)); // Removed user, nonce, added 0 for depositDelta placeholder
+        bytes32 structHash = keccak256(abi.encode(BALANCE_UPDATE_DATA_TYPEHASH, collection, blockNumber, nftDelta, 0));
 
         bytes32 digest = _hashTypedDataV4(structHash);
         address recoveredSigner = ECDSA.recover(digest, signature);
@@ -313,7 +298,7 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
 
         // Build the message to verify
         bytes32 structHash =
-            keccak256(abi.encode(BALANCE_UPDATE_DATA_TYPEHASH, collection, blockNumber, 0, depositDelta)); // Removed user, nonce, added 0 for nftDelta placeholder
+            keccak256(abi.encode(BALANCE_UPDATE_DATA_TYPEHASH, collection, blockNumber, 0, depositDelta));
 
         bytes32 digest = _hashTypedDataV4(structHash);
         address recoveredSigner = ECDSA.recover(digest, signature);
@@ -370,7 +355,7 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
         return keccak256(abi.encodePacked(encodedUpdates));
     }
 
-    // --- Internal Update Logic --- //
+    // --- Core Update Logic --- //
 
     function _processSingleUpdate(
         address user,
@@ -474,110 +459,80 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
     function _getPendingRewardsSingleCollection(
         address user,
         address nftCollection,
-        BalanceUpdateData[] memory simulatedUpdates // Changed from calldata to memory
+        BalanceUpdateData[] memory simulatedUpdates
     ) internal view returns (uint256 pendingReward) {
         UserRewardState storage info = userRewardState[user][nftCollection];
 
-        // --- Initialize Simulation State from Stored State ---
-        uint256 simTotalReward = info.accruedReward; // Start with already accrued rewards
+        // Initialize simulation state from stored state
+        uint256 simTotalReward = info.accruedReward;
         uint256 simNftBalance = info.lastNFTBalance;
         uint256 simDepositAmount = info.lastDepositAmount;
         uint256 simLastProcessedBlock = info.lastUpdateBlock;
         uint256 simLastRewardIndex = info.lastRewardIndex;
 
-        // --- Handle Initialization Case (No prior updates for user/collection) ---
+        // Handle initialization case (no prior updates for user/collection)
         if (simLastProcessedBlock == 0) {
-            // User has never interacted with this collection via updates.
-            // Their reward calculation starts effectively from the point they *would* have interacted,
-            // or from the beginning of the simulation if that's earlier.
-            // We need a starting index. Use the global index at the *start* of the simulation or current block if no simulation.
+            // Determine the starting index based on the first simulation block or last global update
             uint256 startingBlockForIndex = (
                 simulatedUpdates.length > 0 && simulatedUpdates[0].blockNumber < lastDistributionBlock
-            ) ? simulatedUpdates[0].blockNumber : lastDistributionBlock; // Or should it be block.number if no simulations?
+            ) ? simulatedUpdates[0].blockNumber : lastDistributionBlock;
 
-            // If the first sim block is *before* the last global update, calculate index at that point
             if (startingBlockForIndex < lastDistributionBlock) {
                 simLastRewardIndex = _calculateGlobalIndexAt(startingBlockForIndex);
-                simLastProcessedBlock = startingBlockForIndex; // Simulation effectively starts here for reward calc
+                simLastProcessedBlock = startingBlockForIndex;
             } else {
-                simLastRewardIndex = globalRewardIndex; // Start from current global index
-                simLastProcessedBlock = lastDistributionBlock; // Simulation starts from last global update
+                simLastRewardIndex = globalRewardIndex;
+                simLastProcessedBlock = lastDistributionBlock;
             }
-            // If the first simulation block IS the start, override the above:
+            // If simulations exist, ensure the start block/index reflect the first simulation
             if (simulatedUpdates.length > 0) {
                 simLastProcessedBlock = simulatedUpdates[0].blockNumber;
                 simLastRewardIndex = _calculateGlobalIndexAt(simLastProcessedBlock);
             }
         }
 
-        // --- Process Simulated Updates ---
+        // Process simulated updates
         for (uint256 i = 0; i < simulatedUpdates.length; i++) {
             BalanceUpdateData memory update = simulatedUpdates[i];
 
-            // Check simulation update collection matches the function scope
             if (update.collection != nftCollection) {
-                // This shouldn't happen if called correctly by the public function filtering updates
-                // but good to be defensive. Could revert or skip.
-                continue; // Skip updates not for this collection
+                // This should not happen if called correctly by the public function filtering updates
+                continue;
             }
 
-            // Ensure simulation updates are in order relative to the simulation's progress
             if (update.blockNumber < simLastProcessedBlock) {
-                // Revert SimulationUpdateOutOfOrder(); // Use updated error
                 revert SimulationUpdateOutOfOrder(update.blockNumber, simLastProcessedBlock);
             }
 
-            // Accrue rewards *up to* the block of the current simulated update
+            // Accrue rewards up to the block of the current simulated update
             if (update.blockNumber > simLastProcessedBlock) {
                 uint256 globalIndexAtSimUpdateBlock = _calculateGlobalIndexAt(update.blockNumber);
                 uint256 indexDeltaForPeriod = globalIndexAtSimUpdateBlock - simLastRewardIndex;
 
                 if (indexDeltaForPeriod > 0) {
-                    // Calculate rewards based on the balance *before* this simulated update
                     uint256 rewardPeriod =
                         _calculateRewardsWithDelta(nftCollection, indexDeltaForPeriod, simNftBalance, simDepositAmount);
                     simTotalReward += rewardPeriod;
                 }
-                // Update the simulation's index checkpoint
                 simLastRewardIndex = globalIndexAtSimUpdateBlock;
             }
 
-            // Apply the deltas from the simulated update
+            // Apply deltas from the simulated update
             simNftBalance = _applyDeltaSimulated(simNftBalance, update.nftDelta);
             simDepositAmount = _applyDeltaSimulated(simDepositAmount, update.depositDelta);
-            // Update the simulation's last processed block
             simLastProcessedBlock = update.blockNumber;
         }
 
-        // --- Calculate Final Rewards (from last sim update/initial state up to current block) ---
+        // Calculate final rewards (from last update/initial state up to current block)
         uint256 currentBlock = block.number;
         uint256 finalGlobalIndex = _calculateGlobalIndexAt(currentBlock);
 
         if (currentBlock > simLastProcessedBlock && finalGlobalIndex > simLastRewardIndex) {
             uint256 finalIndexDelta = finalGlobalIndex - simLastRewardIndex;
-            // Calculate rewards based on the balance *after* the last simulated update (or initial state if no sims)
             uint256 finalReward =
                 _calculateRewardsWithDelta(nftCollection, finalIndexDelta, simNftBalance, simDepositAmount);
             simTotalReward += finalReward;
         }
-        // Edge case: If the last processed block IS the current block, and no rewards were previously accrued
-        // but the user *had* a balance, calculate potential rewards from their last known index up to now.
-        // This handles users who haven't had an update recently but are eligible for rewards accrued since their last update.
-        // Note: This might double-count if _processSingleUpdate already handles this implicitly before claim. Review needed.
-        // Let's refine the logic: The loop above calculates rewards *between* updates. The final step calculates rewards
-        // from the last update (real or simulated) up to the current block.
-        // else if (
-        //     currentBlock == simLastProcessedBlock && info.accruedReward == 0 && simTotalReward == 0
-        //         && (simNftBalance > 0 || simDepositAmount > 0) // Use simulated balances here
-        // ) {
-        //     uint256 initialIndex = simLastRewardIndex; // Already holds the correct starting index for this final period
-        //     if (finalGlobalIndex > initialIndex) {
-        //         uint256 finalIndexDelta = finalGlobalIndex - initialIndex;
-        //         uint256 finalReward =
-        //             _calculateRewardsWithDelta(nftCollection, finalIndexDelta, simNftBalance, simDepositAmount);
-        //         simTotalReward += finalReward;
-        //     }
-        // }
 
         return simTotalReward;
     }
@@ -588,7 +543,6 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
         } else {
             uint256 absDelta = uint256(-delta);
             if (absDelta > value) {
-                // revert SimulationUnderflow(); // Use updated error
                 revert SimulationBalanceUpdateUnderflow(value, absDelta);
             }
             return value - absDelta;
@@ -608,36 +562,21 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
         _updateGlobalRewardIndexTo(block.number);
     }
 
-    // --- Public View / Calculation Functions --- //
+    // --- Public View Functions --- //
 
     function calculateBoost(uint256 nftBalance, uint256 beta) public pure returns (uint256 boostFactor) {
         if (nftBalance == 0) return 0; // No boost if no NFTs
 
-        // Simple linear boost: boost = balance * beta / precision
-        // Ensure beta itself is scaled correctly (e.g., 1e18 means 100% boost per NFT? Check definition)
-        // Assuming beta is scaled by 1e18, where 1e18 = 1x multiplier effect *per NFT*.
-        boostFactor = (nftBalance * beta); // Removed / PRECISION_FACTOR if beta is already scaled
-
-        // Example: beta = 0.1e18 (10% bonus per NFT), balance = 5
-        // boostFactor = 5 * 0.1e18 = 0.5e18 (50% total bonus multiplier)
-
-        // Cap the *bonus* part? Or the total factor? Interface implies total boost factor.
-        // Let's assume beta represents the *additional* reward percentage per NFT, scaled by 1e18.
-        // So, boostFactor calculated above represents the total *bonus* multiplier (0.5e18 = 50% bonus).
-        // The final reward = base + base * boostFactor / PRECISION_FACTOR
-
-        // Let's redefine `boostFactor` to be the value used in the _calculateRewardsWithDelta formula:
-        // bonusReward = (baseReward * boostFactor) / PRECISION_FACTOR;
-        // If beta = 0.1e18 means 10% bonus per NFT:
-        // boostFactor should = nftBalance * beta
+        // Assuming beta is scaled by PRECISION_FACTOR (e.g., 0.1e18 means 10% bonus per NFT).
+        // boostFactor represents the total *bonus* multiplier to be applied to the base reward.
         boostFactor = nftBalance * beta;
 
         // Cap the boost factor (e.g., max 900% bonus = 9 * 1e18)
-        uint256 maxBoostFactor = PRECISION_FACTOR * 9; // Represents 900% bonus
+        uint256 maxBoostFactor = PRECISION_FACTOR * 9; // Cap bonus at 900%
         if (boostFactor > maxBoostFactor) {
             boostFactor = maxBoostFactor;
         }
-        return boostFactor; // This is the value to multiply base reward by and divide by PRECISION
+        return boostFactor;
     }
 
     /**
@@ -656,25 +595,13 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
         trackingInfo = new UserCollectionTracking[](nftCollections.length);
         for (uint256 i = 0; i < nftCollections.length; i++) {
             address collection = nftCollections[i];
-            // Check if collection is whitelisted? Interface doesn't specify, but seems sensible.
-            // if (!_whitelistedCollections.contains(collection)) {
-            //     // Handle error or return default struct? Returning default for now.
-            //     trackingInfo[i] = UserCollectionTracking({
-            //         lastUpdateBlock: 0,
-            //         lastNFTBalance: 0,
-            //         lastDepositBalance: 0,
-            //         lastUserRewardIndex: 0
-            //     });
-            // } else {
-            // UserRewardState storage internalInfo = userNFTData[user][collection]; // Use renamed state variable
             UserRewardState storage internalInfo = userRewardState[user][collection];
             trackingInfo[i] = UserCollectionTracking({
                 lastUpdateBlock: internalInfo.lastUpdateBlock,
                 lastNFTBalance: internalInfo.lastNFTBalance,
-                lastDepositBalance: internalInfo.lastDepositAmount, // Map from internal state
+                lastDepositBalance: internalInfo.lastDepositAmount,
                 lastUserRewardIndex: internalInfo.lastRewardIndex
             });
-            // }
         }
         return trackingInfo;
     }
@@ -703,27 +630,23 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
         BalanceUpdateData[] calldata simulatedUpdates
     ) external view override returns (uint256 pendingReward) {
         if (nftCollections.length == 0) {
-            // If no collections specified, return 0 or revert? Returning 0.
-            return 0;
+            return 0; // Return 0 if no collections specified
         }
 
         uint256 totalPendingReward = 0;
         for (uint256 i = 0; i < nftCollections.length; i++) {
             address collection = nftCollections[i];
             if (!isCollectionWhitelisted(collection)) {
-                // Check whitelist status
-                // Skip non-whitelisted collections
-                continue;
+                continue; // Skip non-whitelisted collections
             }
-            // Pass all, internal function will filter by collection.
+            // Internal function will filter simulated updates by collection
             totalPendingReward += _getPendingRewardsSingleCollection(user, collection, simulatedUpdates);
         }
 
-        pendingReward = totalPendingReward; // Assign to return variable
-        return pendingReward;
+        return totalPendingReward;
     }
 
-    // This function is specific to this contract, not part of the interface
+    // Helper to check whitelist status (used in previewRewards)
     function isCollectionWhitelisted(address collection) public view returns (bool) {
         return _whitelistedCollections.contains(collection);
     }
@@ -731,8 +654,6 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
     function getWhitelistedCollections() external view override returns (address[] memory) {
         return _whitelistedCollections.values();
     }
-
-    // --- Claiming Functions --- //
 
     function claimRewardsForCollection(address nftCollection)
         external
@@ -817,8 +738,8 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
     }
 
     /**
-     * @notice Exposes the userRewardState for a specific user and collection (added for testing)
-     * @dev This function is needed by tests to verify balance updates
+     * @notice Exposes the internal user reward state for testing.
+     * @dev Not part of the standard interface.
      */
     function userNFTData(address user, address collection)
         external
@@ -826,7 +747,7 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
         returns (
             uint256 lastRewardIndex,
             uint256 accruedReward,
-            uint256 accruedBonusRewardState, // Not tracked separately in this implementation, will return 0
+            uint256 accruedBonusRewardState, // Not tracked separately, returns 0
             uint256 lastNFTBalance,
             uint256 lastDepositAmount,
             uint256 lastUpdateBlock
@@ -836,14 +757,10 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
         return (
             info.lastRewardIndex,
             info.accruedReward,
-            0, // Contract doesn't track base vs bonus separately
+            0,
             info.lastNFTBalance,
             info.lastDepositAmount,
             info.lastUpdateBlock
         );
     }
-
-    // --- Fallback Functions --- //
-    // receive() external payable {} // Keep commented unless needed
-    // fallback() external payable {} // Keep commented unless needed
 }
