@@ -5,7 +5,8 @@ import {IRewardsController} from "../interfaces/IRewardsController.sol";
 
 /**
  * @title MockRewardsController
- * @notice Mock for testing NFTDataUpdater interactions.
+ * @notice Mock for testing interactions with the Rewards Controller interface.
+ * @dev Needs to implement all functions from IRewardsController.
  */
 contract MockRewardsController is IRewardsController {
     // Track calls
@@ -26,66 +27,128 @@ contract MockRewardsController is IRewardsController {
     uint256 public updateBalanceCalledCount;
     uint256 public updateBalancesCalledCount;
 
-    // --- IRewardsController Implementation (Mocks) ---
+    // --- Mock State & Events (Optional) ---
+    event MockClaimForCollectionCalled(address user, address collection);
+    event MockClaimForAllCalled(address user);
+    event MockProcessBalanceUpdatesCalled(address signer, uint256 nonce, uint256 numUpdates);
+    event MockProcessUserBalanceUpdatesCalled(address user, uint256 nonce, uint256 numUpdates);
+    event MockSetAuthorizedUpdaterCalled(address newUpdater);
 
-    function updateNFTBalance(address user, address nftCollection, uint256 currentBalance) external override {
-        updateBalanceCalledCount++;
-        lastUpdateBalanceCall =
-            UpdateBalanceCall({user: user, nftCollection: nftCollection, currentBalance: currentBalance});
-        // Emit event if needed for testing
+    uint256 public claimRewardsForCollectionCalledCount;
+    uint256 public claimRewardsForAllCollectionsCalledCount;
+    uint256 public processBalanceUpdatesCalledCount;
+    uint256 public processUserBalanceUpdatesCalledCount;
+    uint256 public setAuthorizedUpdaterCalledCount;
+
+    // Store last call details if needed for assertions
+    struct LastProcessBalanceUpdatesCall {
+        address signer;
+        uint256 nonce;
+        UserBalanceUpdateData[] updates;
+        bytes signature;
     }
 
-    function updateNFTBalances(address user, address[] calldata nftCollections, uint256[] calldata currentBalances)
+    struct LastProcessUserBalanceUpdatesCall {
+        address user;
+        uint256 nonce;
+        BalanceUpdateData[] updates;
+        bytes signature;
+    }
+
+    LastProcessBalanceUpdatesCall public lastProcessBalanceUpdatesCall;
+    LastProcessUserBalanceUpdatesCall public lastProcessUserBalanceUpdatesCall;
+    address public lastSetAuthorizedUpdaterAddress;
+
+    // --- Mock Helpers (Optional) --- //
+    uint256 public previewRewardsAmount;
+    bool public claimResult;
+
+    // --- Mock Setters --- //
+    function setPreviewRewards(uint256 _amount) external {
+        previewRewardsAmount = _amount;
+    }
+
+    function setClaimResult(bool _result) external {
+        claimResult = _result;
+    }
+
+    // --- IRewardsController Implementation (Mocks) --- //
+    function addNFTCollection(address, /*collection*/ uint256 /*beta*/ ) external override {}
+
+    function removeNFTCollection(address /*collection*/ ) external override {}
+
+    function updateBeta(address, /*collection*/ uint256 /*newBeta*/ ) external override {}
+
+    function processBalanceUpdates(UserBalanceUpdateData[] calldata updates, bytes calldata /*signature*/ )
         external
         override
     {
-        updateBalancesCalledCount++;
-        // Note: Storing dynamic arrays in storage can be complex/costly.
-        // For mocks, simply storing the user might be sufficient, or use events/forge cheats.
-        // Storing the whole call for simplicity here, be mindful of gas in real mocks if complex.
-        lastUpdateBalancesCall =
-            UpdateBalancesCall({user: user, collections: nftCollections, balances: currentBalances});
-        // Emit event if needed
+        processBalanceUpdatesCalledCount++;
+        // Using address(this) and block.timestamp as placeholders for signer/nonce
+        emit MockProcessBalanceUpdatesCalled(address(this), block.timestamp, updates.length);
     }
 
-    // --- Unused IRewardsController Functions (Stubs) ---
-    // Implement other functions as empty stubs or revert if they shouldn't be called.
-
-    function claimRewardsForCollection(address) external override { /* stub */ }
-    function claimRewardsForAll() external override { /* stub */ }
-
-    function getPendingRewards(address, address) external pure override returns (uint256, uint256) {
-        return (0, 0);
+    function processUserBalanceUpdates(
+        address user,
+        BalanceUpdateData[] calldata updates,
+        bytes calldata /*signature*/
+    ) external override {
+        processUserBalanceUpdatesCalledCount++;
+        // Using block.timestamp as placeholder for nonce
+        emit MockProcessUserBalanceUpdatesCalled(user, block.timestamp, updates.length);
     }
 
-    function getUserNFTInfo(address, address) external pure override returns (UserNFTInfo memory) {
-        return UserNFTInfo(0, 0, 0);
+    function claimRewardsForCollection(address collection) external override {
+        claimRewardsForCollectionCalledCount++;
+        emit MockClaimForCollectionCalled(msg.sender, collection);
+        if (!claimResult) revert("Mock claim failed");
     }
 
-    function getWhitelistedCollections() external pure override returns (address[] memory) {
-        address[] memory collections; // Return empty array
+    function claimRewardsForAll() external override {
+        claimRewardsForAllCollectionsCalledCount++;
+        emit MockClaimForAllCalled(msg.sender);
+        if (!claimResult) revert("Mock claim failed");
+    }
+
+    function previewRewards(
+        address, /* user */
+        address[] calldata, /* nftCollections */
+        BalanceUpdateData[] calldata /* simulatedUpdates */
+    ) external view override returns (uint256 pendingReward) {
+        return previewRewardsAmount;
+    }
+
+    // --- View Functions (Mocks) --- //
+    function getUserCollectionTracking(address, /* user */ address[] calldata nftCollections)
+        external
+        view
+        override
+        returns (IRewardsController.UserCollectionTracking[] memory infos)
+    {
+        // Return empty structs for the correct length array
+        infos = new IRewardsController.UserCollectionTracking[](nftCollections.length);
+    }
+
+    function getWhitelistedCollections() external view override returns (address[] memory) {
+        address[] memory collections = new address[](2);
+        collections[0] = address(0xC1);
+        collections[1] = address(0xC2);
         return collections;
     }
 
-    function getCollectionBeta(address) external pure override returns (uint256) {
-        return 0;
+    function getCollectionBeta(address /*collection*/ ) external view override returns (uint256 beta) {
+        return 0.1 ether; // Example beta
     }
 
-    function getUserNFTCollections(address) external pure override returns (address[] memory) {
-        address[] memory collections; // Return empty array
+    function getUserNFTCollections(address /*user*/ ) external view override returns (address[] memory) {
+        address[] memory collections = new address[](1);
+        collections[0] = address(0xC1);
         return collections;
     }
 
-    function addNFTCollection(address, uint256) external override { /* stub */ }
-    function removeNFTCollection(address) external override { /* stub */ }
-    function updateBeta(address, uint256) external override { /* stub */ }
-
-    // --- Mock Helpers (Optional) --- //
-    function getLastUpdateBalanceArgs() external view returns (UpdateBalanceCall memory) {
-        return lastUpdateBalanceCall;
-    }
-
-    function getLastUpdateBalancesArgs() external view returns (address, address[] memory, uint256[] memory) {
-        return (lastUpdateBalancesCall.user, lastUpdateBalancesCall.collections, lastUpdateBalancesCall.balances);
+    function setAuthorizedUpdater(address _newUpdater) external override {
+        setAuthorizedUpdaterCalledCount++;
+        lastSetAuthorizedUpdaterAddress = _newUpdater;
+        emit MockSetAuthorizedUpdaterCalled(_newUpdater);
     }
 }
