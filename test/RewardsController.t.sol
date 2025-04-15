@@ -354,8 +354,7 @@ contract RewardsControllerTest is Test {
 
         uint256 nonce = rewardsController.authorizedUpdaterNonce(authorizedSigner);
         // (bytes32 digest, bytes memory signature) = // digest unused
-        (, bytes memory signature) =
-            signSingleUserBalanceUpdates(authorizedSigner, signerPrivateKey, user, updates, nonce);
+        bytes memory signature = _signUserBalanceUpdates(user, updates, nonce, signerPrivateKey); // Assign single return value
 
         vm.warp(updateBlock2); // Warp to the last update block
 
@@ -396,7 +395,7 @@ contract RewardsControllerTest is Test {
         uint256 signerPrivateKey = DEFAULT_FOUNDRY_PRIVATE_KEY;
 
         uint256 nonce0 = rewardsController.authorizedUpdaterNonce(authorizedSigner);
-        (, bytes memory signature) = signMultiUserBalanceUpdates(authorizedSigner, signerPrivateKey, updates, nonce0);
+        bytes memory signature = _signMultiUserBalanceUpdates(updates, nonce0, signerPrivateKey); // Use correct function name and argument order
 
         vm.warp(blockNum);
         vm.expectEmit(true, true, true, true, address(rewardsController));
@@ -488,8 +487,7 @@ contract RewardsControllerTest is Test {
         emit IRewardsController.UserBalanceUpdatesProcessed(USER_A, nonce0, 1); // Check nonce0 and 1 update
 
         // Sign and call the correct batch update function
-        (, bytes memory nftSig) =
-            signSingleUserBalanceUpdates(DEFAULT_FOUNDRY_SENDER, ownerPrivateKey, USER_A, nftUpdates, nonce0);
+        bytes memory nftSig = _signUserBalanceUpdates(USER_A, nftUpdates, nonce0, ownerPrivateKey); // Use correct function name and argument order
         rewardsController.processUserBalanceUpdates(USER_A, nftUpdates, nftSig);
         assertEq(
             rewardsController.authorizedUpdaterNonce(DEFAULT_FOUNDRY_SENDER), nonce1, "Nonce mismatch after NFT update"
@@ -519,8 +517,7 @@ contract RewardsControllerTest is Test {
         emit IRewardsController.UserBalanceUpdatesProcessed(USER_A, nonce1, 1); // Check nonce1 and 1 update
 
         // Sign and call the correct batch update function
-        (, bytes memory depositSig) =
-            signSingleUserBalanceUpdates(DEFAULT_FOUNDRY_SENDER, ownerPrivateKey, USER_A, depositUpdates, nonce1);
+        bytes memory depositSig = _signUserBalanceUpdates(USER_A, depositUpdates, nonce1, ownerPrivateKey); // Use correct function name and argument order
         rewardsController.processUserBalanceUpdates(USER_A, depositUpdates, depositSig);
         assertEq(
             rewardsController.authorizedUpdaterNonce(DEFAULT_FOUNDRY_SENDER),
@@ -777,8 +774,7 @@ contract RewardsControllerTest is Test {
         emit IRewardsController.UserBalanceUpdatesProcessed(USER_A, nonce0, 1); // Check nonce0 and 1 update
 
         // Sign and call the correct batch update function
-        (, bytes memory nftSigC1) =
-            signSingleUserBalanceUpdates(DEFAULT_FOUNDRY_SENDER, ownerPrivateKey, USER_A, nftUpdatesC1, nonce0);
+        bytes memory nftSigC1 = _signUserBalanceUpdates(USER_A, nftUpdatesC1, nonce0, ownerPrivateKey); // Use correct function name and argument order
         rewardsController.processUserBalanceUpdates(USER_A, nftUpdatesC1, nftSigC1);
         assertEq(
             rewardsController.authorizedUpdaterNonce(DEFAULT_FOUNDRY_SENDER),
@@ -808,8 +804,7 @@ contract RewardsControllerTest is Test {
         emit IRewardsController.UserBalanceUpdatesProcessed(USER_A, nonce1, 1); // Check nonce1 and 1 update
 
         // Sign and call the correct batch update function
-        (, bytes memory depositSigC1) =
-            signSingleUserBalanceUpdates(DEFAULT_FOUNDRY_SENDER, ownerPrivateKey, USER_A, depositUpdatesC1, nonce1);
+        bytes memory depositSigC1 = _signUserBalanceUpdates(USER_A, depositUpdatesC1, nonce1, ownerPrivateKey); // Use correct function name and argument order
         rewardsController.processUserBalanceUpdates(USER_A, depositUpdatesC1, depositSigC1);
         assertEq(
             rewardsController.authorizedUpdaterNonce(DEFAULT_FOUNDRY_SENDER),
@@ -865,165 +860,648 @@ contract RewardsControllerTest is Test {
         assertEq(finalBlockC3, 0, "Final C3 update block should be 0");
     }
 
+    // --- Test Reward Calculation & Boost --- //
+
+    function test_CalculateBoost_ZeroNFTs() public view {
+        uint256 boost = rewardsController.calculateBoost(0, BETA_1);
+        assertEq(boost, 0, "Boost should be 0 for 0 NFTs");
+    }
+
+    function test_CalculateBoost_OneNFT() public view {
+        uint256 expectedBoost = 1 * BETA_1; // 1 * 0.1e18 = 0.1e18
+        uint256 boost = rewardsController.calculateBoost(1, BETA_1);
+        assertEq(boost, expectedBoost, "Boost mismatch for 1 NFT");
+    }
+
+    function test_CalculateBoost_MultipleNFTs() public view {
+        uint256 nftCount = 5;
+        uint256 expectedBoost = nftCount * BETA_1; // 5 * 0.1e18 = 0.5e18
+        uint256 boost = rewardsController.calculateBoost(nftCount, BETA_1);
+        assertEq(boost, expectedBoost, "Boost mismatch for multiple NFTs");
+    }
+
+    function test_CalculateBoost_MaxBoostCapped() public view {
+        // Beta = 0.1e18. Max boost is 9 * PRECISION = 9e18.
+        // Need 91 NFTs to exceed max boost (91 * 0.1e18 = 9.1e18)
+        uint256 nftCount = 91;
+        uint256 expectedMaxBoost = 9 * PRECISION;
+        uint256 boost = rewardsController.calculateBoost(nftCount, BETA_1);
+        assertEq(boost, expectedMaxBoost, "Boost should be capped at 900%");
+
+        // Test exactly at cap boundary
+        nftCount = 90;
+        expectedMaxBoost = 90 * BETA_1; // 90 * 0.1e18 = 9e18
+        boost = rewardsController.calculateBoost(nftCount, BETA_1);
+        assertEq(boost, expectedMaxBoost, "Boost should be exactly 900% at boundary");
+    }
+
+    function test_RewardCalculation_Basic_NoBoost() public {
+        address user = USER_A;
+        address collection = NFT_COLLECTION_1;
+        uint256 depositAmount = 100 ether;
+        uint256 startBlock = block.number;
+        uint256 updateBlock = startBlock + 1;
+        uint256 blockDiffForIndexCalc = updateBlock - startBlock; // Calculate diff *before* rolling time
+        uint256 blocksPassed = 10;
+        uint256 endBlock = updateBlock + blocksPassed;
+        // --- Setup Mock LM ---
+        // Rate = 0.01 RWD per block / 1000 RWD total assets = 0.00001 per unit per block
+        uint256 mockRewardPerBlock = 0.01 ether;
+        uint256 mockTotalLMAssets = 1000 ether;
+        mockLM.setMockBaseRewardPerBlock(mockRewardPerBlock);
+        mockLM.setMockTotalAssets(mockTotalLMAssets);
+        uint256 expectedRatePerUnitPerBlock = (mockRewardPerBlock * PRECISION) / mockTotalLMAssets; // 1e13
+        // console.log("expectedRatePerUnitPerBlock:", expectedRatePerUnitPerBlock); // Cleaned up log
+
+        // --- Process Deposit Update ---
+        vm.roll(updateBlock); // Move to update block
+        uint256 nonce0 = rewardsController.authorizedUpdaterNonce(DEFAULT_FOUNDRY_SENDER);
+        IRewardsController.BalanceUpdateData[] memory updates = new IRewardsController.BalanceUpdateData[](1);
+        updates[0] = IRewardsController.BalanceUpdateData({
+            collection: collection,
+            blockNumber: updateBlock,
+            nftDelta: 0, // No NFTs
+            depositDelta: int256(depositAmount)
+        });
+        bytes memory sig = _signUserBalanceUpdates(user, updates, nonce0, DEFAULT_FOUNDRY_PRIVATE_KEY);
+        rewardsController.processUserBalanceUpdates(user, updates, sig);
+
+        // --- Check Rewards After Time Passes ---
+        vm.roll(endBlock); // Move forward 10 blocks
+
+        // Expected index increase = blocksPassed * ratePerUnitPerBlock
+        uint256 expectedIndexIncrease = blocksPassed * expectedRatePerUnitPerBlock; // 10 * 1e13 = 1e14
+        // Expected reward = depositAmount * indexIncrease / PRECISION
+        uint256 expectedReward = (depositAmount * expectedIndexIncrease) / PRECISION; // 100e18 * 1e14 / 1e18 = 100e14 = 0.01 ether
+
+        address[] memory collectionsToPreview = new address[](1);
+        collectionsToPreview[0] = collection;
+        IRewardsController.BalanceUpdateData[] memory noSimulatedUpdates; // Empty array
+
+        uint256 pendingReward = rewardsController.previewRewards(user, collectionsToPreview, noSimulatedUpdates);
+
+        assertEq(pendingReward, expectedReward, "Pending reward mismatch (no boost)");
+
+        // --- Verify internal state update ---
+        // userNFTData is a VIEW function, it returns the state as recorded at the last actual update (updateBlock).
+        (uint256 lastIdx,,,,, uint256 lastUpdateBlk) = rewardsController.userNFTData(user, collection);
+
+        // Expected index is the global index *at updateBlock* when the state was last written.
+        // Index increase from startBlock to updateBlock = (updateBlock - startBlock) * rate.
+        // expectedRatePerUnitPerBlock is calculated on line 913
+        // console.log("Calculating expectedIndexAtUpdateBlock..."); // Cleaned up log
+        // console.log("PRECISION:", PRECISION); // Cleaned up log
+        // console.log("Value of updateBlock just before subtraction:", updateBlock); // Cleaned up log
+        // console.log("Using pre-calculated blockDiffForIndexCalc:", blockDiffForIndexCalc); // Cleaned up log
+        // console.log( // Cleaned up log
+        //     "blockDiffForIndexCalc * expectedRatePerUnitPerBlock:", // Cleaned up log
+        //     blockDiffForIndexCalc * expectedRatePerUnitPerBlock // Cleaned up log
+        // ); // Cleaned up log
+        uint256 expectedIndexAtUpdateBlock = PRECISION + blockDiffForIndexCalc * expectedRatePerUnitPerBlock; // Use pre-calculated diff
+        // console.log("expectedIndexAtUpdateBlock:", expectedIndexAtUpdateBlock); // Cleaned up log
+
+        // The state read by userNFTData should match the state written at updateBlock.
+        assertEq(lastIdx, expectedIndexAtUpdateBlock, "User last index mismatch (should match index at updateBlock)");
+        assertEq(lastUpdateBlk, updateBlock, "User last update block mismatch (should be updateBlock)");
+    }
+
+    function test_RewardCalculation_WithBoost() public {
+        address user = USER_A;
+        address collection = NFT_COLLECTION_1; // Beta = 0.1 ether
+        uint256 depositAmount = 100 ether;
+        uint256 nftCount = 2;
+        uint256 startBlock = block.number;
+        uint256 updateBlock = startBlock + 1;
+        uint256 blocksPassed = 10;
+        uint256 endBlock = updateBlock + blocksPassed;
+
+        // --- Setup Mock LM ---
+        uint256 mockRewardPerBlock = 0.01 ether;
+        uint256 mockTotalLMAssets = 1000 ether;
+        mockLM.setMockBaseRewardPerBlock(mockRewardPerBlock);
+        mockLM.setMockTotalAssets(mockTotalLMAssets);
+        uint256 expectedRatePerUnitPerBlock = (mockRewardPerBlock * PRECISION) / mockTotalLMAssets; // 1e13
+
+        // --- Process Deposit & NFT Update ---
+        vm.roll(updateBlock);
+        uint256 nonce0 = rewardsController.authorizedUpdaterNonce(DEFAULT_FOUNDRY_SENDER);
+        IRewardsController.BalanceUpdateData[] memory updates = new IRewardsController.BalanceUpdateData[](1);
+        updates[0] = IRewardsController.BalanceUpdateData({
+            collection: collection, // Add the missing collection field
+            blockNumber: updateBlock,
+            nftDelta: int256(nftCount),
+            depositDelta: int256(depositAmount)
+        });
+        bytes memory sig = _signUserBalanceUpdates(user, updates, nonce0, DEFAULT_FOUNDRY_PRIVATE_KEY);
+        rewardsController.processUserBalanceUpdates(user, updates, sig);
+
+        // --- Check Rewards After Time Passes ---
+        vm.roll(endBlock);
+
+        // Expected index increase = blocksPassed * ratePerUnitPerBlock = 1e14
+        uint256 expectedIndexIncrease = blocksPassed * expectedRatePerUnitPerBlock;
+        // Expected base reward = depositAmount * indexIncrease / PRECISION = 0.01 ether
+        uint256 expectedBaseReward = (depositAmount * expectedIndexIncrease) / PRECISION;
+        // Expected boost factor = nftCount * beta = 2 * 0.1e18 = 0.2e18
+        uint256 expectedBoostFactor = nftCount * BETA_1;
+        // Expected bonus reward = baseReward * boostFactor / PRECISION = 0.01e18 * 0.2e18 / 1e18 = 0.002 ether
+        uint256 expectedBonusReward = (expectedBaseReward * expectedBoostFactor) / PRECISION;
+        // Expected total reward = base + bonus = 0.01 + 0.002 = 0.012 ether
+        uint256 expectedTotalReward = expectedBaseReward + expectedBonusReward;
+
+        address[] memory collectionsToPreview = new address[](1);
+        collectionsToPreview[0] = collection;
+        IRewardsController.BalanceUpdateData[] memory noSimulatedUpdates;
+
+        uint256 pendingReward = rewardsController.previewRewards(user, collectionsToPreview, noSimulatedUpdates);
+
+        assertEq(pendingReward, expectedTotalReward, "Pending reward mismatch (with boost)");
+    }
+
+    // --- Test Claiming Logic --- //
+
+    function test_ClaimRewards_ZeroRewards() public {
+        address user = USER_A;
+        address collection = NFT_COLLECTION_1;
+
+        // User has no deposits or NFTs, no time passed
+        vm.startPrank(user);
+        vm.expectRevert(RewardsController.NoRewardsToClaim.selector);
+        rewardsController.claimRewardsForCollection(collection);
+        vm.stopPrank();
+
+        // Add a deposit but don't advance time
+        uint256 updateBlock = block.number + 1;
+        vm.roll(updateBlock);
+        uint256 nonce0 = rewardsController.authorizedUpdaterNonce(DEFAULT_FOUNDRY_SENDER);
+        IRewardsController.BalanceUpdateData[] memory updates = new IRewardsController.BalanceUpdateData[](1);
+        updates[0] = IRewardsController.BalanceUpdateData({
+            collection: collection,
+            blockNumber: updateBlock,
+            nftDelta: 0,
+            depositDelta: 100 ether
+        });
+        bytes memory sig = _signUserBalanceUpdates(user, updates, nonce0, DEFAULT_FOUNDRY_PRIVATE_KEY);
+        rewardsController.processUserBalanceUpdates(user, updates, sig);
+
+        // Still no time passed since deposit, so no rewards
+        vm.startPrank(user);
+        vm.expectRevert(RewardsController.NoRewardsToClaim.selector);
+        rewardsController.claimRewardsForCollection(collection);
+        vm.stopPrank();
+    }
+
+    function test_ClaimRewards_SingleCollection_Success() public {
+        address user = USER_A;
+        address collection = NFT_COLLECTION_1; // Beta = 0.1 ether
+        uint256 depositAmount = 100 ether;
+        uint256 nftCount = 2;
+        uint256 startBlock = block.number;
+        uint256 updateBlock = startBlock + 1;
+        uint256 blocksPassed = 10;
+        uint256 claimBlock = updateBlock + blocksPassed;
+
+        // --- Setup Mock LM ---
+        uint256 mockRewardPerBlock = 0.01 ether;
+        uint256 mockTotalLMAssets = 1000 ether;
+        mockLM.setMockBaseRewardPerBlock(mockRewardPerBlock);
+        mockLM.setMockTotalAssets(mockTotalLMAssets);
+        uint256 expectedRatePerUnitPerBlock = (mockRewardPerBlock * PRECISION) / mockTotalLMAssets; // 1e13
+
+        // --- Process Deposit & NFT Update ---
+        vm.roll(updateBlock);
+        uint256 nonce0 = rewardsController.authorizedUpdaterNonce(DEFAULT_FOUNDRY_SENDER);
+        IRewardsController.BalanceUpdateData[] memory updates = new IRewardsController.BalanceUpdateData[](1);
+        updates[0] = IRewardsController.BalanceUpdateData({
+            collection: collection,
+            blockNumber: updateBlock,
+            nftDelta: int256(nftCount),
+            depositDelta: int256(depositAmount)
+        });
+        bytes memory sig = _signUserBalanceUpdates(user, updates, nonce0, DEFAULT_FOUNDRY_PRIVATE_KEY);
+        rewardsController.processUserBalanceUpdates(user, updates, sig);
+
+        // --- Advance time and calculate expected reward ---
+        vm.roll(claimBlock);
+
+        uint256 expectedIndexIncrease = blocksPassed * expectedRatePerUnitPerBlock; // 1e14
+        uint256 expectedBaseReward = (depositAmount * expectedIndexIncrease) / PRECISION; // 0.01 ether
+        uint256 expectedBoostFactor = nftCount * BETA_1; // 0.2e18
+        uint256 expectedBonusReward = (expectedBaseReward * expectedBoostFactor) / PRECISION; // 0.002 ether
+        uint256 expectedTotalReward = expectedBaseReward + expectedBonusReward; // 0.012 ether
+
+        // --- Claim Rewards ---
+        vm.startPrank(user);
+        uint256 balanceBefore = rewardToken.balanceOf(user);
+
+        vm.expectEmit(true, true, true, true, address(rewardsController));
+        emit IRewardsController.RewardsClaimedForCollection(user, collection, expectedTotalReward);
+        rewardsController.claimRewardsForCollection(collection);
+
+        uint256 balanceAfter = rewardToken.balanceOf(user);
+        assertEq(balanceAfter - balanceBefore, expectedTotalReward, "User RWD balance mismatch after claim");
+
+        // --- Verify internal state reset ---
+        (uint256 lastIdx, uint256 accrued,, uint256 nftBal, uint256 depAmt, uint256 lastUpdateBlk) =
+            rewardsController.userNFTData(user, collection);
+
+        uint256 expectedGlobalIndexAtClaim = rewardsController.globalRewardIndex(); // Index should be updated by claim
+
+        assertEq(accrued, 0, "Accrued reward should be 0 after claim");
+        assertEq(lastIdx, expectedGlobalIndexAtClaim, "User last index mismatch after claim");
+        assertEq(lastUpdateBlk, claimBlock, "User last update block mismatch after claim");
+        assertEq(nftBal, nftCount, "NFT balance should persist after claim");
+        assertEq(depAmt, depositAmount, "Deposit amount should persist after claim");
+
+        // --- Try claiming again immediately (should fail) ---
+        vm.expectRevert(RewardsController.NoRewardsToClaim.selector);
+        rewardsController.claimRewardsForCollection(collection);
+        vm.stopPrank();
+    }
+
+    function test_ClaimRewards_ForAll_MultipleCollections() public {
+        address user = USER_A;
+        address collection1 = NFT_COLLECTION_1; // Beta = 0.1 ether
+        address collection2 = NFT_COLLECTION_2; // Beta = 0.05 ether
+        uint256 deposit1 = 100 ether;
+        uint256 nft1 = 1;
+        uint256 deposit2 = 50 ether;
+        uint256 nft2 = 3;
+
+        uint256 startBlock = block.number;
+        uint256 updateBlock = startBlock + 1;
+        uint256 blocksPassed = 20;
+        uint256 claimBlock = updateBlock + blocksPassed;
+
+        // --- Setup Mock LM ---
+        uint256 mockRewardPerBlock = 0.02 ether; // Higher rate
+        uint256 mockTotalLMAssets = 1000 ether;
+        mockLM.setMockBaseRewardPerBlock(mockRewardPerBlock);
+        mockLM.setMockTotalAssets(mockTotalLMAssets);
+        uint256 expectedRatePerUnitPerBlock = (mockRewardPerBlock * PRECISION) / mockTotalLMAssets; // 2e13
+
+        // --- Process Updates for Both Collections ---
+        vm.roll(updateBlock);
+        uint256 nonce0 = rewardsController.authorizedUpdaterNonce(DEFAULT_FOUNDRY_SENDER);
+        IRewardsController.BalanceUpdateData[] memory updates = new IRewardsController.BalanceUpdateData[](2);
+        updates[0] = IRewardsController.BalanceUpdateData({
+            collection: collection1,
+            blockNumber: updateBlock,
+            nftDelta: int256(nft1),
+            depositDelta: int256(deposit1)
+        });
+        updates[1] = IRewardsController.BalanceUpdateData({
+            collection: collection2,
+            blockNumber: updateBlock,
+            nftDelta: int256(nft2),
+            depositDelta: int256(deposit2)
+        });
+        bytes memory sig = _signUserBalanceUpdates(user, updates, nonce0, DEFAULT_FOUNDRY_PRIVATE_KEY);
+        rewardsController.processUserBalanceUpdates(user, updates, sig);
+
+        // --- Advance time and calculate expected rewards ---
+        vm.roll(claimBlock);
+
+        uint256 expectedIndexIncrease = blocksPassed * expectedRatePerUnitPerBlock; // 20 * 2e13 = 4e14
+
+        // Collection 1
+        uint256 base1 = (deposit1 * expectedIndexIncrease) / PRECISION; // 100e18 * 4e14 / 1e18 = 400e14 = 0.04 ether
+        uint256 boostFactor1 = nft1 * BETA_1; // 1 * 0.1e18 = 0.1e18
+        uint256 bonus1 = (base1 * boostFactor1) / PRECISION; // 0.04e18 * 0.1e18 / 1e18 = 0.004 ether
+        uint256 total1 = base1 + bonus1; // 0.044 ether
+
+        // Collection 2
+        uint256 base2 = (deposit2 * expectedIndexIncrease) / PRECISION; // 50e18 * 4e14 / 1e18 = 200e14 = 0.02 ether
+        uint256 boostFactor2 = nft2 * BETA_2; // 3 * 0.05e18 = 0.15e18
+        uint256 bonus2 = (base2 * boostFactor2) / PRECISION; // 0.02e18 * 0.15e18 / 1e18 = 0.003 ether
+        uint256 total2 = base2 + bonus2; // 0.023 ether
+
+        uint256 expectedTotalReward = total1 + total2; // 0.067 ether
+
+        // --- Claim All Rewards ---
+        vm.startPrank(user);
+        uint256 balanceBefore = rewardToken.balanceOf(user);
+
+        vm.expectEmit(true, true, true, true, address(rewardsController)); // Emit for C1
+        emit IRewardsController.RewardsClaimedForCollection(user, collection1, total1);
+        vm.expectEmit(true, true, true, true, address(rewardsController)); // Emit for C2
+        emit IRewardsController.RewardsClaimedForCollection(user, collection2, total2);
+        vm.expectEmit(true, false, false, true, address(rewardsController)); // Emit for All
+        emit IRewardsController.RewardsClaimedForAll(user, expectedTotalReward);
+
+        rewardsController.claimRewardsForAll();
+
+        uint256 balanceAfter = rewardToken.balanceOf(user);
+        assertEq(balanceAfter - balanceBefore, expectedTotalReward, "User RWD balance mismatch after claim all");
+
+        // --- Verify internal state reset for both collections ---
+        uint256 expectedGlobalIndexAtClaim = rewardsController.globalRewardIndex();
+
+        (uint256 lastIdx1, uint256 accrued1,,,, uint256 lastUpdateBlk1) =
+            rewardsController.userNFTData(user, collection1);
+        assertEq(accrued1, 0, "C1 Accrued reward should be 0");
+        assertEq(lastIdx1, expectedGlobalIndexAtClaim, "C1 User last index mismatch");
+        assertEq(lastUpdateBlk1, claimBlock, "C1 User last update block mismatch");
+
+        (uint256 lastIdx2, uint256 accrued2,,,, uint256 lastUpdateBlk2) =
+            rewardsController.userNFTData(user, collection2);
+        assertEq(accrued2, 0, "C2 Accrued reward should be 0");
+        assertEq(lastIdx2, expectedGlobalIndexAtClaim, "C2 User last index mismatch");
+        assertEq(lastUpdateBlk2, claimBlock, "C2 User last update block mismatch");
+
+        vm.stopPrank();
+    }
+
+    function test_RevertIf_ClaimRewards_TransferYieldFails() public {
+        address user = USER_A;
+        address collection = NFT_COLLECTION_1;
+        uint256 depositAmount = 100 ether;
+        uint256 startBlock = block.number;
+        uint256 updateBlock = startBlock + 1;
+        uint256 blocksPassed = 10;
+        uint256 claimBlock = updateBlock + blocksPassed;
+
+        // --- Setup Mock LM to revert ---
+        mockLM.setMockBaseRewardPerBlock(0.01 ether); // Need some reward rate
+        mockLM.setMockTotalAssets(1000 ether);
+        mockLM.setShouldTransferYieldRevert(true); // Force revert
+
+        // --- Process Deposit Update ---
+        vm.roll(updateBlock);
+        uint256 nonce0 = rewardsController.authorizedUpdaterNonce(DEFAULT_FOUNDRY_SENDER);
+        IRewardsController.BalanceUpdateData[] memory updates = new IRewardsController.BalanceUpdateData[](1);
+        updates[0] = IRewardsController.BalanceUpdateData({
+            collection: collection,
+            blockNumber: updateBlock,
+            nftDelta: 0,
+            depositDelta: int256(depositAmount)
+        });
+        bytes memory sig = _signUserBalanceUpdates(user, updates, nonce0, DEFAULT_FOUNDRY_PRIVATE_KEY);
+        rewardsController.processUserBalanceUpdates(user, updates, sig);
+
+        // --- Advance time ---
+        vm.roll(claimBlock);
+
+        // --- Get state BEFORE claim attempt ---
+        (uint256 lastIdxBefore, uint256 accruedBefore,,,, uint256 lastUpdateBlkBefore) =
+            rewardsController.userNFTData(user, collection);
+        // Calculate expected accrued reward before claim (should be non-zero based on test setup)
+        // Use previewRewards to get the expected accrued amount just before the claim attempt
+        address[] memory collectionsToPreview = new address[](1);
+        collectionsToPreview[0] = collection;
+        uint256 expectedAccruedBefore =
+            rewardsController.previewRewards(user, collectionsToPreview, new IRewardsController.BalanceUpdateData[](0));
+        assertTrue(expectedAccruedBefore > 0, "Test setup error: No rewards accrued before claim attempt");
+        // Sanity check: ensure the stored accrued value matches the preview calculation before the claim
+        assertEq(accruedBefore, 0, "Stored accrued reward should be 0 before claim calculation"); // Accrued state is only updated in _processSingleUpdate
+
+        // --- Attempt Claim (should revert due to LM revert) ---
+        vm.startPrank(user);
+        vm.expectRevert("MockLM: transferYield forced revert");
+        rewardsController.claimRewardsForCollection(collection);
+        vm.stopPrank();
+
+        // --- Verify internal state NOT changed by the reverted transaction ---
+        (uint256 lastIdxAfter, uint256 accruedAfter,,,, uint256 lastUpdateBlkAfter) =
+            rewardsController.userNFTData(user, collection);
+
+        assertEq(lastUpdateBlkAfter, lastUpdateBlkBefore, "User last update block should not change on failed claim");
+        // The stored accruedReward state variable should remain 0 as it was before the claim attempt
+        assertEq(accruedAfter, accruedBefore, "User stored accrued reward should not change on failed claim");
+        assertEq(accruedAfter, 0, "User stored accrued reward should still be 0 after failed claim");
+        assertEq(lastIdxAfter, lastIdxBefore, "User last index should not change on failed claim");
+    }
+
+    // --- Test Preview Logic --- //
+
+    function test_PreviewRewards_WithSimulatedUpdates() public {
+        address user = USER_A;
+        address collection = NFT_COLLECTION_1;
+        uint256 depositAmount = 100 ether;
+        uint256 startBlock = block.number;
+        uint256 updateBlock1 = startBlock + 1; // Initial deposit
+        uint256 blocksPassed1 = 10;
+        uint256 updateBlock2 = updateBlock1 + blocksPassed1; // Simulate NFT add
+        uint256 blocksPassed2 = 5;
+        uint256 previewBlock = updateBlock2 + blocksPassed2; // Block to call preview
+
+        // --- Setup Mock LM ---
+        uint256 mockRewardPerBlock = 0.01 ether;
+        uint256 mockTotalLMAssets = 1000 ether;
+        mockLM.setMockBaseRewardPerBlock(mockRewardPerBlock);
+        mockLM.setMockTotalAssets(mockTotalLMAssets);
+        uint256 ratePerUnit = (mockRewardPerBlock * PRECISION) / mockTotalLMAssets; // 1e13
+
+        // --- Process Initial Deposit ---
+        vm.roll(updateBlock1);
+        uint256 nonce0 = rewardsController.authorizedUpdaterNonce(DEFAULT_FOUNDRY_SENDER);
+        IRewardsController.BalanceUpdateData[] memory initialUpdates = new IRewardsController.BalanceUpdateData[](1);
+        initialUpdates[0] = IRewardsController.BalanceUpdateData({
+            collection: collection,
+            blockNumber: updateBlock1,
+            nftDelta: 0,
+            depositDelta: int256(depositAmount)
+        });
+        bytes memory sig0 = _signUserBalanceUpdates(user, initialUpdates, nonce0, DEFAULT_FOUNDRY_PRIVATE_KEY);
+        rewardsController.processUserBalanceUpdates(user, initialUpdates, sig0);
+
+        // --- Prepare Simulated Update ---
+        IRewardsController.BalanceUpdateData[] memory simulatedUpdates = new IRewardsController.BalanceUpdateData[](1);
+        simulatedUpdates[0] = IRewardsController.BalanceUpdateData({
+            collection: collection,
+            blockNumber: updateBlock2, // Simulate at this block
+            nftDelta: 1, // Add 1 NFT
+            depositDelta: 0
+        });
+
+        // --- Call Preview at previewBlock ---
+        vm.roll(previewBlock);
+
+        // --- Calculate Expected Reward Manually ---
+        // Period 1: updateBlock1 to updateBlock2 (10 blocks, 0 NFTs)
+        uint256 indexIncrease1 = blocksPassed1 * ratePerUnit; // 10 * 1e13 = 1e14
+        uint256 reward1 = (depositAmount * indexIncrease1) / PRECISION; // 100e18 * 1e14 / 1e18 = 0.01 ether
+
+        // Period 2: updateBlock2 to previewBlock (5 blocks, 1 NFT)
+        uint256 indexIncrease2 = blocksPassed2 * ratePerUnit; // 5 * 1e13 = 5e13
+        uint256 baseReward2 = (depositAmount * indexIncrease2) / PRECISION; // 100e18 * 5e13 / 1e18 = 50e13 = 0.0005 ether
+        uint256 boostFactor = 1 * BETA_1; // 0.1e18
+        uint256 bonusReward2 = (baseReward2 * boostFactor) / PRECISION; // 0.0005e18 * 0.1e18 / 1e18 = 0.00005 ether
+        uint256 reward2 = baseReward2 + bonusReward2; // 0.00055 ether
+
+        uint256 expectedTotalReward = reward1 + reward2; // 0.01055 ether
+
+        address[] memory collectionsToPreview = new address[](1);
+        collectionsToPreview[0] = collection;
+
+        uint256 pendingReward = rewardsController.previewRewards(user, collectionsToPreview, simulatedUpdates);
+
+        assertEq(pendingReward, expectedTotalReward, "Preview reward mismatch with simulation");
+    }
+
+    function test_PreviewRewards_MultipleCollections_NoSimulation() public {
+        address user = USER_A;
+        address collection1 = NFT_COLLECTION_1; // Beta = 0.1 ether
+        address collection2 = NFT_COLLECTION_2; // Beta = 0.05 ether
+        uint256 deposit1 = 100 ether;
+        uint256 nft1 = 1;
+        uint256 deposit2 = 50 ether;
+        uint256 nft2 = 3;
+
+        uint256 startBlock = block.number;
+        uint256 updateBlock = startBlock + 1;
+        uint256 blocksPassed = 20;
+        uint256 previewBlock = updateBlock + blocksPassed;
+
+        // --- Setup Mock LM ---
+        uint256 mockRewardPerBlock = 0.02 ether;
+        uint256 mockTotalLMAssets = 1000 ether;
+        mockLM.setMockBaseRewardPerBlock(mockRewardPerBlock);
+        mockLM.setMockTotalAssets(mockTotalLMAssets);
+        uint256 ratePerUnit = (mockRewardPerBlock * PRECISION) / mockTotalLMAssets; // 2e13
+
+        // --- Process Updates for Both Collections ---
+        vm.roll(updateBlock);
+        uint256 nonce0 = rewardsController.authorizedUpdaterNonce(DEFAULT_FOUNDRY_SENDER);
+        IRewardsController.BalanceUpdateData[] memory updates = new IRewardsController.BalanceUpdateData[](2);
+        updates[0] = IRewardsController.BalanceUpdateData({
+            collection: collection1,
+            blockNumber: updateBlock,
+            nftDelta: int256(nft1),
+            depositDelta: int256(deposit1)
+        });
+        updates[1] = IRewardsController.BalanceUpdateData({
+            collection: collection2,
+            blockNumber: updateBlock,
+            nftDelta: int256(nft2),
+            depositDelta: int256(deposit2)
+        });
+        bytes memory sig = _signUserBalanceUpdates(user, updates, nonce0, DEFAULT_FOUNDRY_PRIVATE_KEY);
+        rewardsController.processUserBalanceUpdates(user, updates, sig);
+
+        // --- Advance time and calculate expected rewards ---
+        vm.roll(previewBlock);
+
+        uint256 expectedIndexIncrease = blocksPassed * ratePerUnit; // 20 * 2e13 = 4e14
+
+        // Collection 1
+        uint256 base1 = (deposit1 * expectedIndexIncrease) / PRECISION; // 0.04 ether
+        uint256 boostFactor1 = nft1 * BETA_1; // 0.1e18
+        uint256 bonus1 = (base1 * boostFactor1) / PRECISION; // 0.004 ether
+        uint256 total1 = base1 + bonus1; // 0.044 ether
+
+        // Collection 2
+        uint256 base2 = (deposit2 * expectedIndexIncrease) / PRECISION; // 0.02 ether
+        uint256 boostFactor2 = nft2 * BETA_2; // 0.15e18
+        uint256 bonus2 = (base2 * boostFactor2) / PRECISION; // 0.003 ether
+        uint256 total2 = base2 + bonus2; // 0.023 ether
+
+        uint256 expectedTotalReward = total1 + total2; // 0.067 ether
+
+        // --- Preview Rewards for both collections ---
+        address[] memory collectionsToPreview = new address[](2);
+        collectionsToPreview[0] = collection1;
+        collectionsToPreview[1] = collection2;
+        IRewardsController.BalanceUpdateData[] memory noSimulatedUpdates;
+
+        uint256 pendingReward = rewardsController.previewRewards(user, collectionsToPreview, noSimulatedUpdates);
+
+        assertEq(pendingReward, expectedTotalReward, "Preview reward mismatch for multiple collections");
+
+        // --- Preview Rewards for only one collection ---
+        address[] memory collectionsToPreviewOne = new address[](1);
+        collectionsToPreviewOne[0] = collection1;
+        pendingReward = rewardsController.previewRewards(user, collectionsToPreviewOne, noSimulatedUpdates);
+        assertEq(pendingReward, total1, "Preview reward mismatch for single collection (C1)");
+
+        // --- Preview Rewards including non-whitelisted (should be ignored) ---
+        address[] memory collectionsToPreviewMixed = new address[](3);
+        collectionsToPreviewMixed[0] = collection1;
+        collectionsToPreviewMixed[1] = NFT_COLLECTION_3; // Not whitelisted
+        collectionsToPreviewMixed[2] = collection2;
+        pendingReward = rewardsController.previewRewards(user, collectionsToPreviewMixed, noSimulatedUpdates);
+        assertEq(pendingReward, expectedTotalReward, "Preview reward mismatch with non-whitelisted collection included");
+    }
     // --- Test Claiming Logic (Refactored for processBalanceUpdates) --- //
 
     function test_ClaimRewards_Simple() public {
         // ... existing code ...
     }
 
-    function test_ProcessBalanceUpdates_Replay() public {
-        address authorizedSigner = DEFAULT_FOUNDRY_SENDER;
-        uint256 signerPrivateKey = DEFAULT_FOUNDRY_PRIVATE_KEY;
+    // Removed redundant test_ProcessBalanceUpdates_Replay
 
-        IRewardsController.UserBalanceUpdateData[] memory replayUpdates =
-            new IRewardsController.UserBalanceUpdateData[](1);
-        replayUpdates[0] = IRewardsController.UserBalanceUpdateData({
-            user: USER_A,
-            collection: NFT_COLLECTION_1,
-            blockNumber: block.number + 1,
-            nftDelta: 1,
-            depositDelta: 0
-        });
-
-        // Sign first time
-        uint256 nonce = rewardsController.authorizedUpdaterNonce(authorizedSigner);
-        (, bytes memory signature) =
-            signMultiUserBalanceUpdates(authorizedSigner, signerPrivateKey, replayUpdates, nonce);
-
-        // Process first time (should succeed)
-        rewardsController.processBalanceUpdates(replayUpdates, signature);
-
-        // Check final state
-        (
-            , // Skip lastRewardIndex
-            , // Skip accruedReward
-            , // Skip accruedBonusRewardState
-            uint256 finalNftBalance,
-            uint256 finalDepositAmount,
-            uint256 finalUpdateBlock
-        ) = rewardsController.userNFTData(USER_A, NFT_COLLECTION_1);
-        assertEq(finalNftBalance, 1, "Final NFT balance mismatch");
-        assertEq(finalDepositAmount, 0, "Final deposit amount mismatch");
-        assertEq(finalUpdateBlock, block.number + 1, "Final update block mismatch");
-    }
-
+    // Renamed from test_RevertIf_ProcessMultiUserBatchUpdate_InvalidNonceReplay
     function test_RevertIf_ProcessBalanceUpdates_Replay() public {
         address authorizedSigner = DEFAULT_FOUNDRY_SENDER;
         uint256 signerPrivateKey = DEFAULT_FOUNDRY_PRIVATE_KEY;
+        uint256 startBlock = block.number;
 
-        IRewardsController.UserBalanceUpdateData[] memory replayUpdates =
-            new IRewardsController.UserBalanceUpdateData[](1);
-        replayUpdates[0] = IRewardsController.UserBalanceUpdateData({
+        // Create a simple multi-user batch update
+        IRewardsController.UserBalanceUpdateData[] memory updates = new IRewardsController.UserBalanceUpdateData[](1);
+        updates[0] = IRewardsController.UserBalanceUpdateData({
             user: USER_A,
             collection: NFT_COLLECTION_1,
-            blockNumber: block.number + 1,
+            blockNumber: startBlock + 1,
             nftDelta: 1,
             depositDelta: 0
         });
 
-        // Sign first time
         uint256 nonce = rewardsController.authorizedUpdaterNonce(authorizedSigner);
-        (, bytes memory signature) =
-            signMultiUserBalanceUpdates(authorizedSigner, signerPrivateKey, replayUpdates, nonce);
 
-        // Process first time (should succeed)
-        rewardsController.processBalanceUpdates(replayUpdates, signature);
+        // Sign the batch update
+        // Use the correct helper function name
+        bytes memory signature = _signMultiUserBalanceUpdates(updates, nonce, signerPrivateKey);
 
-        // Check final state
-        (
-            , // Skip lastRewardIndex
-            , // Skip accruedReward
-            , // Skip accruedBonusRewardState
-            uint256 finalNftBalance,
-            uint256 finalDepositAmount,
-            uint256 finalUpdateBlock
-        ) = rewardsController.userNFTData(USER_A, NFT_COLLECTION_1);
-        assertEq(finalNftBalance, 1, "Final NFT balance mismatch");
-        assertEq(finalDepositAmount, 0, "Final deposit amount mismatch");
-        assertEq(finalUpdateBlock, block.number + 1, "Final update block mismatch");
+        // First call: Should succeed
+        // No need for prank if caller is the authorized updater
+        // vm.prank(authorizedSigner);
+        rewardsController.processBalanceUpdates(updates, signature);
+        assertEq(
+            rewardsController.authorizedUpdaterNonce(authorizedSigner),
+            nonce + 1,
+            "Nonce did not increment after first call"
+        );
+
+        // Second call with the same signature: Should revert due to nonce mismatch (detected as InvalidSignature)
+        // vm.prank(authorizedSigner); // No need for prank if caller is the authorized updater
+        vm.expectRevert(RewardsController.InvalidSignature.selector);
+        rewardsController.processBalanceUpdates(updates, signature);
     }
 
     function test_RevertIf_ProcessUserBalanceUpdates_Replay() public {
         address user1 = USER_A;
         address authorizedSigner = DEFAULT_FOUNDRY_SENDER;
         uint256 signerPrivateKey = DEFAULT_FOUNDRY_PRIVATE_KEY;
+        uint256 startBlock = block.number;
 
         IRewardsController.BalanceUpdateData[] memory replayUpdates = new IRewardsController.BalanceUpdateData[](1);
         replayUpdates[0] = IRewardsController.BalanceUpdateData({
             collection: NFT_COLLECTION_1,
-            blockNumber: block.number + 1,
+            blockNumber: startBlock + 1,
             nftDelta: 1,
             depositDelta: 0
         });
 
         // Sign first time
         uint256 nonce = rewardsController.authorizedUpdaterNonce(authorizedSigner);
-        (, bytes memory signature) =
-            signSingleUserBalanceUpdates(authorizedSigner, signerPrivateKey, user1, replayUpdates, nonce);
+        // Use the correct helper function name
+        bytes memory signature = _signUserBalanceUpdates(user1, replayUpdates, nonce, signerPrivateKey);
 
         // Process first time (should succeed)
+        // No need for prank if caller is the authorized updater
+        // vm.prank(authorizedSigner);
         rewardsController.processUserBalanceUpdates(user1, replayUpdates, signature);
+        assertEq(
+            rewardsController.authorizedUpdaterNonce(authorizedSigner),
+            nonce + 1,
+            "Nonce did not increment after first call"
+        );
 
-        // Check final state
-        (
-            , // Skip lastRewardIndex
-            , // Skip accruedReward
-            , // Skip accruedBonusRewardState
-            uint256 finalNftBalance,
-            uint256 finalDepositAmount,
-            uint256 finalUpdateBlock
-        ) = rewardsController.userNFTData(USER_A, NFT_COLLECTION_1);
-        assertEq(finalNftBalance, 1, "Final NFT balance mismatch");
-        assertEq(finalDepositAmount, 0, "Final deposit amount mismatch");
-        assertEq(finalUpdateBlock, block.number + 1, "Final update block mismatch");
+        // Second call with the same signature: Should revert due to nonce mismatch (detected as InvalidSignature)
+        // vm.prank(authorizedSigner); // No need for prank if caller is the authorized updater
+        vm.expectRevert(RewardsController.InvalidSignature.selector);
+        rewardsController.processUserBalanceUpdates(user1, replayUpdates, signature);
     }
-
-    // Helper function to sign MULTI-USER BalanceUpdates
-    function signMultiUserBalanceUpdates(
-        address, /*signer*/
-        uint256 signerPrivateKey,
-        IRewardsController.UserBalanceUpdateData[] memory updates,
-        uint256 nonce
-    ) internal view returns (bytes32 digest, bytes memory signature) {
-        bytes32 updatesHash = _hashMultiUserBalanceUpdates(updates);
-        bytes32 structHash = keccak256(abi.encode(BALANCE_UPDATES_TYPEHASH, updatesHash, nonce));
-
-        digest = keccak256(abi.encodePacked("\x19\x01", _buildDomainSeparator(), structHash));
-
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPrivateKey, digest);
-        signature = abi.encodePacked(r, s, v);
-    }
-
-    // Helper function to sign SINGLE-USER UserBalanceUpdates
-    function signSingleUserBalanceUpdates(
-        address, /*signer*/
-        uint256 signerPrivateKey,
-        address user,
-        IRewardsController.BalanceUpdateData[] memory updates,
-        uint256 nonce
-    ) internal view returns (bytes32 digest, bytes memory signature) {
-        bytes32 updatesHash = _hashBalanceUpdates(updates);
-        bytes32 structHash = keccak256(abi.encode(USER_BALANCE_UPDATES_TYPEHASH, user, updatesHash, nonce));
-
-        digest = keccak256(abi.encodePacked("\x19\x01", _buildDomainSeparator(), structHash));
-
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPrivateKey, digest);
-        signature = abi.encodePacked(r, s, v);
-    }
-
-    // Helper methods to check data from the contract
-    function getUserNFTData(address user, address collection)
-        internal
-        view
-        returns (uint256 nftBalance, uint256 depositAmount, uint256 updateBlock)
-    {
-        address[] memory collections = new address[](1);
-        collections[0] = collection;
-        IRewardsController.UserCollectionTracking[] memory trackingInfo =
-            rewardsController.getUserCollectionTracking(user, collections);
-
-        nftBalance = trackingInfo[0].lastNFTBalance;
-        depositAmount = trackingInfo[0].lastDepositBalance;
-        updateBlock = trackingInfo[0].lastUpdateBlock;
-    }
+    // End of tests
 }
+// Removed extra closing brace

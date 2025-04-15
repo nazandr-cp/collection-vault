@@ -10,6 +10,9 @@ import {IERC20} from "@openzeppelin-contracts-5.2.0/token/ERC20/IERC20.sol";
  */
 contract MockLendingManager is ILendingManager {
     IERC20 public immutable asset;
+    uint256 internal mockBaseRewardPerBlock;
+    uint256 internal mockTotalAssets;
+    bool internal shouldTransferYieldRevert;
     bool public depositResult = true;
     bool public withdrawResult = true;
     bool public transferYieldResult = true;
@@ -37,6 +40,18 @@ contract MockLendingManager is ILendingManager {
 
     function setWithdrawResult(bool _result) external {
         withdrawResult = _result;
+    }
+
+    function setMockBaseRewardPerBlock(uint256 _reward) external {
+        mockBaseRewardPerBlock = _reward;
+    }
+
+    function setMockTotalAssets(uint256 _assets) external {
+        mockTotalAssets = _assets;
+    }
+
+    function setShouldTransferYieldRevert(bool _revert) external {
+        shouldTransferYieldRevert = _revert;
     }
 
     function setExpectedTransferYield(uint256 _amount, address _recipient, bool _result) external {
@@ -78,31 +93,41 @@ contract MockLendingManager is ILendingManager {
     }
 
     function totalAssets() external view override returns (uint256) {
-        return asset.balanceOf(address(this));
+        // Return mock value if set, otherwise fallback (e.g., balance)
+        return mockTotalAssets > 0 ? mockTotalAssets : asset.balanceOf(address(this));
     }
 
-    function getBaseRewardPerBlock() external pure override returns (uint256) {
-        return 0.001 ether; // Example fixed value
+    function getBaseRewardPerBlock() external view override returns (uint256) {
+        // Return mock value
+        return mockBaseRewardPerBlock;
     }
 
     function transferYield(uint256 amount, address recipient) external override returns (bool success) {
         transferYieldCalledCount++;
         emit MockTransferYieldCalled(amount, recipient);
 
+        if (shouldTransferYieldRevert) {
+            revert("MockLM: transferYield forced revert");
+        }
+
+        // Check specific expectations if set
         if (transferYieldExpectationSet) {
             require(amount == expectedTransferAmount, "MockLM: Transfer amount mismatch");
             require(recipient == expectedTransferRecipient, "MockLM: Transfer recipient mismatch");
             success = transferYieldResult;
             transferYieldExpectationSet = false; // Reset expectation
         } else {
-            success = true; // Default behavior
+            // Default behavior if no specific expectation is set
+            success = true;
         }
 
+        // Simulate transfer if successful so far
         if (success) {
             if (asset.balanceOf(address(this)) >= amount) {
                 asset.transfer(recipient, amount);
             } else {
-                success = false; // Fail if mock doesn't have enough funds
+                // Fail if mock doesn't have enough funds, even if expectation was true
+                success = false;
             }
         }
         return success;

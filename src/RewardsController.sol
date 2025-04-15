@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.20;
 
 import {Ownable} from "@openzeppelin-contracts-5.2.0/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin-contracts-5.2.0/utils/ReentrancyGuard.sol";
@@ -441,15 +441,41 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
         return reward;
     }
 
-    function _calculateGlobalIndexAt(uint256 targetBlock) internal view returns (uint256) {
+    function _calculateGlobalIndexAt(uint256 targetBlock) internal view returns (uint256 currentIndex) {
+        currentIndex = globalRewardIndex; // Start with the last known index
         if (targetBlock <= lastDistributionBlock) {
-            return globalRewardIndex; // Return stored index if target is in the past or present
+            return currentIndex; // Return stored index if target is not in the future
         }
-        // Calculate index increase from last distribution block to target block
+
+        // Calculate index increase from last distribution block up to target block
         uint256 blockDelta = targetBlock - lastDistributionBlock;
-        uint256 ratePerBlock = PRECISION_FACTOR; // Assuming rate is 1e18 per block for simplicity
-        uint256 indexIncrease = blockDelta * ratePerBlock;
-        return globalRewardIndex + indexIncrease;
+        if (blockDelta == 0) {
+            return currentIndex; // No blocks passed
+        }
+
+        uint256 currentTotalAssets = lendingManager.totalAssets();
+        if (currentTotalAssets == 0) {
+            // If no assets in LM, no yield is generated, index doesn't increase
+            return currentIndex;
+        }
+
+        // Get the total reward generated per block by the Lending Manager
+        uint256 totalRewardPerBlock = lendingManager.getBaseRewardPerBlock();
+        if (totalRewardPerBlock == 0) {
+            // If no reward rate, index doesn't increase
+            return currentIndex;
+        }
+
+        // Calculate the reward rate per unit of asset per block, scaled by PRECISION_FACTOR
+        // rate = (totalRewardPerBlock / currentTotalAssets) * PRECISION_FACTOR
+        // To avoid front-running issues with totalAssets changing, this uses the current value.
+        // For more accuracy, LM could provide an average rate over the period.
+        uint256 ratePerUnitPerBlock = (totalRewardPerBlock * PRECISION_FACTOR) / currentTotalAssets;
+
+        uint256 indexIncrease = blockDelta * ratePerUnitPerBlock;
+        currentIndex += indexIncrease;
+
+        return currentIndex;
     }
 
     /**
@@ -549,12 +575,22 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
         }
     }
 
+    /**
+     * @notice Updates the global reward index and last distribution block up to the specified target block.
+     * @dev Reads the current reward rate from the LendingManager to calculate the index increase.
+     */
     function _updateGlobalRewardIndexTo(uint256 targetBlock) internal {
         if (targetBlock <= lastDistributionBlock) {
-            return;
+            return; // Already up-to-date or target is in the past
         }
-        uint256 currentGlobalIndex = _calculateGlobalIndexAt(targetBlock);
-        globalRewardIndex = currentGlobalIndex;
+
+        uint256 newGlobalIndex = _calculateGlobalIndexAt(targetBlock);
+
+        // Only update if the index actually changed to avoid unnecessary writes
+        if (newGlobalIndex != globalRewardIndex) {
+            globalRewardIndex = newGlobalIndex;
+        }
+        // Always update the block number to prevent re-calculation over the same period
         lastDistributionBlock = targetBlock;
     }
 
@@ -663,25 +699,29 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
     {
         address user = msg.sender;
 
-        _updateGlobalRewardIndex();
+        _updateGlobalRewardIndex(); // Update global index first
 
-        uint256 totalReward = _getPendingRewardsSingleCollection(user, nftCollection, new BalanceUpdateData[](0));
+        uint256 totalReward = _getPendingRewardsSingleCollection(user, nftCollection, new BalanceUpdateData[](0)); // Calculate pending
 
         if (totalReward == 0) {
             revert NoRewardsToClaim();
         }
 
         UserRewardState storage info = userRewardState[user][nftCollection];
+
+        // Original order: Update state *before* transfers
         info.accruedReward = 0;
         info.lastRewardIndex = globalRewardIndex;
         info.lastUpdateBlock = block.number;
 
+        // Attempt transfers
         if (totalReward > 0) {
-            lendingManager.transferYield(totalReward, address(this));
+            // Keep this check, although NoRewardsToClaim should catch totalReward == 0
+            lendingManager.transferYield(totalReward, address(this)); // Reverts here in test
+            rewardToken.safeTransfer(user, totalReward); // Not reached if revert
         }
 
-        rewardToken.safeTransfer(user, totalReward);
-
+        // Emit event (won't be reached if transferYield reverts)
         emit RewardsClaimedForCollection(user, nftCollection, totalReward);
     }
 
@@ -704,17 +744,36 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
 
             if (collectionTotalReward > 0) {
                 totalRewardsToSend += collectionTotalReward;
-
-                UserRewardState storage info = userRewardState[user][collection];
-                info.accruedReward = 0;
-                info.lastRewardIndex = globalRewardIndex;
-                info.lastUpdateBlock = block.number;
-
+                // Defer state update until after transfers
                 emit RewardsClaimedForCollection(user, collection, collectionTotalReward);
             }
         }
 
-        if (totalRewardsToSend == 0) {
+        // Check if there's anything to send before attempting transfers
+        if (totalRewardsToSend > 0) {
+            lendingManager.transferYield(totalRewardsToSend, address(this));
+            rewardToken.safeTransfer(user, totalRewardsToSend);
+
+            // Now update state for all collections that had rewards
+            for (uint256 i = 0; i < activeCollections.length; i++) {
+                address collection = activeCollections[i];
+                // Re-fetch pending reward for this specific collection to decide if state needs update
+                // Note: This re-calculation is slightly inefficient but ensures correctness.
+                // An alternative is to store which collections had > 0 reward in the first loop.
+                uint256 rewardCheck = _getPendingRewardsSingleCollection(user, collection, new BalanceUpdateData[](0));
+                if (rewardCheck > 0) {
+                    UserRewardState storage info = userRewardState[user][collection];
+                    info.accruedReward = 0;
+                    info.lastRewardIndex = globalRewardIndex; // Use the index updated at the start
+                    info.lastUpdateBlock = block.number;
+                }
+            }
+
+            emit RewardsClaimedForAll(user, totalRewardsToSend);
+        } else {
+            // If totalRewardsToSend is 0 after the loop, check if there *should* have been rewards
+            // This handles cases where _getPendingRewardsSingleCollection might return dust amounts
+            // that sum to 0, or if there truly are no rewards.
             bool hasClaimable = false;
             for (uint256 i = 0; i < activeCollections.length; i++) {
                 uint256 rewardCheck =
@@ -725,16 +784,13 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
                 }
             }
             if (!hasClaimable) revert NoRewardsToClaim();
-            revert("Reward calculation mismatch");
+            // If we get here, it means rewards were calculated but summed to 0, which is unexpected.
+            revert("Reward calculation resulted in zero total");
         }
 
-        if (totalRewardsToSend > 0) {
-            lendingManager.transferYield(totalRewardsToSend, address(this));
-        }
+        // Remove the redundant checks and transfers from lines 753-773
 
-        rewardToken.safeTransfer(user, totalRewardsToSend);
-
-        emit RewardsClaimedForAll(user, totalRewardsToSend);
+        // This block was moved and integrated above
     }
 
     /**
