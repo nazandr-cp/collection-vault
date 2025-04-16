@@ -79,23 +79,39 @@ contract MockRewardsController is IRewardsController {
 
     function updateBeta(address, /*collection*/ uint256 /*newBeta*/ ) external override {}
 
-    function processBalanceUpdates(UserBalanceUpdateData[] calldata updates, bytes calldata /*signature*/ )
-        external
-        override
-    {
+    function processBalanceUpdates(
+        address signer,
+        UserBalanceUpdateData[] calldata updates,
+        bytes calldata /*signature*/
+    ) external override {
         processBalanceUpdatesCalledCount++;
-        // Using address(this) and block.timestamp as placeholders for signer/nonce
-        emit MockProcessBalanceUpdatesCalled(address(this), block.timestamp, updates.length);
+        // Using block.timestamp as placeholder for nonce
+        emit MockProcessBalanceUpdatesCalled(signer, block.timestamp, updates.length);
+        // Store details if needed
+        lastProcessBalanceUpdatesCall = LastProcessBalanceUpdatesCall({
+            signer: signer,
+            nonce: block.timestamp, // Placeholder
+            updates: updates,
+            signature: "" // Placeholder
+        });
     }
 
     function processUserBalanceUpdates(
+        address signer,
         address user,
         BalanceUpdateData[] calldata updates,
         bytes calldata /*signature*/
     ) external override {
         processUserBalanceUpdatesCalledCount++;
         // Using block.timestamp as placeholder for nonce
-        emit MockProcessUserBalanceUpdatesCalled(user, block.timestamp, updates.length);
+        emit MockProcessUserBalanceUpdatesCalled(user, block.timestamp, updates.length); // Note: Event doesn't include signer
+        // Store details if needed
+        lastProcessUserBalanceUpdatesCall = LastProcessUserBalanceUpdatesCall({
+            user: user,
+            nonce: block.timestamp, // Placeholder
+            updates: updates,
+            signature: "" // Placeholder
+        });
     }
 
     function claimRewardsForCollection(address collection) external override {
@@ -146,7 +162,7 @@ contract MockRewardsController is IRewardsController {
         return collections;
     }
 
-    function setAuthorizedUpdater(address _newUpdater) external override {
+    function setAuthorizedUpdater(address _newUpdater) external {
         setAuthorizedUpdaterCalledCount++;
         lastSetAuthorizedUpdaterAddress = _newUpdater;
         emit MockSetAuthorizedUpdaterCalled(_newUpdater);

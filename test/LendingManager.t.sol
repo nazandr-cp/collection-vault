@@ -36,10 +36,10 @@ contract LendingManagerTest is Test {
         cToken = new MockCToken(address(assetToken));
 
         // Deploy Lending Manager
-        lendingManager = new LendingManager(OWNER, address(assetToken), address(cToken));
+        lendingManager =
+            new LendingManager(OWNER, VAULT_ADDRESS, REWARDS_CONTROLLER, address(assetToken), address(cToken));
 
-        // Set Rewards Controller address
-        lendingManager.setRewardsController(REWARDS_CONTROLLER);
+        // Rewards Controller address is set in constructor and role granted
         vm.stopPrank();
 
         // Fund Vault Address
@@ -66,7 +66,7 @@ contract LendingManagerTest is Test {
 
         // Simulate LendingManager calling deposit
         vm.startPrank(VAULT_ADDRESS); // Called by Vault
-        bool success = lendingManager.depositToLendingProtocol(depositAmount, MOCK_NFT_COLLECTION);
+        bool success = lendingManager.depositToLendingProtocol(depositAmount);
         vm.stopPrank();
 
         assertTrue(success, "Deposit should succeed");
@@ -91,7 +91,7 @@ contract LendingManagerTest is Test {
 
         vm.startPrank(VAULT_ADDRESS);
         vm.expectRevert(LendingManager.MintFailed.selector);
-        lendingManager.depositToLendingProtocol(depositAmount, MOCK_NFT_COLLECTION);
+        lendingManager.depositToLendingProtocol(depositAmount);
         vm.stopPrank();
 
         // Ensure assets were pulled but not stuck in LM
@@ -107,13 +107,13 @@ contract LendingManagerTest is Test {
     function test_WithdrawFromLendingProtocol_Success() public {
         // Setup: Deposit first
         uint256 depositAmount = 20_000 ether;
-        uint256 initialExchangeRate = cToken.exchangeRateStored();
-        uint256 expectedCTokens = (depositAmount * 1e18) / initialExchangeRate; // Based on MockCToken logic
+        // uint256 initialExchangeRate = cToken.exchangeRateStored(); // Unused variable
+        // uint256 expectedCTokens = (depositAmount * 1e18) / initialExchangeRate; // Unused variable
 
         vm.expectCall(address(cToken), abi.encodeWithSelector(MinimalCTokenInterface.mint.selector, depositAmount), 1);
         cToken.setMintResult(0);
         vm.prank(VAULT_ADDRESS);
-        lendingManager.depositToLendingProtocol(depositAmount, MOCK_NFT_COLLECTION);
+        lendingManager.depositToLendingProtocol(depositAmount);
         uint256 initialVaultBalance = assetToken.balanceOf(VAULT_ADDRESS);
         // Check balance via LM's totalAssets
         assertEq(lendingManager.totalAssets(), depositAmount, "Total assets after deposit");
@@ -152,7 +152,7 @@ contract LendingManagerTest is Test {
         uint256 depositAmount = 10_000 ether;
         vm.expectCall(address(cToken), abi.encodeWithSelector(MinimalCTokenInterface.mint.selector, depositAmount), 1);
         vm.prank(VAULT_ADDRESS);
-        lendingManager.depositToLendingProtocol(depositAmount, MOCK_NFT_COLLECTION);
+        lendingManager.depositToLendingProtocol(depositAmount);
         uint256 initialVaultBalance = assetToken.balanceOf(VAULT_ADDRESS);
 
         // Withdraw attempt, mock redeem failure
@@ -182,7 +182,7 @@ contract LendingManagerTest is Test {
         // balanceOfUnderlying is view, no need for expectCall?
 
         vm.startPrank(VAULT_ADDRESS);
-        vm.expectRevert("LM: Insufficient balance in protocol");
+        vm.expectRevert(LendingManager.InsufficientBalanceInProtocol.selector);
         lendingManager.withdrawFromLendingProtocol(withdrawAmount);
         vm.stopPrank();
     }
@@ -196,7 +196,7 @@ contract LendingManagerTest is Test {
 
         vm.expectCall(address(cToken), abi.encodeWithSelector(MinimalCTokenInterface.mint.selector, depositAmount), 1);
         vm.prank(VAULT_ADDRESS);
-        lendingManager.depositToLendingProtocol(depositAmount, MOCK_NFT_COLLECTION);
+        lendingManager.depositToLendingProtocol(depositAmount);
 
         // Check totalAssets immediately after deposit
         assertEq(lendingManager.totalAssets(), depositAmount, "Total assets mismatch after deposit");
@@ -218,7 +218,7 @@ contract LendingManagerTest is Test {
         uint256 depositAmount = 100_000 ether;
         vm.expectCall(address(cToken), abi.encodeWithSelector(MinimalCTokenInterface.mint.selector, depositAmount), 1);
         vm.prank(VAULT_ADDRESS);
-        lendingManager.depositToLendingProtocol(depositAmount, MOCK_NFT_COLLECTION);
+        lendingManager.depositToLendingProtocol(depositAmount);
 
         // Use the contract's totalAssets to calculate expected reward
         uint256 currentTotalAssets = lendingManager.totalAssets();
@@ -229,28 +229,63 @@ contract LendingManagerTest is Test {
         assertEq(lendingManager.getBaseRewardPerBlock(), expectedReward, "Base reward calculation mismatch");
 
         // Check with 0 assets
-        LendingManager newLM = new LendingManager(OWNER, address(assetToken), address(cToken));
+        // Use dummy addresses for vault and controller for this isolated test instance
+        LendingManager newLM =
+            new LendingManager(OWNER, address(0xdead1), address(0xdead2), address(assetToken), address(cToken));
         assertEq(newLM.getBaseRewardPerBlock(), 0, "Base reward with zero assets");
     }
 
     function test_TransferYield_Success() public {
-        uint256 yieldAmount = 50 ether;
-        // Manually fund LM with assets to simulate yield being available
-        vm.prank(OWNER);
-        assetToken.transfer(address(lendingManager), yieldAmount);
-        uint256 initialControllerBalance = assetToken.balanceOf(REWARDS_CONTROLLER);
+        // 1. Deposit assets into the protocol first
+        uint256 depositAmount = 1000 ether;
+        vm.expectCall(address(cToken), abi.encodeWithSelector(MinimalCTokenInterface.mint.selector, depositAmount), 1);
+        cToken.setMintResult(0);
+        vm.prank(VAULT_ADDRESS);
+        lendingManager.depositToLendingProtocol(depositAmount);
+        assertEq(lendingManager.totalAssets(), depositAmount, "Total assets after deposit");
 
-        // Call transferYield from Rewards Controller address
+        // 2. Simulate yield accrual (optional but good)
+        uint256 yieldAmount = 50 ether;
+        // uint256 initialExchangeRate = cToken.exchangeRateStored(); // Unused variable
+        uint256 cTokenBalance = cToken.balanceOf(address(lendingManager)); // Get cTokens held by LM
+        uint256 newUnderlyingTotal = depositAmount + yieldAmount;
+        uint256 newExchangeRate = (newUnderlyingTotal * 1e18) / cTokenBalance; // Calculate new rate
+        cToken.setExchangeRate(newExchangeRate);
+        assertApproxEqAbs(lendingManager.totalAssets(), newUnderlyingTotal, 1, "Total assets after yield simulation"); // Verify yield simulation
+
+        // 3. Prepare for transferYield call
+        uint256 transferAmount = yieldAmount; // Transfer the simulated yield
+        uint256 initialControllerBalance = assetToken.balanceOf(REWARDS_CONTROLLER);
+        uint256 initialLMBalance = assetToken.balanceOf(address(lendingManager)); // Should be 0
+
+        // 4. Mock cToken redeemUnderlying call (transferYield will call this)
+        vm.expectCall(
+            address(cToken), abi.encodeWithSelector(MinimalCTokenInterface.redeemUnderlying.selector, transferAmount), 1
+        );
+        cToken.setRedeemResult(0); // Success
+
+        // 5. Call transferYield from Rewards Controller address
         vm.startPrank(REWARDS_CONTROLLER);
-        bool success = lendingManager.transferYield(yieldAmount, REWARDS_CONTROLLER);
+        bool success = lendingManager.transferYield(transferAmount, REWARDS_CONTROLLER);
         vm.stopPrank();
 
+        // 6. Assertions
         assertTrue(success, "Transfer yield should succeed");
-        assertEq(assetToken.balanceOf(address(lendingManager)), 0, "LM balance after yield transfer");
+        // LM direct balance should remain 0 (redeemed funds are immediately transferred out)
+        assertEq(
+            assetToken.balanceOf(address(lendingManager)), initialLMBalance, "LM direct balance after yield transfer"
+        );
         assertEq(
             assetToken.balanceOf(REWARDS_CONTROLLER),
-            initialControllerBalance + yieldAmount,
+            initialControllerBalance + transferAmount,
             "Rewards controller balance after yield transfer"
+        );
+        // Check remaining assets in protocol
+        assertApproxEqAbs(
+            lendingManager.totalAssets(),
+            depositAmount, // Should be back to original deposit amount after transferring yield
+            1,
+            "Total assets after transferring yield"
         );
     }
 
@@ -260,7 +295,7 @@ contract LendingManagerTest is Test {
         assetToken.transfer(address(lendingManager), yieldAmount);
 
         vm.startPrank(OTHER_USER); // Call from wrong address
-        vm.expectRevert(LendingManager.CallerNotRewardsController.selector);
+        vm.expectRevert(abi.encodeWithSelector(LendingManager.LM_CallerNotRewardsController.selector, OTHER_USER));
         lendingManager.transferYield(yieldAmount, OTHER_USER);
         vm.stopPrank();
     }
@@ -270,7 +305,7 @@ contract LendingManagerTest is Test {
         // LM has 0 direct balance
 
         vm.startPrank(REWARDS_CONTROLLER);
-        vm.expectRevert(LendingManager.TransferYieldFailed.selector);
+        vm.expectRevert(LendingManager.InsufficientBalanceInProtocol.selector); // Should revert because totalAssets() is 0
         lendingManager.transferYield(yieldAmount, REWARDS_CONTROLLER);
         vm.stopPrank();
     }
@@ -290,29 +325,12 @@ contract LendingManagerTest is Test {
 
     // --- Admin Functions Tests ---
 
-    function test_SetRewardsController() public {
-        address newController = address(0x999);
-        vm.startPrank(OWNER);
-        vm.expectEmit(true, true, true, true, address(lendingManager));
-        emit LendingManager.RewardsControllerSet(newController);
-        lendingManager.setRewardsController(newController);
-        vm.stopPrank();
+    // Removed obsolete tests for setRewardsController as it's replaced by AccessControl roles
+    // The corresponding functions (setRewardsController, rewardsController) and event (RewardsControllerSet)
+    // are no longer present in LendingManager.sol. Role management is tested implicitly
+    // by other tests requiring the REWARDS_CONTROLLER_ROLE.
+    // Removed obsolete test code for setRewardsController
 
-        assertEq(lendingManager.rewardsController(), newController, "Controller address mismatch");
-    }
-
-    function test_RevertIf_SetRewardsController_NotOwner() public {
-        address newController = address(0x999);
-        vm.startPrank(OTHER_USER);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, OTHER_USER));
-        lendingManager.setRewardsController(newController);
-        vm.stopPrank();
-    }
-
-    function test_RevertIf_SetRewardsController_ZeroAddress() public {
-        vm.startPrank(OWNER);
-        vm.expectRevert(LendingManager.AddressZero.selector);
-        lendingManager.setRewardsController(address(0));
-        vm.stopPrank();
-    }
+    // Removed obsolete test: test_RevertIf_SetRewardsController_NotOwner
+    // Removed obsolete test: test_RevertIf_SetRewardsController_ZeroAddress
 }

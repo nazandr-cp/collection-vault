@@ -129,7 +129,8 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
         globalRewardIndex = PRECISION_FACTOR;
     }
 
-    function setAuthorizedUpdater(address _newUpdater) external override onlyOwner {
+    function setAuthorizedUpdater(address _newUpdater) external onlyOwner {
+        // Removed override
         if (_newUpdater == address(0)) revert AddressZero();
         address oldUpdater = authorizedUpdater;
         authorizedUpdater = _newUpdater;
@@ -173,28 +174,33 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
      * @notice Processes a batch of signed balance updates (NFT and/or deposit) for multiple users/collections.
      * @dev Uses authorized updater's nonce. Emits BalanceUpdatesProcessed.
      */
-    function processBalanceUpdates(UserBalanceUpdateData[] calldata updates, bytes calldata signature)
+    // Added 'address signer' parameter to match interface
+    function processBalanceUpdates(address signer, UserBalanceUpdateData[] calldata updates, bytes calldata signature)
         external
         override
         nonReentrant
     {
         if (updates.length == 0) revert EmptyBatch();
 
-        address signer = authorizedUpdater;
-        uint256 nonce = authorizedUpdaterNonce[signer]; // Use signer's nonce for replay protection
+        // Verify the passed signer is the authorized updater
+        if (signer != authorizedUpdater) {
+            revert InvalidSignature(); // Or a more specific error like InvalidSigner
+        }
+
+        uint256 nonce = authorizedUpdaterNonce[signer]; // Use nonce of the authorized updater
 
         bytes32 updatesHash = _hashUserBalanceUpdates(updates);
         bytes32 structHash = keccak256(abi.encode(BALANCE_UPDATES_TYPEHASH, updatesHash, nonce));
         bytes32 digest = _hashTypedDataV4(structHash);
         address recoveredSigner = ECDSA.recover(digest, signature);
 
+        // Verify the signature matches the passed signer (who must be the authorizedUpdater)
         if (recoveredSigner != signer) {
             revert InvalidSignature();
         }
-        if (recoveredSigner != authorizedUpdater) {
-            revert InvalidSignature();
-        }
-        authorizedUpdaterNonce[signer]++;
+        // No need for the second check as we already verified signer == authorizedUpdater
+
+        authorizedUpdaterNonce[signer]++; // Increment nonce for the authorized updater
 
         for (uint256 i = 0; i < updates.length; i++) {
             UserBalanceUpdateData memory update = updates[i];
@@ -213,28 +219,34 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
      * @notice Processes a batch of signed balance updates (NFT and/or deposit) for a single user across multiple collections.
      * @dev Uses authorized updater's nonce. Emits UserBalanceUpdatesProcessed.
      */
-    function processUserBalanceUpdates(address user, BalanceUpdateData[] calldata updates, bytes calldata signature)
-        external
-        override
-        nonReentrant
-    {
+    // Added 'address signer' parameter to match interface
+    function processUserBalanceUpdates(
+        address signer,
+        address user,
+        BalanceUpdateData[] calldata updates,
+        bytes calldata signature
+    ) external override nonReentrant {
         if (updates.length == 0) revert EmptyBatch();
 
-        address signer = authorizedUpdater;
-        uint256 nonce = authorizedUpdaterNonce[signer]; // Use signer's nonce for replay protection
+        // Verify the passed signer is the authorized updater
+        if (signer != authorizedUpdater) {
+            revert InvalidSignature(); // Or a more specific error like InvalidSigner
+        }
+
+        uint256 nonce = authorizedUpdaterNonce[signer]; // Use nonce of the authorized updater
 
         bytes32 updatesHash = _hashBalanceUpdates(updates);
         bytes32 structHash = keccak256(abi.encode(USER_BALANCE_UPDATES_TYPEHASH, user, updatesHash, nonce));
         bytes32 digest = _hashTypedDataV4(structHash);
         address recoveredSigner = ECDSA.recover(digest, signature);
 
+        // Verify the signature matches the passed signer (who must be the authorizedUpdater)
         if (recoveredSigner != signer) {
             revert InvalidSignature();
         }
-        if (recoveredSigner != authorizedUpdater) {
-            revert InvalidSignature();
-        }
-        authorizedUpdaterNonce[signer]++;
+        // No need for the second check as we already verified signer == authorizedUpdater
+
+        authorizedUpdaterNonce[signer]++; // Increment nonce for the authorized updater
 
         for (uint256 i = 0; i < updates.length; i++) {
             BalanceUpdateData memory update = updates[i];

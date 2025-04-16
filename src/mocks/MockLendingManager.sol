@@ -62,16 +62,16 @@ contract MockLendingManager is ILendingManager {
     }
 
     // --- ILendingManager Implementation ---
-    function depositToLendingProtocol(uint256 amount, address /* nftCollection */ )
-        external
-        override
-        returns (bool success)
-    {
+    // Corrected signature to match ILendingManager interface
+    function depositToLendingProtocol(uint256 amount) external override returns (bool success) {
         depositCalledCount++;
         emit MockDepositCalled(amount);
         success = depositResult;
-        // Vault PUSHES assets via transfer before calling this.
-        // No need to mock transferFrom here.
+        if (success && amount > 0) {
+            // Simulate LM pulling assets from the Vault (msg.sender)
+            // Requires Vault to have approved the LM
+            asset.transferFrom(msg.sender, address(this), amount);
+        }
         return success;
     }
 

@@ -2,184 +2,371 @@
 pragma solidity ^0.8.20;
 
 import {IERC20} from "@openzeppelin-contracts-5.2.0/token/ERC20/IERC20.sol";
-import {ERC20} from "@openzeppelin-contracts-5.2.0/token/ERC20/ERC20.sol";
-import {Ownable} from "@openzeppelin-contracts-5.2.0/access/Ownable.sol";
+import {AccessControl} from "@openzeppelin-contracts-5.2.0/access/AccessControl.sol";
 import {SafeERC20} from "@openzeppelin-contracts-5.2.0/token/ERC20/utils/SafeERC20.sol";
 
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
 import {CErc20Interface, CTokenInterface} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol";
 
 /**
- * @title LendingManager (Compound V2 Fork)
- * @notice Manages asset allocation into a specific Compound V2 fork cToken market.
- * @dev Implements ILendingManager. Interacts with a cToken contract.
- *      Requires approval from the Vault to spend its assets for deposits.
+ * @title LendingManager (Compound V2 Fork Adapter)
+ * @notice Manages deposits and withdrawals to a specific Compound V2 fork cToken market.
+ * @dev Implements the `ILendingManager` interface to interact with a designated `cToken` contract.
+ *      Utilizes OpenZeppelin's AccessControl for role-based permissions:
+ *      - `VAULT_ROLE`: For the associated ERC4626Vault contract.
+ *      - `REWARDS_CONTROLLER_ROLE`: For the associated RewardsController contract.
+ *      - `ADMIN_ROLE`: For administrative tasks like managing roles.
  */
-contract LendingManager is ILendingManager, Ownable {
+contract LendingManager is ILendingManager, AccessControl {
     using SafeERC20 for IERC20;
 
+    bytes32 public constant VAULT_ROLE = keccak256("VAULT_ROLE");
+
+    /// @notice Role identifier for the associated ERC4626Vault contract.
+    bytes32 public constant REWARDS_CONTROLLER_ROLE = keccak256("REWARDS_CONTROLLER_ROLE");
+    /// @notice Role identifier for the associated RewardsController contract.
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    /// @notice Role identifier for administrative tasks within this LendingManager.
+
     IERC20 public immutable override asset;
+
+    /// @notice The underlying ERC20 asset managed by this contract (e.g., USDC, DAI).
     CErc20Interface public immutable cToken;
-    address public rewardsController;
+    /// @notice The corresponding Compound V2 fork cToken contract (e.g., cUSDC, cDAI).
 
-    uint256 public constant R0_BASIS_POINTS = 5; // Example: 0.05% base rate -> R0 = 5 * 10^(18-4)
+    uint256 public constant R0_BASIS_POINTS = 5;
+
+    /// @notice Example base reward rate (0.05%) used in `getBaseRewardPerBlock` calculation.
     uint256 public constant BASIS_POINTS_DENOMINATOR = 10_000;
+    /// @notice Denominator for basis points calculations (100% = 10,000 basis points).
     uint256 private constant PRECISION = 1e18;
+    /// @notice Precision factor (18 decimals) used in reward calculations.
 
-    event RewardsControllerSet(address indexed controller);
+    uint256 public totalPrincipalDeposited;
+    /// @notice Tracks the net amount of underlying assets deposited by the Vault.
+
+    // Note: Role management events (`RoleGranted`, `RoleRevoked`) are emitted by the inherited AccessControl contract.
+    /// @notice Emitted when accrued yield (underlying asset) is successfully transferred to a recipient (typically the RewardsController).
     event YieldTransferred(address indexed recipient, uint256 amount);
+    /// @notice Emitted when underlying assets are successfully deposited into the cToken contract.
     event DepositToProtocol(address indexed caller, uint256 amount);
+    /// @notice Emitted when underlying assets are successfully withdrawn (redeemed) from the cToken contract.
     event WithdrawFromProtocol(address indexed caller, uint256 amount);
 
+    /// @notice Reverts if the underlying cToken `mint` operation returns a non-zero error code.
     error MintFailed();
+    /// @notice Reverts if the underlying cToken `redeemUnderlying` operation returns a non-zero error code.
     error RedeemFailed();
+    /// @notice Reverts if transferring yield (underlying asset) fails. (Note: SafeERC20 handles reverts on transfer failures, making this potentially redundant).
     error TransferYieldFailed();
+    /// @notice Reverts if a critical address (e.g., admin, vault, controller, asset, cToken) is the zero address during deployment or function calls.
     error AddressZero();
-    error CallerNotVaultOrOwner();
-    error CallerNotRewardsController();
+    // Note: AccessControl's `AccessControlUnauthorizedAccount` error is used for general role checks, but custom errors below provide more specific context.
+    /// @notice Reverts if attempting to withdraw or redeem more underlying assets than this contract currently holds in the cToken market.
+    error InsufficientBalanceInProtocol();
+    /// @notice Reverts if a function restricted by the `onlyVault` modifier is called by an address lacking the `VAULT_ROLE`.
+    error LM_CallerNotVault(address caller);
+    /// @notice Reverts if a function restricted by the `onlyRewardsController` modifier is called by an address lacking the `REWARDS_CONTROLLER_ROLE`.
+    error LM_CallerNotRewardsController(address caller);
+    /// @notice Reverts if attempting to revoke the last admin for a specific role (Note: This check is not implemented in the base AccessControl).
+    error CannotRemoveLastAdmin(bytes32 role);
 
-    constructor(address initialOwner, address _assetAddress, address _cTokenAddress) Ownable(initialOwner) {
-        if (_assetAddress == address(0) || _cTokenAddress == address(0)) {
+    constructor(
+        address initialAdmin,
+        address vaultAddress,
+        address rewardsControllerAddress,
+        address _assetAddress,
+        address _cTokenAddress
+    ) {
+        // Validate constructor arguments: ensure critical addresses are not the zero address.
+        if (
+            initialAdmin == address(0) || vaultAddress == address(0) || rewardsControllerAddress == address(0)
+                || _assetAddress == address(0) || _cTokenAddress == address(0)
+        ) {
             revert AddressZero();
         }
+
+        // Set immutable state variables.
         asset = IERC20(_assetAddress);
         cToken = CErc20Interface(_cTokenAddress);
 
-        // Approve the cToken contract to spend the underlying asset held by this LendingManager
+        // Grant initial roles.
+        _grantRole(DEFAULT_ADMIN_ROLE, initialAdmin); // Grants permission to manage roles.
+        _grantRole(ADMIN_ROLE, initialAdmin); // Grants permission for LM-specific administrative tasks.
+        _grantRole(VAULT_ROLE, vaultAddress); // Grants permission to the associated ERC4626Vault.
+        _grantRole(REWARDS_CONTROLLER_ROLE, rewardsControllerAddress); // Grants permission to the associated RewardsController.
+
+        // Grant infinite approval to the cToken contract for the underlying asset.
+        // This allows the cToken contract to pull assets from this LendingManager during `cToken.mint()`.
         asset.approve(address(cToken), type(uint256).max);
     }
 
+    /// @dev Modifier to restrict function access to addresses with the `VAULT_ROLE`.
+    /// @dev Restricts function execution to addresses holding the `VAULT_ROLE`. Reverts with `LM_CallerNotVault` if check fails.
+    modifier onlyVault() {
+        // Use a custom error for more specific feedback than the default AccessControl error.
+        if (!hasRole(VAULT_ROLE, msg.sender)) {
+            revert LM_CallerNotVault(msg.sender);
+        }
+        _; // Proceed with function execution if the role check passes.
+    }
+
+    /// @dev Restricts function execution to addresses holding the `REWARDS_CONTROLLER_ROLE`. Reverts with `LM_CallerNotRewardsController` if check fails.
+    modifier onlyRewardsController() {
+        // Use a custom error for more specific feedback than the default AccessControl error.
+        if (!hasRole(REWARDS_CONTROLLER_ROLE, msg.sender)) {
+            revert LM_CallerNotRewardsController(msg.sender);
+        }
+        _; // Proceed with function execution if the role check passes.
+    }
+
     /**
-     * @notice Deposits assets from the caller (expected to be the Vault) into the Compound protocol.
-     * @dev Requires the caller (Vault) to have approved this contract to spend its assets.
+     * @notice Deposits underlying assets into the Compound V2 fork's cToken market.
+     * @dev Restricted to callers with the `VAULT_ROLE`. Pulls `amount` of the `asset` from the caller (`msg.sender`, expected to be the Vault)
+     *      using `safeTransferFrom`. Then, mints the corresponding cTokens by calling `cToken.mint(amount)`.
+     *      Requires the caller (Vault) to have approved this LendingManager contract to spend its assets.
      * @param amount The amount of the underlying asset to deposit.
+     * @return success Boolean indicating whether the deposit was successful (always true if no revert).
      */
-    function depositToLendingProtocol(uint256 amount, address /* nftCollection */ )
+    function depositToLendingProtocol(uint256 amount)
         external
         override
+        onlyVault // Ensures only the associated Vault can call this function.
         returns (bool success)
     {
-        // TODO: Add vault address check? msg.sender == vaultAddress || msg.sender == owner()
+        if (amount == 0) return true; // No action needed if amount is zero.
 
-        if (amount == 0) return true;
-
-        // Pull assets from the Vault (caller), which must have approved this contract
+        // 1. Pull assets from the Vault (msg.sender). Vault must have approved this contract.
         asset.safeTransferFrom(msg.sender, address(this), amount);
 
-        // Mint cTokens with the received assets
-        require(asset.balanceOf(address(this)) >= amount, "LM: Insufficient balance post-transfer"); // Sanity check
-
+        // 2. Deposit assets into the cToken market by minting cTokens.
+        //    Requires this contract to have approved the cToken contract (done in constructor).
+        //    Compound V2's mint returns 0 on success, non-zero error code on failure.
         uint256 mintResult = cToken.mint(amount);
         if (mintResult != 0) {
-            // Compound V2 returns 0 on success
-            revert MintFailed();
+            revert MintFailed(); // Revert if minting fails.
         }
-        emit DepositToProtocol(msg.sender, amount);
+
+        // Update total principal tracked
+        totalPrincipalDeposited += amount;
+
+        emit DepositToProtocol(msg.sender, amount); // Emit event on successful deposit.
         return true;
     }
 
     /**
-     * @notice Withdraws assets from the Compound protocol and sends them to the caller (expected to be the Vault).
+     * @notice Withdraws underlying assets from the Compound V2 fork's cToken market.
+     * @dev Restricted to callers with the `VAULT_ROLE`. Redeems `amount` of the underlying `asset` from the cToken market
+     *      by calling `cToken.redeemUnderlying(amount)`. The redeemed assets are received by this contract and then
+     *      transferred to the caller (`msg.sender`, expected to be the Vault).
+     * @param amount The amount of the underlying asset to withdraw.
+     * @return success Boolean indicating whether the withdrawal was successful (always true if no revert).
      */
-    function withdrawFromLendingProtocol(uint256 amount) external override returns (bool success) {
-        // TODO: Add vault address check? msg.sender == vaultAddress || msg.sender == owner()
+    function withdrawFromLendingProtocol(uint256 amount)
+        external
+        override
+        onlyVault // Ensures only the associated Vault can call this function.
+        returns (bool success)
+    {
+        if (amount == 0) return true; // No action needed if amount is zero.
 
-        if (amount == 0) return true;
-
-        // Check if enough assets are in Compound
-        uint256 compoundBalance = totalAssets(); // Checks underlying balance in cToken
-        if (compoundBalance < amount) {
-            revert("LM: Insufficient balance in protocol"); // Reverting on insufficient balance
+        // 1. Check available balance: Ensure the requested amount doesn't exceed assets held in the protocol.
+        //    Uses `totalAssets()` which relies on the stored exchange rate.
+        uint256 availableBalance = totalAssets();
+        if (availableBalance < amount) {
+            revert InsufficientBalanceInProtocol();
         }
 
-        // Redeem the required amount of underlying assets.
-        // The cToken contract transfers the 'amount' back to this LendingManager contract.
+        // 2. Redeem underlying assets from the cToken market.
+        //    The cToken contract transfers the `amount` of underlying asset back to this LendingManager contract.
+        //    Compound V2's redeemUnderlying returns 0 on success, non-zero error code on failure.
         uint256 redeemResult = cToken.redeemUnderlying(amount);
         if (redeemResult != 0) {
-            // Compound V2 returns 0 on success
-            revert RedeemFailed();
+            revert RedeemFailed(); // Revert if redemption fails.
         }
 
-        // Send the withdrawn assets back to the Vault (caller)
+        // 3. Transfer the withdrawn assets back to the Vault (caller).
         asset.safeTransfer(msg.sender, amount);
-        emit WithdrawFromProtocol(msg.sender, amount);
+
+        // Update total principal tracked
+        // Note: We assume the vault ensures amount <= totalPrincipalDeposited if needed elsewhere.
+        // Here, we just track the net change.
+        if (totalPrincipalDeposited >= amount) {
+            totalPrincipalDeposited -= amount;
+        } else {
+            // Should not happen if vault logic is correct, but handle defensively.
+            totalPrincipalDeposited = 0;
+        }
+
+        emit WithdrawFromProtocol(msg.sender, amount); // Emit event on successful withdrawal.
         return true;
     }
 
     /**
-     * @notice Returns the total underlying asset balance held within the Compound cToken market.
-     * @dev Calculates using cToken balance and stored exchange rate to keep the function `view`.
-     *      May not reflect interest accrued in the current block.
+     * @notice Calculates the total underlying assets currently held by this contract within the cToken market.
+     * @dev Calculates the balance based on this contract's cToken balance and the *stored* exchange rate (`exchangeRateStored()`).
+     *      Using the stored rate keeps this function as a `view` (no state change, gas-free call), but the returned value
+     *      might be slightly stale if interest has accrued within the current block before the rate was updated by a transaction.
+     *      Formula: `underlying = (cTokenBalance * exchangeRateStored) / 1e18`.
+     *      The exchange rate is scaled by `1 * 10^(18 + underlyingDecimals - cTokenDecimals)`.
+     * @return The total amount of underlying assets held in the cToken market.
      */
     function totalAssets() public view override returns (uint256) {
+        // Get this contract's balance of cTokens.
         uint256 cTokenBalance = CTokenInterface(address(cToken)).balanceOf(address(this));
         if (cTokenBalance == 0) {
+            return 0; // If no cTokens are held, the underlying balance is zero.
+        }
+
+        // Get the stored exchange rate from the cToken contract.
+        // This rate represents the value of 1 cToken in terms of the underlying asset.
+        uint256 exchangeRate = CTokenInterface(address(cToken)).exchangeRateStored();
+        // Handle potential edge case where exchange rate is zero (e.g., market issue).
+        if (exchangeRate == 0) {
             return 0;
         }
 
-        // Formula: underlying = (cTokenBalance * exchangeRateStored) / 1e18
-        // exchangeRateStored is scaled by 1e(18 + underlyingDecimals - cTokenDecimals)
-        uint256 exchangeRate = CTokenInterface(address(cToken)).exchangeRateStored();
-        if (exchangeRate == 0) {
-            return 0; // Should not happen in practice
-        }
-
-        // Perform the calculation using the stored (potentially slightly stale) exchange rate
+        // Calculate the underlying asset value.
+        // The formula correctly handles the scaling of the exchange rate.
         return (cTokenBalance * exchangeRate) / 1e18;
     }
 
     /**
-     * @notice Calculates the *potential* base reward generation per block based on current balance.
-     * @dev Formula: R₀ * loan_balance / PRECISION. R₀ is scaled by PRECISION.
-     *      This is a simplified view; actual yield depends on Compound's internal mechanics.
-     *      The RewardsController will use this as input for its distribution logic.
+     * @notice Estimate the base reward generated per block based on current total assets and configured rate.
+     * @dev Used by RewardsController for reward index calculation. Actual yield may differ due to protocol factors.
+     * @return Estimated base reward per block.
      */
     function getBaseRewardPerBlock() external view override returns (uint256) {
-        uint256 currentBalance = totalAssets();
-        // Calculate R0 scaled to precision
-        uint256 scaledR0 = R0_BASIS_POINTS * (PRECISION / BASIS_POINTS_DENOMINATOR);
-        return (currentBalance * scaledR0) / PRECISION;
+        uint256 currentTotalAssets = totalAssets();
+        if (currentTotalAssets == 0) {
+            return 0;
+        }
+        return (currentTotalAssets * R0_BASIS_POINTS) / BASIS_POINTS_DENOMINATOR;
     }
 
     /**
-     * @notice Transfers accrued yield (underlying asset) to the RewardsController.
-     * @dev Only callable by the registered RewardsController address.
-     *      Requires this contract to have sufficient *directly held* underlying asset balance.
-     *      This implies yield needs to be periodically redeemed from Compound or sent here.
-     *      Alternative: Could redeem directly here before transfer.
+     * @notice Redeem accrued yield from the Compound protocol and transfer to a recipient.
+     * @dev Only callable by REWARDS_CONTROLLER_ROLE. Redeems and transfers yield to recipient.
+     * @param amount Amount of yield to redeem and transfer.
+     * @param recipient Recipient address.
+     * @return success True if yield transfer was successful.
      */
-    function transferYield(uint256 amount, address recipient) external override returns (bool success) {
-        if (msg.sender != rewardsController) revert CallerNotRewardsController();
-        if (amount == 0) return true;
+    function transferYield(uint256 amount, address recipient)
+        external
+        override
+        onlyRewardsController // Ensures only the associated RewardsController can call this.
+        returns (bool success)
+    {
+        if (amount == 0) return true; // No action needed if amount is zero.
+        if (recipient == address(0)) revert AddressZero(); // Recipient cannot be the zero address.
 
-        // Assumes yield is already held directly in this contract (e.g., transferred periodically).
-        // If yield needs to be redeemed on demand, uncomment Option 2 below.
-        uint256 directBalance = asset.balanceOf(address(this));
-        if (directBalance < amount) {
-            revert TransferYieldFailed(); // Not enough directly held yield
+        // 1. Check available balance: Ensure enough assets exist in the protocol to cover the yield amount.
+        uint256 availableBalance = totalAssets();
+        if (availableBalance < amount) {
+            revert InsufficientBalanceInProtocol();
         }
+
+        // 2. Redeem the yield amount (underlying asset) from the cToken market.
+        //    The cToken contract transfers the `amount` to this LendingManager contract.
+        uint256 redeemResult = cToken.redeemUnderlying(amount);
+        if (redeemResult != 0) {
+            revert RedeemFailed(); // Revert if redemption fails.
+        }
+
+        // <<< ADDED PRINCIPAL PROTECTION CHECK >>>
+        // Ensure remaining assets in the protocol cover the tracked principal.
+        // totalAssets() reads the *current* state after redemption.
+        require(totalAssets() >= totalPrincipalDeposited, "LM: Harvest dips into principal");
+
+        // 3. Transfer the redeemed yield to the specified recipient.
         asset.safeTransfer(recipient, amount);
 
-        /* // Option 2: Redeem the required yield amount from Compound first.
-        if (cToken.redeemUnderlying(amount) != 0) {
-            revert RedeemFailed(); // Could not redeem yield
-        }
-        // Now the contract should have the balance
-        uint256 balanceAfterRedeem = asset.balanceOf(address(this));
-        require(balanceAfterRedeem >= amount, "LM: Insufficient balance post-redeem"); // Sanity check
-        asset.safeTransfer(recipient, amount);
-        */
-
-        emit YieldTransferred(recipient, amount);
+        emit YieldTransferred(recipient, amount); // Emit event on successful transfer.
         return true;
     }
 
     /**
-     * @notice Sets the address of the RewardsController authorized to call transferYield.
+     * @notice Grant REWARDS_CONTROLLER_ROLE to an account.
+     * @dev Only callable by ADMIN_ROLE.
+     * @param newController Address to grant the role.
      */
-    function setRewardsController(address _controller) external onlyOwner {
-        if (_controller == address(0)) revert AddressZero();
-        rewardsController = _controller;
-        emit RewardsControllerSet(_controller);
+    function grantRewardsControllerRole(address newController) external onlyRole(ADMIN_ROLE) {
+        if (newController == address(0)) revert AddressZero();
+        _grantRole(REWARDS_CONTROLLER_ROLE, newController);
+    }
+
+    /**
+     * @notice Revoke REWARDS_CONTROLLER_ROLE from an account.
+     * @dev Only callable by ADMIN_ROLE.
+     * @param controller Address to revoke the role from.
+     */
+    function revokeRewardsControllerRole(address controller) external onlyRole(ADMIN_ROLE) {
+        if (controller == address(0)) revert AddressZero();
+        _revokeRole(REWARDS_CONTROLLER_ROLE, controller);
+    }
+
+    // --- Administrative Functions for Role Management ---
+
+    /**
+     * @notice Grant VAULT_ROLE to an account.
+     * @dev Only callable by ADMIN_ROLE.
+     * @param newVault Address to grant the role.
+     */
+    function grantVaultRole(address newVault) external onlyRole(ADMIN_ROLE) {
+        if (newVault == address(0)) revert AddressZero();
+        _grantRole(VAULT_ROLE, newVault);
+    }
+
+    /**
+     * @notice Revoke VAULT_ROLE from an account.
+     * @dev Only callable by ADMIN_ROLE.
+     * @param vault Address to revoke the role from.
+     */
+    function revokeVaultRole(address vault) external onlyRole(ADMIN_ROLE) {
+        if (vault == address(0)) revert AddressZero();
+        _revokeRole(VAULT_ROLE, vault);
+    }
+
+    /**
+     * @notice Grant ADMIN_ROLE to an account.
+     * @dev Only callable by ADMIN_ROLE.
+     * @param newAdmin Address to grant the role.
+     */
+    function grantAdminRole(address newAdmin) external onlyRole(ADMIN_ROLE) {
+        if (newAdmin == address(0)) revert AddressZero();
+        _grantRole(ADMIN_ROLE, newAdmin);
+    }
+
+    /**
+     * @notice Revoke ADMIN_ROLE from an account.
+     * @dev Only callable by ADMIN_ROLE. Does not prevent removing last admin unless using AccessControlEnumerable.
+     * @param admin Address to revoke the role from.
+     */
+    function revokeAdminRole(address admin) external onlyRole(ADMIN_ROLE) {
+        if (admin == address(0)) revert AddressZero();
+        // Note: Base AccessControl doesn't prevent removing the last admin.
+        // Consider AccessControlEnumerable or custom logic if this protection is needed.
+        _revokeRole(ADMIN_ROLE, admin);
+    }
+
+    /**
+     * @notice Grant ADMIN_ROLE as DEFAULT_ADMIN_ROLE.
+     * @dev Only callable by DEFAULT_ADMIN_ROLE.
+     * @param newAdmin Address to grant the role.
+     */
+    function grantAdminRoleAsDefaultAdmin(address newAdmin) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (newAdmin == address(0)) revert AddressZero();
+        _grantRole(ADMIN_ROLE, newAdmin);
+    }
+
+    /**
+     * @notice Revoke ADMIN_ROLE as DEFAULT_ADMIN_ROLE.
+     * @dev Only callable by DEFAULT_ADMIN_ROLE. Does not prevent removing last admin unless using AccessControlEnumerable.
+     * @param admin Address to revoke the role from.
+     */
+    function revokeAdminRoleAsDefaultAdmin(address admin) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (admin == address(0)) revert AddressZero();
+        // Note: Base AccessControl doesn't prevent removing the last admin.
+        _revokeRole(ADMIN_ROLE, admin);
     }
 }
