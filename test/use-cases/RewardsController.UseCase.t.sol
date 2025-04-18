@@ -166,138 +166,133 @@ contract RewardsControllerUseCaseTest is Test {
 
     // --- Use Case Tests --- //
 
+    /// @notice Use Case: A user deposits assets, holds NFTs from a whitelisted collection,
+    ///         accrues rewards over time based on deposit, NFT count, and collection beta,
+    ///         and then claims the accrued rewards for that specific collection.
     function test_UseCase_Deposit_HoldNFT_Accrue_Claim() public {
-        // --- Scenario Setup ---
+        // --- 1. Setup Test Parameters ---
         address user = USER_A;
         address collection = NFT_COLLECTION_1; // Beta = 0.1 ether
         uint256 depositAmount = 500 ether;
         uint256 nftCount = 5; // User holds 5 NFTs
         uint256 startBlock = block.number;
-        console.log("Start Block:", startBlock);
-        uint256 updateBlock = startBlock + 1;
-        console.log("Update Block (calculated):", updateBlock);
+        uint256 updateBlock = startBlock + 1; // Block for initial state update
         uint256 blocksToAccrue = 100; // Let 100 blocks pass for rewards
-        uint256 claimBlock = updateBlock + blocksToAccrue;
-        console.log("Claim Block (calculated):", claimBlock);
+        uint256 claimBlock = updateBlock + blocksToAccrue; // Block for claiming
+        console.log("--- Step 1: Parameters Set ---");
+        console.log("User:", user);
+        console.log("Collection:", collection);
+        console.log("Deposit Amount:", depositAmount);
+        console.log("NFT Count:", nftCount);
+        console.log("Start Block:", startBlock);
+        console.log("Update Block:", updateBlock);
+        console.log("Claim Block:", claimBlock);
 
-        // --- Configure Mock Lending Manager ---
-        uint256 mockRewardPerBlock = 0.1 ether; // 0.1 RWD per block total
+        // --- 2. Configure Mock Lending Manager ---
+        uint256 mockRewardPerBlock = 0.1 ether; // 0.1 RWD per block total from LM
         uint256 mockTotalLMAssets = 10000 ether; // Assume 10k total assets in LM
         mockLM.setMockBaseRewardPerBlock(mockRewardPerBlock);
         mockLM.setMockTotalAssets(mockTotalLMAssets);
-        // Calculate expected rate: (0.1e18 * 1e18) / 10000e18 = 1e13
-        uint256 expectedRatePerUnitPerBlock = (mockRewardPerBlock * PRECISION) / mockTotalLMAssets;
+        console.log("--- Step 2: Mock LM Configured ---");
+        console.log("Mock Reward Per Block:", mockRewardPerBlock);
+        console.log("Mock Total LM Assets:", mockTotalLMAssets);
 
-        // --- Process Initial State Update (Deposit + NFT Balance) ---
-        vm.roll(updateBlock);
-        console.log("Block after rolling to updateBlock:", block.number);
+        // --- 3. Action: Process Initial State Update (Deposit + NFT Balance) ---
+        console.log("--- Step 3: Processing Initial Update (Block %s) ---", updateBlock);
+        vm.roll(updateBlock); // Advance to the block where the update occurs
         uint256 nonce0 = rewardsController.authorizedUpdaterNonce(DEFAULT_FOUNDRY_SENDER);
         IRewardsController.BalanceUpdateData[] memory updates = new IRewardsController.BalanceUpdateData[](1);
         updates[0] = IRewardsController.BalanceUpdateData({
             collection: collection,
-            blockNumber: updateBlock,
+            blockNumber: updateBlock, // Use the current block number for the update
             nftDelta: int256(nftCount),
             depositDelta: int256(depositAmount)
         });
         bytes memory sig = _signUserBalanceUpdates(user, updates, nonce0, DEFAULT_FOUNDRY_PRIVATE_KEY);
         rewardsController.processUserBalanceUpdates(DEFAULT_FOUNDRY_SENDER, user, updates, sig);
-        console.log("Block after processUserBalanceUpdates:", block.number);
+        console.log("Initial update processed for user %s at block %s", user, block.number);
 
-        // --- Advance Time for Reward Accrual ---
-        vm.roll(claimBlock);
-        console.log("Block after rolling to claimBlock:", block.number);
+        // --- 4. Action: Advance Time for Reward Accrual ---
+        console.log("--- Step 4: Advancing time to block %s for accrual ---", claimBlock);
+        vm.roll(claimBlock); // Advance to the block where the claim will happen
+        console.log("Current block after advancing time:", block.number);
 
-        // --- Calculate Expected Rewards ---
-        // Use previewRewards to get the expected amount directly from the contract state
+        // --- 5. Verification: Calculate Expected Rewards (using preview) ---
+        console.log("--- Step 5: Previewing Rewards ---");
         address[] memory collectionsToPreview = new address[](1);
         collectionsToPreview[0] = collection;
-        IRewardsController.BalanceUpdateData[] memory noSimulatedUpdates; // Empty array
-        console.log("Block before previewRewards:", block.number);
+        IRewardsController.BalanceUpdateData[] memory noSimulatedUpdates; // Empty array for preview
         uint256 expectedTotalReward = rewardsController.previewRewards(user, collectionsToPreview, noSimulatedUpdates);
-        console.log("Block after previewRewards:", block.number);
-        console.log("Expected Total Reward (from previewRewards):");
-        console.log(expectedTotalReward);
+        console.log("Expected Total Reward (from previewRewards):", expectedTotalReward);
 
-        // --- Log Pending Reward Before Claim (Redundant check, kept for debugging clarity if needed) ---
-        uint256 pendingRewardBeforeClaim = rewardsController.previewRewards(user, collectionsToPreview, noSimulatedUpdates);
-        // console.log("Pending Reward (previewRewards) before claim:", pendingRewardBeforeClaim);
-        // console.log("Expected Total Reward (test calculation):     ", expectedTotalReward); // Original manual calc removed
-        assertEq(pendingRewardBeforeClaim, expectedTotalReward, "Mismatch between previewRewards calls?"); // Should always pass now
-
-        // --- Claim Rewards ---
+        // --- 6. Action: Claim Rewards ---
+        console.log("--- Step 6: Claiming Rewards for user %s at block %s ---", user, block.number);
         vm.startPrank(user);
         uint256 balanceBefore = rewardToken.balanceOf(user);
+        console.log("User balance before claim:", balanceBefore);
+        vm.recordLogs(); // Start recording logs to capture the event
+        rewardsController.claimRewardsForCollection(collection); // Perform the claim
+        Vm.Log[] memory entries = vm.getRecordedLogs(); // Get recorded logs
+        uint256 actualClaimBlockNumber = block.number; // Block number *after* the claim finished
+        vm.stopPrank();
+        console.log("Claim action finished at block:", actualClaimBlockNumber);
 
-        // Expect the claim event
-        // vm.expectEmit(true, true, false, true, address(rewardsController)); // Correct: user(indexed), collection(indexed), amount(data)
-        // emit IRewardsController.RewardsClaimedForCollection(user, collection, expectedTotalReward);
-
-        // Record logs to debug
-        vm.recordLogs();
-        console.log("Block before claimRewardsForCollection:", block.number);
-        // Perform the claim
-        rewardsController.claimRewardsForCollection(collection);
-        console.log("Block after claimRewardsForCollection:", block.number);
-
-        // Get recorded logs
-        Vm.Log[] memory entries = vm.getRecordedLogs();
-
-        // --- Verify Reward Transfer ---
+        // --- 7. Verification: Reward Transfer ---
+        console.log("--- Step 7: Verifying Reward Transfer ---");
         uint256 balanceAfter = rewardToken.balanceOf(user);
+        console.log("User balance after claim:", balanceAfter);
         assertEq(balanceAfter - balanceBefore, expectedTotalReward, "User reward token balance mismatch after claim");
+        console.log("Reward transfer verified.");
 
-        // --- Verify Event Emission (Manual Check) ---
+        // --- 8. Verification: Event Emission (Manual Check) ---
+        console.log("--- Step 8: Verifying Event Emission ---");
         bool eventFound = false;
-        for (uint i = 0; i < entries.length; i++) {
+        bytes32 expectedTopic0 = keccak256("RewardsClaimedForCollection(address,address,uint256)");
+        bytes32 expectedTopic1 = bytes32(uint256(uint160(user)));
+        bytes32 expectedTopic2 = bytes32(uint256(uint160(collection)));
+        for (uint256 i = 0; i < entries.length; i++) {
             Vm.Log memory entry = entries[i];
-            // Check for RewardsClaimedForCollection signature hash
-            if (entry.topics[0] == keccak256("RewardsClaimedForCollection(address,address,uint256)")) {
-                // Check indexed topics (user, collection)
-                if (entry.topics[1] == bytes32(uint256(uint160(user))) && entry.topics[2] == bytes32(uint256(uint160(collection)))) {
-                    // Decode amount from data
-                    uint256 emittedAmount = abi.decode(entry.data, (uint256));
-                    console.log("Emitted RewardsClaimedForCollection Amount:", emittedAmount);
-                    console.log("Expected RewardsClaimedForCollection Amount:", expectedTotalReward);
-                    assertEq(emittedAmount, expectedTotalReward, "Emitted reward amount mismatch");
-                    eventFound = true;
-                    break; // Found the event
-                }
+            if (
+                entry.topics.length == 3 && entry.topics[0] == expectedTopic0 && entry.topics[1] == expectedTopic1
+                    && entry.topics[2] == expectedTopic2
+            ) {
+                uint256 emittedAmount = abi.decode(entry.data, (uint256));
+                console.log("Found RewardsClaimedForCollection event with amount:", emittedAmount);
+                assertEq(emittedAmount, expectedTotalReward, "Emitted reward amount mismatch");
+                eventFound = true;
+                break;
             }
         }
-        assertTrue(eventFound, "RewardsClaimedForCollection event not found");
+        assertTrue(eventFound, "RewardsClaimedForCollection event not found or topics mismatch");
+        console.log("Event emission verified.");
 
-        // --- Verify Internal State Reset ---
+        // --- 9. Verification: Internal State Reset ---
+        console.log("--- Step 9: Verifying Internal State Reset ---");
         (uint256 lastIdx, uint256 accrued,, uint256 nftBal, uint256 depAmt, uint256 lastUpdateBlk) =
             rewardsController.userNFTData(user, collection);
-
-        // Determine the actual block number where the claim transaction occurred
-        // Based on logs, vm.roll(N) seems to result in the next transaction being at block N+1 ?
-        // Or perhaps the block number increments after the transaction completes.
-        // Let's assert against the block number *during* the claim call.
-        uint256 actualClaimBlockNumber = block.number; // Block number *after* the claim finished
-
-        console.log("--- After Claim ---");
-        console.log("Actual lastUpdateBlk from userNFTData:", lastUpdateBlk);
-        console.log("Actual block number post-claim:", actualClaimBlockNumber);
-        console.log("Original calculated claimBlock variable:", claimBlock); // Should be 102
-
-        // Global index should have been updated to the index at actualClaimBlockNumber
-        uint256 expectedGlobalIndexAtClaim = rewardsController.globalRewardIndex();
+        uint256 expectedGlobalIndexAtClaim = rewardsController.globalRewardIndex(); // Index *after* claim processed it
+        console.log("User Accrued after claim:", accrued);
+        console.log("User Last Index after claim:", lastIdx);
+        console.log("Expected Global Index at claim:", expectedGlobalIndexAtClaim);
+        console.log("User Last Update Block after claim:", lastUpdateBlk);
+        console.log("Actual Claim Block Number:", actualClaimBlockNumber);
+        console.log("User NFT Balance after claim:", nftBal);
+        console.log("User Deposit Amount after claim:", depAmt);
 
         assertEq(accrued, 0, "Accrued reward should be reset to 0 after claim");
         assertEq(lastIdx, expectedGlobalIndexAtClaim, "User last reward index mismatch after claim");
-
-        // Assert that the user's last update block matches the block number when the claim occurred.
         assertEq(lastUpdateBlk, actualClaimBlockNumber, "User last update block mismatch after claim");
-
-        // Balances should remain unchanged by claim
         assertEq(nftBal, nftCount, "NFT balance should persist after claim");
         assertEq(depAmt, depositAmount, "Deposit amount should persist after claim");
+        console.log("Internal state reset verified.");
 
-        // --- Try claiming again immediately (should fail) ---
+        // --- 10. Verification: Claiming Again Fails ---
+        console.log("--- Step 10: Verifying second claim fails ---");
+        vm.startPrank(user);
         vm.expectRevert(RewardsController.NoRewardsToClaim.selector);
         rewardsController.claimRewardsForCollection(collection);
         vm.stopPrank();
+        console.log("Verified that claiming again reverts as expected.");
     }
 
     // Add more use case tests here...
