@@ -4,8 +4,8 @@ pragma solidity ^0.8.20;
 import {Test, console2} from "forge-std/Test.sol";
 import {ERC4626Vault} from "../src/ERC4626Vault.sol";
 import {ILendingManager} from "../src/interfaces/ILendingManager.sol";
-import {IERC20} from "@openzeppelin-contracts-5.2.0/token/ERC20/IERC20.sol";
-import {ERC4626} from "@openzeppelin-contracts-5.2.0/token/ERC20/extensions/ERC4626.sol";
+import {IERC20} from "@openzeppelin-contracts-5.3.0/token/ERC20/IERC20.sol";
+import {ERC4626} from "@openzeppelin-contracts-5.3.0/token/ERC20/extensions/ERC4626.sol";
 import {MockLendingManager} from "../src/mocks/MockLendingManager.sol";
 import {MockERC20} from "../src/mocks/MockERC20.sol";
 

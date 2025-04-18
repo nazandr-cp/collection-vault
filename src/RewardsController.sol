@@ -1,26 +1,36 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.20;
 
-import {Ownable} from "@openzeppelin-contracts-5.2.0/access/Ownable.sol";
-import {ReentrancyGuard} from "@openzeppelin-contracts-5.2.0/utils/ReentrancyGuard.sol";
-import {EnumerableSet} from "@openzeppelin-contracts-5.2.0/utils/structs/EnumerableSet.sol";
-import {IERC20} from "@openzeppelin-contracts-5.2.0/token/ERC20/IERC20.sol";
-import {SafeERC20} from "@openzeppelin-contracts-5.2.0/token/ERC20/utils/SafeERC20.sol";
-import {Math} from "@openzeppelin-contracts-5.2.0/utils/math/Math.sol";
-import {EIP712} from "@openzeppelin-contracts-5.2.0/utils/cryptography/EIP712.sol";
-import {ECDSA} from "@openzeppelin-contracts-5.2.0/utils/cryptography/ECDSA.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
+
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 import {IRewardsController} from "./interfaces/IRewardsController.sol";
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
 import {IERC4626VaultMinimal} from "./interfaces/IERC4626VaultMinimal.sol";
 
 /**
- * @title RewardsController
+ * @title RewardsController (Upgradeable)
  * @notice Manages reward calculation and distribution, incorporating NFT-based bonus multipliers.
  * @dev Implements IRewardsController. Tracks user NFT balances, calculates yield (base + bonus),
  *      and distributes rewards by pulling base yield from the LendingManager. Uses EIP-712 for signed balance updates (single and batch).
+ *      Upgradeable using the Transparent Proxy pattern.
  */
-contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP712 {
+// Inherit from Initializable and upgradeable contracts
+contract RewardsController is
+    Initializable,
+    IRewardsController,
+    OwnableUpgradeable,
+    ReentrancyGuardUpgradeable,
+    EIP712Upgradeable
+{
     using SafeERC20 for IERC20;
     using EnumerableSet for EnumerableSet.AddressSet;
 
@@ -51,9 +61,10 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
 
     uint256 private constant PRECISION_FACTOR = 1e18;
 
-    ILendingManager public immutable lendingManager;
-    IERC4626VaultMinimal public immutable vault;
-    IERC20 public immutable rewardToken; // The token distributed as rewards (must be same as LM asset)
+    // State variables
+    ILendingManager public lendingManager;
+    IERC4626VaultMinimal public vault;
+    IERC20 public rewardToken; // The token distributed as rewards (must be same as LM asset)
     address public authorizedUpdater;
 
     // NFT Collection Management
@@ -108,23 +119,38 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
         _;
     }
 
-    constructor(address initialOwner, address _lendingManagerAddress, address _vaultAddress, address _authorizedUpdater)
-        Ownable(initialOwner)
-        EIP712("RewardsController", "1")
+    // Add initializer function
+    function initialize(
+        address initialOwner,
+        address _lendingManagerAddress,
+        address _vaultAddress,
+        address _authorizedUpdater
+    )
+        public
+        initializer // Add initializer modifier
     {
+        // Call initializers of parent contracts
+        __Ownable_init(initialOwner);
+        __ReentrancyGuard_init();
+        __EIP712_init("RewardsController", "1");
+
+        // Initialization logic from constructor
         if (_lendingManagerAddress == address(0) || _vaultAddress == address(0) || _authorizedUpdater == address(0)) {
             revert AddressZero();
         }
 
         lendingManager = ILendingManager(_lendingManagerAddress);
         vault = IERC4626VaultMinimal(_vaultAddress);
-        rewardToken = lendingManager.asset();
+        // Get reward token from lending manager *after* it's set
+        IERC20 _rewardToken = lendingManager.asset(); // Use temporary variable
 
-        if (address(rewardToken) == address(0)) revert AddressZero();
-        if (vault.asset() != address(rewardToken)) revert VaultMismatch();
+        if (address(_rewardToken) == address(0)) revert AddressZero();
+        if (vault.asset() != address(_rewardToken)) revert VaultMismatch();
 
+        rewardToken = _rewardToken; // Assign to state variable
         authorizedUpdater = _authorizedUpdater;
 
+        // Initialize state variables previously initialized at declaration
         lastDistributionBlock = block.number;
         globalRewardIndex = PRECISION_FACTOR;
     }
@@ -711,29 +737,30 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
     {
         address user = msg.sender;
 
-        _updateGlobalRewardIndex(); // Update global index first
-
-        uint256 totalReward = _getPendingRewardsSingleCollection(user, nftCollection, new BalanceUpdateData[](0)); // Calculate pending
+        // Calculate pending rewards based on index up to current block *before* updating global state
+        uint256 totalReward = _getPendingRewardsSingleCollection(user, nftCollection, new BalanceUpdateData[](0));
 
         if (totalReward == 0) {
             revert NoRewardsToClaim();
         }
 
-        UserRewardState storage info = userRewardState[user][nftCollection];
-
-        // Original order: Update state *before* transfers
-        info.accruedReward = 0;
-        info.lastRewardIndex = globalRewardIndex;
-        info.lastUpdateBlock = block.number;
+        // Now update the global index state *before* transfers and user state update
+        _updateGlobalRewardIndex();
+        uint256 indexAtClaim = globalRewardIndex; // Store the index *after* update
 
         // Attempt transfers
         if (totalReward > 0) {
-            // Keep this check, although NoRewardsToClaim should catch totalReward == 0
-            lendingManager.transferYield(totalReward, address(this)); // Reverts here in test
-            rewardToken.safeTransfer(user, totalReward); // Not reached if revert
+            lendingManager.transferYield(totalReward, address(this));
+            rewardToken.safeTransfer(user, totalReward);
         }
 
-        // Emit event (won't be reached if transferYield reverts)
+        // Update user state *after* successful transfers
+        UserRewardState storage info = userRewardState[user][nftCollection];
+        info.accruedReward = 0;
+        info.lastRewardIndex = indexAtClaim; // Use the index stored after the update
+        info.lastUpdateBlock = block.number;
+
+        // Emit event
         emit RewardsClaimedForCollection(user, nftCollection, totalReward);
     }
 
@@ -746,63 +773,53 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
             revert NoRewardsToClaim();
         }
 
-        _updateGlobalRewardIndex();
-
+        // Calculate total rewards based on index up to current block *before* updating global state
+        uint256[] memory individualRewards = new uint256[](activeCollections.length);
         for (uint256 i = 0; i < activeCollections.length; i++) {
             address collection = activeCollections[i];
-
             uint256 collectionTotalReward =
                 _getPendingRewardsSingleCollection(user, collection, new BalanceUpdateData[](0));
-
             if (collectionTotalReward > 0) {
+                individualRewards[i] = collectionTotalReward;
                 totalRewardsToSend += collectionTotalReward;
-                // Defer state update until after transfers
-                emit RewardsClaimedForCollection(user, collection, collectionTotalReward);
             }
         }
 
-        // Check if there's anything to send before attempting transfers
-        if (totalRewardsToSend > 0) {
-            lendingManager.transferYield(totalRewardsToSend, address(this));
-            rewardToken.safeTransfer(user, totalRewardsToSend);
-
-            // Now update state for all collections that had rewards
-            for (uint256 i = 0; i < activeCollections.length; i++) {
-                address collection = activeCollections[i];
-                // Re-fetch pending reward for this specific collection to decide if state needs update
-                // Note: This re-calculation is slightly inefficient but ensures correctness.
-                // An alternative is to store which collections had > 0 reward in the first loop.
-                uint256 rewardCheck = _getPendingRewardsSingleCollection(user, collection, new BalanceUpdateData[](0));
-                if (rewardCheck > 0) {
-                    UserRewardState storage info = userRewardState[user][collection];
-                    info.accruedReward = 0;
-                    info.lastRewardIndex = globalRewardIndex; // Use the index updated at the start
-                    info.lastUpdateBlock = block.number;
-                }
-            }
-
-            emit RewardsClaimedForAll(user, totalRewardsToSend);
-        } else {
-            // If totalRewardsToSend is 0 after the loop, check if there *should* have been rewards
-            // This handles cases where _getPendingRewardsSingleCollection might return dust amounts
-            // that sum to 0, or if there truly are no rewards.
+        if (totalRewardsToSend == 0) {
+             // Check if there *should* have been rewards (handles dust)
             bool hasClaimable = false;
             for (uint256 i = 0; i < activeCollections.length; i++) {
-                uint256 rewardCheck =
-                    _getPendingRewardsSingleCollection(user, activeCollections[i], new BalanceUpdateData[](0));
-                if (rewardCheck > 0) {
+                if (individualRewards[i] > 0) {
                     hasClaimable = true;
                     break;
                 }
             }
             if (!hasClaimable) revert NoRewardsToClaim();
-            // If we get here, it means rewards were calculated but summed to 0, which is unexpected.
+            // If we get here, it means rewards were calculated but summed to 0.
             revert("Reward calculation resulted in zero total");
         }
 
-        // Remove the redundant checks and transfers from lines 753-773
+        // Now update the global index state *before* transfers and user state update
+        _updateGlobalRewardIndex();
+        uint256 indexAtClaim = globalRewardIndex; // Store the index *after* update
 
-        // This block was moved and integrated above
+        // Perform transfers
+        lendingManager.transferYield(totalRewardsToSend, address(this));
+        rewardToken.safeTransfer(user, totalRewardsToSend);
+
+        // Now update state and emit events for all collections that had rewards
+        for (uint256 i = 0; i < activeCollections.length; i++) {
+            if (individualRewards[i] > 0) {
+                address collection = activeCollections[i];
+                UserRewardState storage info = userRewardState[user][collection];
+                info.accruedReward = 0;
+                info.lastRewardIndex = indexAtClaim; // Use the index stored after the update
+                info.lastUpdateBlock = block.number;
+                emit RewardsClaimedForCollection(user, collection, individualRewards[i]);
+            }
+        }
+
+        emit RewardsClaimedForAll(user, totalRewardsToSend);
     }
 
     /**
@@ -831,4 +848,8 @@ contract RewardsController is IRewardsController, Ownable, ReentrancyGuard, EIP7
             info.lastUpdateBlock
         );
     }
+
+    // --- Storage Gap --- //
+    // Added storage gap for upgradeability
+    uint256[50] private __gap;
 }

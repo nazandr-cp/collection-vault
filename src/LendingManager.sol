@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {IERC20} from "@openzeppelin-contracts-5.2.0/token/ERC20/IERC20.sol";
-import {AccessControl} from "@openzeppelin-contracts-5.2.0/access/AccessControl.sol";
-import {SafeERC20} from "@openzeppelin-contracts-5.2.0/token/ERC20/utils/SafeERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
 import {CErc20Interface, CTokenInterface} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol";
@@ -28,7 +28,15 @@ contract LendingManager is ILendingManager, AccessControl {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     /// @notice Role identifier for administrative tasks within this LendingManager.
 
-    IERC20 public immutable override asset;
+    IERC20 private immutable _asset;
+
+    /**
+     * @notice Get the underlying ERC20 asset managed by the lending manager.
+     * @return ERC20 asset address.
+     */
+    function asset() external view override returns (IERC20) {
+        return _asset;
+    }
 
     /// @notice The underlying ERC20 asset managed by this contract (e.g., USDC, DAI).
     CErc20Interface public immutable cToken;
@@ -87,7 +95,7 @@ contract LendingManager is ILendingManager, AccessControl {
         }
 
         // Set immutable state variables.
-        asset = IERC20(_assetAddress);
+        _asset = IERC20(_assetAddress);
         cToken = CErc20Interface(_cTokenAddress);
 
         // Grant initial roles.
@@ -98,7 +106,7 @@ contract LendingManager is ILendingManager, AccessControl {
 
         // Grant infinite approval to the cToken contract for the underlying asset.
         // This allows the cToken contract to pull assets from this LendingManager during `cToken.mint()`.
-        asset.approve(address(cToken), type(uint256).max);
+        _asset.approve(address(cToken), type(uint256).max);
     }
 
     /// @dev Modifier to restrict function access to addresses with the `VAULT_ROLE`.
@@ -137,7 +145,7 @@ contract LendingManager is ILendingManager, AccessControl {
         if (amount == 0) return true; // No action needed if amount is zero.
 
         // 1. Pull assets from the Vault (msg.sender). Vault must have approved this contract.
-        asset.safeTransferFrom(msg.sender, address(this), amount);
+        _asset.safeTransferFrom(msg.sender, address(this), amount);
 
         // 2. Deposit assets into the cToken market by minting cTokens.
         //    Requires this contract to have approved the cToken contract (done in constructor).
@@ -186,7 +194,7 @@ contract LendingManager is ILendingManager, AccessControl {
         }
 
         // 3. Transfer the withdrawn assets back to the Vault (caller).
-        asset.safeTransfer(msg.sender, amount);
+        _asset.safeTransfer(msg.sender, amount);
 
         // Update total principal tracked
         // Note: We assume the vault ensures amount <= totalPrincipalDeposited if needed elsewhere.
@@ -279,7 +287,7 @@ contract LendingManager is ILendingManager, AccessControl {
         require(totalAssets() >= totalPrincipalDeposited, "LM: Harvest dips into principal");
 
         // 3. Transfer the redeemed yield to the specified recipient.
-        asset.safeTransfer(recipient, amount);
+        _asset.safeTransfer(recipient, amount);
 
         emit YieldTransferred(recipient, amount); // Emit event on successful transfer.
         return true;

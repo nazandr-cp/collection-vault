@@ -2,14 +2,25 @@
 pragma solidity ^0.8.20;
 
 import {ILendingManager} from "../interfaces/ILendingManager.sol";
-import {IERC20} from "@openzeppelin-contracts-5.2.0/token/ERC20/IERC20.sol";
+import {IERC20} from "@openzeppelin-contracts-5.3.0/token/ERC20/IERC20.sol";
+import "forge-std/console.sol";
 
 /**
  * @title MockLendingManager
  * @notice Mock contract for testing ERC4626Vault interactions.
  */
 contract MockLendingManager is ILendingManager {
-    IERC20 public immutable asset;
+    IERC20 private immutable _asset;
+    address public rewardsControllerAddress; // Address of the authorized RewardsController
+
+    /**
+     * @notice Get the underlying ERC20 asset managed by the lending manager.
+     * @return ERC20 asset address.
+     */
+    function asset() external view override returns (IERC20) {
+        return _asset;
+    }
+
     uint256 internal mockBaseRewardPerBlock;
     uint256 internal mockTotalAssets;
     bool internal shouldTransferYieldRevert;
@@ -30,10 +41,15 @@ contract MockLendingManager is ILendingManager {
     event MockTransferYieldCalled(uint256 amount, address recipient);
 
     constructor(address _assetAddress) {
-        asset = IERC20(_assetAddress);
+        _asset = IERC20(_assetAddress);
     }
 
     // --- Mock Control Functions ---
+    function setRewardsController(address _controller) external {
+        // In a real scenario, this would likely be restricted (e.g., Ownable)
+        rewardsControllerAddress = _controller;
+    }
+
     function setDepositResult(bool _result) external {
         depositResult = _result;
     }
@@ -70,7 +86,7 @@ contract MockLendingManager is ILendingManager {
         if (success && amount > 0) {
             // Simulate LM pulling assets from the Vault (msg.sender)
             // Requires Vault to have approved the LM
-            asset.transferFrom(msg.sender, address(this), amount);
+            _asset.transferFrom(msg.sender, address(this), amount);
         }
         return success;
     }
@@ -81,9 +97,9 @@ contract MockLendingManager is ILendingManager {
         success = withdrawResult;
         if (success) {
             // Check actual balance before transfer
-            if (asset.balanceOf(address(this)) >= amount) {
+            if (_asset.balanceOf(address(this)) >= amount) {
                 // Simulate asset transfer FROM mock TO vault
-                asset.transfer(msg.sender, amount);
+                _asset.transfer(msg.sender, amount);
             } else {
                 // If mock doesn't have the funds, withdraw fails
                 success = false;
@@ -94,7 +110,7 @@ contract MockLendingManager is ILendingManager {
 
     function totalAssets() external view override returns (uint256) {
         // Return mock value if set, otherwise fallback (e.g., balance)
-        return mockTotalAssets > 0 ? mockTotalAssets : asset.balanceOf(address(this));
+        return mockTotalAssets > 0 ? mockTotalAssets : _asset.balanceOf(address(this));
     }
 
     function getBaseRewardPerBlock() external view override returns (uint256) {
@@ -105,6 +121,9 @@ contract MockLendingManager is ILendingManager {
     function transferYield(uint256 amount, address recipient) external override returns (bool success) {
         transferYieldCalledCount++;
         emit MockTransferYieldCalled(amount, recipient);
+
+        // Check if the caller is the authorized RewardsController
+        require(msg.sender == rewardsControllerAddress, "MockLM: Caller is not the RewardsController");
 
         if (shouldTransferYieldRevert) {
             revert("MockLM: transferYield forced revert");
@@ -123,8 +142,16 @@ contract MockLendingManager is ILendingManager {
 
         // Simulate transfer if successful so far
         if (success) {
-            if (asset.balanceOf(address(this)) >= amount) {
-                asset.transfer(recipient, amount);
+            uint256 currentBalance = _asset.balanceOf(address(this));
+            console.log("MockLM.transferYield: Attempting transfer...");
+            console.log("  - Sender (MockLM):", address(this));
+            console.log("  - Recipient:", recipient);
+            console.log("  - Amount:", amount);
+            console.log("  - Sender Balance:", currentBalance);
+
+            if (currentBalance >= amount) {
+                // Balance check
+                _asset.transfer(recipient, amount); // <<< THE TRANSFER
             } else {
                 // Fail if mock doesn't have enough funds, even if expectation was true
                 success = false;
@@ -133,5 +160,5 @@ contract MockLendingManager is ILendingManager {
         return success;
     }
 
-    // asset() is implicitly implemented via the public state variable
+    // asset() is explicitly implemented above
 }
