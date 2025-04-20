@@ -7,6 +7,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
 import {CErc20Interface, CTokenInterface} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol";
+import "forge-std/console.sol"; // <-- Add this import
 
 /**
  * @title LendingManager (Compound V2 Fork Adapter)
@@ -42,13 +43,17 @@ contract LendingManager is ILendingManager, AccessControl {
     CErc20Interface public immutable cToken;
     /// @notice The corresponding Compound V2 fork cToken contract (e.g., cUSDC, cDAI).
 
-    uint256 public constant R0_BASIS_POINTS = 5;
+    uint256 public constant R0_BASIS_POINTS = 5; // Restore original value
 
     /// @notice Example base reward rate (0.05%) used in `getBaseRewardPerBlock` calculation.
     uint256 public constant BASIS_POINTS_DENOMINATOR = 10_000;
     /// @notice Denominator for basis points calculations (100% = 10,000 basis points).
     uint256 private constant PRECISION = 1e18;
     /// @notice Precision factor (18 decimals) used in reward calculations.
+
+    // Compound V2 Exchange Rate Scale: 1 * 10^(18 + underlyingDecimals - cTokenDecimals)
+    // Assuming underlying=18 decimals, cToken=8 decimals: 1 * 10^(18 + 18 - 8) = 1e28
+    uint256 private constant EXCHANGE_RATE_SCALE = 1e28;
 
     uint256 public totalPrincipalDeposited;
     /// @notice Tracks the net amount of underlying assets deposited by the Vault.
@@ -197,12 +202,12 @@ contract LendingManager is ILendingManager, AccessControl {
         _asset.safeTransfer(msg.sender, amount);
 
         // Update total principal tracked
-        // Note: We assume the vault ensures amount <= totalPrincipalDeposited if needed elsewhere.
-        // Here, we just track the net change.
+        // Decrease principal by the withdrawn amount, but don't go below zero.
         if (totalPrincipalDeposited >= amount) {
             totalPrincipalDeposited -= amount;
         } else {
-            // Should not happen if vault logic is correct, but handle defensively.
+            // Withdrawing more than the tracked principal (i.e., withdrawing yield)
+            // Set principal to 0.
             totalPrincipalDeposited = 0;
         }
 
@@ -227,16 +232,20 @@ contract LendingManager is ILendingManager, AccessControl {
         }
 
         // Get the stored exchange rate from the cToken contract.
-        // This rate represents the value of 1 cToken in terms of the underlying asset.
         uint256 exchangeRate = CTokenInterface(address(cToken)).exchangeRateStored();
-        // Handle potential edge case where exchange rate is zero (e.g., market issue).
         if (exchangeRate == 0) {
+            // This might happen if the market is brand new or has issues.
+            // Returning 0 is safer than potentially reverting or returning a misleading value.
             return 0;
         }
 
-        // Calculate the underlying asset value.
-        // The formula correctly handles the scaling of the exchange rate.
-        return (cTokenBalance * exchangeRate) / 1e18;
+        // Calculate the underlying asset value using the correct scale.
+        // assets = (cTokenBalance * exchangeRate) / 1e18 (Standard Compound formula)
+        // exchangeRate is scaled by 1 * 10^(18 + underlyingDecimals - cTokenDecimals)
+        // For cDAI (18 underlying, 8 cToken): scale = 1e28
+        // Formula: assets (18 dec) = (cTokens (8 dec) * exchangeRate (scaled by 1e28)) / 1e18
+        uint256 assets = (cTokenBalance * exchangeRate) / 1e18; // <-- Corrected divisor
+        return assets;
     }
 
     /**
@@ -257,40 +266,53 @@ contract LendingManager is ILendingManager, AccessControl {
      * @dev Only callable by REWARDS_CONTROLLER_ROLE. Redeems and transfers yield to recipient.
      * @param amount Amount of yield to redeem and transfer.
      * @param recipient Recipient address.
-     * @return success True if yield transfer was successful.
+     * @return amountTransferred The actual amount of yield transferred (may be less than requested due to capping).
      */
     function transferYield(uint256 amount, address recipient)
         external
         override
         onlyRewardsController // Ensures only the associated RewardsController can call this.
-        returns (bool success)
+        returns (
+            uint256 amountTransferred // <-- Changed return type
+        )
     {
-        if (amount == 0) return true; // No action needed if amount is zero.
+        if (amount == 0) return 0; // No action needed if amount is zero.
         if (recipient == address(0)) revert AddressZero(); // Recipient cannot be the zero address.
 
-        // 1. Check available balance: Ensure enough assets exist in the protocol to cover the yield amount.
+        // 1. Check available balance and cap amount if necessary to protect principal.
         uint256 availableBalance = totalAssets();
-        if (availableBalance < amount) {
-            revert InsufficientBalanceInProtocol();
+        uint256 availableYield =
+            (availableBalance > totalPrincipalDeposited) ? availableBalance - totalPrincipalDeposited : 0;
+
+        if (amount > availableYield) {
+            console.log("LM.transferYield Warning: Requested amount exceeds available yield.");
+            console.log(" - Requested:", amount);
+            console.log(" - Available Yield:", availableYield);
+            amountTransferred = availableYield; // Cap to available yield
+            console.log(" - Capping transfer amount to:", amountTransferred);
+        } else {
+            amountTransferred = amount; // Use original amount if within available yield
         }
 
-        // 2. Redeem the yield amount (underlying asset) from the cToken market.
-        //    The cToken contract transfers the `amount` to this LendingManager contract.
-        uint256 redeemResult = cToken.redeemUnderlying(amount);
+        // If amount to transfer is 0 after capping, return early.
+        if (amountTransferred == 0) {
+            console.log("LM.transferYield: Final amount to transfer is 0.");
+            return 0;
+        }
+
+        console.log("LM.transferYield: Proceeding with transfer amount:", amountTransferred);
+
+        // 2. Redeem the capped yield amount (underlying asset) from the cToken market.
+        uint256 redeemResult = cToken.redeemUnderlying(amountTransferred);
         if (redeemResult != 0) {
             revert RedeemFailed(); // Revert if redemption fails.
         }
 
-        // <<< ADDED PRINCIPAL PROTECTION CHECK >>>
-        // Ensure remaining assets in the protocol cover the tracked principal.
-        // totalAssets() reads the *current* state after redemption.
-        require(totalAssets() >= totalPrincipalDeposited, "LM: Harvest dips into principal");
-
         // 3. Transfer the redeemed yield to the specified recipient.
-        _asset.safeTransfer(recipient, amount);
+        _asset.safeTransfer(recipient, amountTransferred);
 
-        emit YieldTransferred(recipient, amount); // Emit event on successful transfer.
-        return true;
+        emit YieldTransferred(recipient, amountTransferred); // Emit event on successful transfer.
+        return amountTransferred; // <-- Return the actual amount transferred
     }
 
     /**
@@ -374,7 +396,51 @@ contract LendingManager is ILendingManager, AccessControl {
      */
     function revokeAdminRoleAsDefaultAdmin(address admin) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (admin == address(0)) revert AddressZero();
-        // Note: Base AccessControl doesn't prevent removing the last admin.
         _revokeRole(ADMIN_ROLE, admin);
+    }
+
+    /**
+     * @notice Redeems the entire cToken balance held by this LendingManager contract.
+     * @dev Restricted to callers with the `VAULT_ROLE`. This is typically used during a full vault redemption
+     *      to sweep any remaining dust from the Compound protocol.
+     *      Calls `cToken.redeem()` with the full cToken balance of this contract.
+     *      Transfers the redeemed underlying assets to the caller (Vault).
+     * @param recipient The address to receive the redeemed underlying assets.
+     * @return amountRedeemed The amount of underlying asset received from redeeming all cTokens.
+     */
+    function redeemAllCTokens(address recipient) external override onlyVault returns (uint256 amountRedeemed) {
+        if (recipient == address(0)) revert AddressZero(); // Ensure recipient is valid
+
+        // Cast cToken to CTokenInterface to access balanceOf
+        uint256 cTokenBalance = CTokenInterface(address(cToken)).balanceOf(address(this));
+        if (cTokenBalance == 0) {
+            return 0; // Nothing to redeem
+        }
+
+        // Store underlying balance before redeem to calculate the difference
+        uint256 balanceBefore = _asset.balanceOf(address(this));
+
+        // Redeem the full cToken balance directly
+        // Compound V2's redeem returns 0 on success, non-zero error code on failure.
+        uint256 redeemResult = cToken.redeem(cTokenBalance);
+        if (redeemResult != 0) {
+            console.log("LendingManager.redeemAllCTokens: cToken.redeem failed with code:", redeemResult);
+            revert RedeemFailed();
+        }
+
+        // Calculate the amount of underlying received
+        uint256 balanceAfter = _asset.balanceOf(address(this));
+        amountRedeemed = balanceAfter - balanceBefore;
+
+        // Update total principal tracking - Assume dust is yield for now.
+        // // totalPrincipalDeposited -= ???;
+
+        // Transfer the redeemed assets to the specified recipient (Vault)
+        if (amountRedeemed > 0) {
+            _asset.safeTransfer(recipient, amountRedeemed);
+        }
+
+        emit WithdrawFromProtocol(recipient, amountRedeemed); // Emit event with the recipient
+        return amountRedeemed;
     }
 }

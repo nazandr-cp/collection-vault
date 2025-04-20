@@ -9,6 +9,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
+import "forge-std/console.sol"; // <-- Add console import
 
 /**
  * @title ERC4626Vault
@@ -125,9 +126,59 @@ contract ERC4626Vault is
         override
         returns (uint256 assets)
     {
-        uint256 assetsToWithdraw = previewRedeem(shares); // Determine assets needed for the redemption.
-        _hookWithdraw(assetsToWithdraw); // Ensure vault has enough assets locally, potentially pulling from LM.
-        assets = super.redeem(shares, recipient, owner); // Perform standard ERC4626 redeem.
+        // 0. Store total supply before potential burn to check for full redemption later.
+        uint256 _totalSupply = totalSupply();
+
+        // 1. Calculate assets based on shares BEFORE the hook (potential rate change)
+        assets = previewRedeem(shares);
+        // Replicate OZ check: Cannot redeem 0 assets for non-zero shares.
+        if (assets == 0) {
+            require(shares == 0, "ERC4626: redeem rounds down to zero assets"); // Match OZ revert message
+        }
+
+        // 2. Ensure vault has enough assets locally for the initial calculated amount, pulling from LM if needed.
+        _hookWithdraw(assets);
+
+        // --- Manual Redeem Logic ---
+
+        // 3. Check & spend allowance BEFORE burning shares
+        if (msg.sender != owner) {
+            _spendAllowance(owner, msg.sender, shares);
+        }
+
+        // 4. Burn the original 'shares' amount
+        _burn(owner, shares);
+        emit Transfer(owner, address(0), shares); // Emit burn event
+
+        // 5. Check for full redeem scenario & sweep LM dust
+        uint256 finalAssetsToTransfer = assets; // Start with the pre-calculated amount
+        bool isFullRedeem = (shares == _totalSupply && shares != 0);
+
+        if (isFullRedeem) {
+            uint256 remainingDustInLM = lendingManager.totalAssets();
+            if (remainingDustInLM > 0) {
+                // Withdraw the dust from LM to the vault using redeemAllCTokens
+                // This calls cToken.redeem() directly, avoiding redeemUnderlying issues with tiny amounts.
+                // The redeemed assets are sent directly to this vault contract.
+                uint256 redeemedDust = lendingManager.redeemAllCTokens(address(this));
+                // Add dust to the amount transferred to the user
+                finalAssetsToTransfer += redeemedDust;
+            }
+        }
+
+        // 6. Transfer the final asset amount (pre-calculated assets + potential LM dust)
+        uint256 vaultBalance = IERC20(asset()).balanceOf(address(this));
+        if (vaultBalance < finalAssetsToTransfer) {
+            // This indicates an internal logic error or LM failure not caught earlier.
+            revert Vault_InsufficientBalancePostLMWithdraw();
+        }
+        SafeERC20.safeTransfer(IERC20(asset()), recipient, finalAssetsToTransfer);
+
+        // 7. Emit the standard Withdraw event with the final amounts
+        emit Withdraw(msg.sender, recipient, owner, finalAssetsToTransfer, shares);
+
+        // Return the final amount transferred
+        return finalAssetsToTransfer;
     }
 
     /**
@@ -163,14 +214,23 @@ contract ERC4626Vault is
             uint256 neededFromLM = assets - directBalance; // Calculate the shortfall.
             uint256 availableInLM = lendingManager.totalAssets(); // Check how much is available in the LM.
 
+            // If the required amount (neededFromLM) exceeds what's available in the LM,
+            // we cannot fulfill the withdrawal. Let the subsequent check handle this.
+            // Note: This check might be redundant if the LM already reverts on insufficient balance,
+            // but it's safer to include. Consider if a specific revert here is better UX.
             if (neededFromLM > availableInLM) {
-                return;
+                // Optionally revert here: revert Vault_InsufficientBalanceInLM(neededFromLM, availableInLM);
+                // For now, let the check after LM withdrawal handle the failure.
+                neededFromLM = availableInLM; // Request max available, which might still be less than shortfall.
             }
 
-            // Request the Lending Manager to send the needed assets back to this vault contract.
-            bool success = lendingManager.withdrawFromLendingProtocol(neededFromLM);
-            if (!success) {
-                revert LendingManagerWithdrawFailed(); // Revert if the LM fails to send the assets.
+            // Only withdraw if needed
+            if (neededFromLM > 0) {
+                // Request the Lending Manager to send the needed assets back to this vault contract.
+                bool success = lendingManager.withdrawFromLendingProtocol(neededFromLM);
+                if (!success) {
+                    revert LendingManagerWithdrawFailed(); // Revert if the LM fails to send the assets.
+                }
             }
 
             // Sanity check: Verify the vault's balance is now sufficient after the LM withdrawal.

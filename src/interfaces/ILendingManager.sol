@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {IERC20} from "@openzeppelin-contracts-5.3.0/token/ERC20/IERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
  * @title ILendingManager
@@ -44,7 +44,15 @@ interface ILendingManager {
      * @notice Transfer accrued base yield to a recipient (called by RewardsController).
      * @param amount Amount of yield tokens to transfer.
      * @param recipient Recipient address.
-     * @return success True if transfer was successful.
+     * @return amountTransferred The actual amount of yield transferred (may be less than requested due to capping).
      */
-    function transferYield(uint256 amount, address recipient) external returns (bool success);
+    function transferYield(uint256 amount, address recipient) external returns (uint256 amountTransferred);
+
+    /**
+     * @notice Redeems the entire cToken balance held by the LendingManager.
+     * @dev Used for scenarios like full vault redemption to sweep remaining dust.
+     * @param recipient Recipient address.
+     * @return amountRedeemed The amount of underlying asset received from redeeming all cTokens.
+     */
+    function redeemAllCTokens(address recipient) external returns (uint256 amountRedeemed);
 }

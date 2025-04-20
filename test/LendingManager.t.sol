@@ -6,9 +6,9 @@ import {Test} from "forge-std/Test.sol";
 import {LendingManager} from "../src/LendingManager.sol";
 import {MockERC20} from "../src/mocks/MockERC20.sol";
 import {MockCToken} from "../src/mocks/MockCToken.sol";
-import {IERC20} from "@openzeppelin-contracts-5.2.0/token/ERC20/IERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MinimalCTokenInterface} from "../src/interfaces/MinimalCTokenInterface.sol";
-import {Ownable} from "@openzeppelin-contracts-5.2.0/access/Ownable.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 contract LendingManagerTest is Test {
     // --- Constants & Config ---
@@ -266,11 +266,11 @@ contract LendingManagerTest is Test {
 
         // 5. Call transferYield from Rewards Controller address
         vm.startPrank(REWARDS_CONTROLLER);
-        bool success = lendingManager.transferYield(transferAmount, REWARDS_CONTROLLER);
+        uint256 amountTransferred = lendingManager.transferYield(transferAmount, REWARDS_CONTROLLER);
         vm.stopPrank();
 
         // 6. Assertions
-        assertTrue(success, "Transfer yield should succeed");
+        assertEq(amountTransferred, transferAmount, "Amount transferred should match requested yield");
         // LM direct balance should remain 0 (redeemed funds are immediately transferred out)
         assertEq(
             assetToken.balanceOf(address(lendingManager)), initialLMBalance, "LM direct balance after yield transfer"
@@ -315,10 +315,10 @@ contract LendingManagerTest is Test {
         uint256 initialLMBalance = assetToken.balanceOf(address(lendingManager));
 
         vm.startPrank(REWARDS_CONTROLLER);
-        bool success = lendingManager.transferYield(0, REWARDS_CONTROLLER);
+        uint256 amountTransferred = lendingManager.transferYield(0, REWARDS_CONTROLLER);
         vm.stopPrank();
 
-        assertTrue(success, "Transfer 0 yield should succeed");
+        assertEq(amountTransferred, 0, "Transfer 0 yield should return 0");
         assertEq(assetToken.balanceOf(REWARDS_CONTROLLER), initialControllerBalance, "Controller balance unchanged");
         assertEq(assetToken.balanceOf(address(lendingManager)), initialLMBalance, "LM balance unchanged");
     }

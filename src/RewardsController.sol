@@ -11,6 +11,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "forge-std/console.sol"; // <-- Add console import
 
 import {IRewardsController} from "./interfaces/IRewardsController.sol";
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
@@ -750,11 +751,26 @@ contract RewardsController is
 
         // Attempt transfers
         if (totalReward > 0) {
-            lendingManager.transferYield(totalReward, address(this));
-            rewardToken.safeTransfer(user, totalReward);
+            console.log("RC Balance BEFORE LM.transferYield:", rewardToken.balanceOf(address(this)));
+            uint256 amountTransferred = lendingManager.transferYield(totalReward, address(this));
+            console.log("RC Balance AFTER LM.transferYield:", rewardToken.balanceOf(address(this)));
+            // Check if LM transferred less than expected (due to capping)
+            if (amountTransferred < totalReward) {
+                console.log("RC.claimRewardsForCollection: LM transferred less than calculated reward.");
+                console.log(" - Calculated:", totalReward);
+                console.log(" - Transferred:", amountTransferred);
+                // Use the actual amount transferred for the user transfer
+                totalReward = amountTransferred;
+            }
+            // If amountTransferred is 0 after capping, we might still need to update state but not transfer
+            if (totalReward > 0) {
+                console.log("RC attempting to transfer to user:", totalReward);
+                console.log("RC Balance BEFORE user transfer:", rewardToken.balanceOf(address(this)));
+                rewardToken.safeTransfer(user, totalReward);
+            }
         }
 
-        // Update user state *after* successful transfers
+        // Update user state *after* successful transfers (or if reward became 0)
         UserRewardState storage info = userRewardState[user][nftCollection];
         info.accruedReward = 0;
         info.lastRewardIndex = indexAtClaim; // Use the index stored after the update
@@ -786,7 +802,7 @@ contract RewardsController is
         }
 
         if (totalRewardsToSend == 0) {
-             // Check if there *should* have been rewards (handles dust)
+            // Check if there *should* have been rewards (handles dust)
             bool hasClaimable = false;
             for (uint256 i = 0; i < activeCollections.length; i++) {
                 if (individualRewards[i] > 0) {
@@ -804,8 +820,21 @@ contract RewardsController is
         uint256 indexAtClaim = globalRewardIndex; // Store the index *after* update
 
         // Perform transfers
-        lendingManager.transferYield(totalRewardsToSend, address(this));
-        rewardToken.safeTransfer(user, totalRewardsToSend);
+        uint256 amountActuallyTransferred = lendingManager.transferYield(totalRewardsToSend, address(this));
+
+        // Check if LM transferred less than calculated (due to capping)
+        if (amountActuallyTransferred < totalRewardsToSend) {
+            console.log("RC.claimRewardsForAll: LM transferred less than total calculated reward.");
+            console.log(" - Calculated Total:", totalRewardsToSend);
+            console.log(" - Transferred Total:", amountActuallyTransferred);
+            // Use the actual amount transferred for the user transfer
+            totalRewardsToSend = amountActuallyTransferred;
+        }
+
+        // If amountActuallyTransferred is 0 after capping, we might still need to update state but not transfer
+        if (totalRewardsToSend > 0) {
+            rewardToken.safeTransfer(user, totalRewardsToSend);
+        }
 
         // Now update state and emit events for all collections that had rewards
         for (uint256 i = 0; i < activeCollections.length; i++) {

@@ -118,7 +118,7 @@ contract MockLendingManager is ILendingManager {
         return mockBaseRewardPerBlock;
     }
 
-    function transferYield(uint256 amount, address recipient) external override returns (bool success) {
+    function transferYield(uint256 amount, address recipient) external override returns (uint256 amountTransferred) {
         transferYieldCalledCount++;
         emit MockTransferYieldCalled(amount, recipient);
 
@@ -129,36 +129,56 @@ contract MockLendingManager is ILendingManager {
             revert("MockLM: transferYield forced revert");
         }
 
+        // Simulate capping logic similar to real LM if needed for specific tests
+        // For simplicity, default mock assumes transfer succeeds if funds are available
+        amountTransferred = amount; // Assume full amount initially
+
         // Check specific expectations if set
         if (transferYieldExpectationSet) {
             require(amount == expectedTransferAmount, "MockLM: Transfer amount mismatch");
             require(recipient == expectedTransferRecipient, "MockLM: Transfer recipient mismatch");
-            success = transferYieldResult;
+            // Use the expectation result to determine if transfer *should* succeed
+            if (!transferYieldResult) {
+                amountTransferred = 0; // Simulate failure by returning 0
+            }
             transferYieldExpectationSet = false; // Reset expectation
         } else {
             // Default behavior if no specific expectation is set
-            success = true;
+            if (!transferYieldResult) {
+                // Use the general flag
+                amountTransferred = 0;
+            }
         }
 
         // Simulate transfer if successful so far
-        if (success) {
+        if (amountTransferred > 0) {
             uint256 currentBalance = _asset.balanceOf(address(this));
             console.log("MockLM.transferYield: Attempting transfer...");
             console.log("  - Sender (MockLM):", address(this));
             console.log("  - Recipient:", recipient);
-            console.log("  - Amount:", amount);
+            console.log("  - Amount:", amountTransferred);
             console.log("  - Sender Balance:", currentBalance);
 
-            if (currentBalance >= amount) {
+            if (currentBalance >= amountTransferred) {
                 // Balance check
-                _asset.transfer(recipient, amount); // <<< THE TRANSFER
+                _asset.transfer(recipient, amountTransferred); // <<< THE TRANSFER
             } else {
                 // Fail if mock doesn't have enough funds, even if expectation was true
-                success = false;
+                amountTransferred = 0; // Simulate failure due to insufficient funds
             }
         }
-        return success;
+        return amountTransferred;
     }
 
-    // asset() is explicitly implemented above
+    // --- Mock Implementation for redeemAllCTokens ---
+    function redeemAllCTokens(address recipient) external override returns (uint256 amountRedeemed) {
+        // Simple mock: Assume it redeems some fixed amount or an amount based on a mock state.
+        // For now, just return 0 and transfer nothing.
+        // A more complex mock could track cToken balances and simulate redemption.
+        amountRedeemed = 0; // Placeholder
+        // if (amountRedeemed > 0) {
+        //     mockAsset.transfer(recipient, amountRedeemed);
+        // }
+        return amountRedeemed;
+    }
 }
