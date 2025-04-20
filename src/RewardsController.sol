@@ -11,7 +11,8 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import "forge-std/console.sol"; // <-- Add console import
+import "forge-std/console.sol";
+import {CErc20Interface, CTokenInterface} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol";
 
 import {IRewardsController} from "./interfaces/IRewardsController.sol";
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
@@ -24,7 +25,6 @@ import {IERC4626VaultMinimal} from "./interfaces/IERC4626VaultMinimal.sol";
  *      and distributes rewards by pulling base yield from the LendingManager. Uses EIP-712 for signed balance updates (single and batch).
  *      Upgradeable using the Transparent Proxy pattern.
  */
-// Inherit from Initializable and upgradeable contracts
 contract RewardsController is
     Initializable,
     IRewardsController,
@@ -66,6 +66,7 @@ contract RewardsController is
     ILendingManager public lendingManager;
     IERC4626VaultMinimal public vault;
     IERC20 public rewardToken; // The token distributed as rewards (must be same as LM asset)
+    CTokenInterface internal cToken;
     address public authorizedUpdater;
 
     // NFT Collection Management
@@ -120,40 +121,47 @@ contract RewardsController is
         _;
     }
 
-    // Add initializer function
     function initialize(
         address initialOwner,
         address _lendingManagerAddress,
         address _vaultAddress,
         address _authorizedUpdater
-    )
-        public
-        initializer // Add initializer modifier
-    {
-        // Call initializers of parent contracts
+    ) public initializer {
         __Ownable_init(initialOwner);
         __ReentrancyGuard_init();
         __EIP712_init("RewardsController", "1");
 
-        // Initialization logic from constructor
-        if (_lendingManagerAddress == address(0) || _vaultAddress == address(0) || _authorizedUpdater == address(0)) {
-            revert AddressZero();
-        }
+        if (_lendingManagerAddress == address(0)) revert AddressZero();
+        if (_vaultAddress == address(0)) revert AddressZero();
+        if (_authorizedUpdater == address(0)) revert AddressZero();
 
         lendingManager = ILendingManager(_lendingManagerAddress);
         vault = IERC4626VaultMinimal(_vaultAddress);
-        // Get reward token from lending manager *after* it's set
-        IERC20 _rewardToken = lendingManager.asset(); // Use temporary variable
 
-        if (address(_rewardToken) == address(0)) revert AddressZero();
-        if (vault.asset() != address(_rewardToken)) revert VaultMismatch();
+        // --- Assertions Start ---
+        if (address(lendingManager) == address(0)) revert AddressZero(); // Check LM interface cast
+        if (address(vault) == address(0)) revert AddressZero(); // Check Vault interface cast
 
-        rewardToken = _rewardToken; // Assign to state variable
+        IERC20 _rewardToken = lendingManager.asset();
+        if (address(_rewardToken) == address(0)) revert AddressZero(); // Check LM.asset()
+
+        address _vaultAsset = vault.asset();
+        if (_vaultAsset == address(0)) revert AddressZero(); // Check Vault.asset()
+        if (_vaultAsset != address(_rewardToken)) revert VaultMismatch();
+        // --- Assertions End ---
+
+        rewardToken = _rewardToken;
         authorizedUpdater = _authorizedUpdater;
 
-        // Initialize state variables previously initialized at declaration
         lastDistributionBlock = block.number;
-        globalRewardIndex = PRECISION_FACTOR;
+        address _cTokenAddress = address(lendingManager.cToken());
+        if (_cTokenAddress == address(0)) revert AddressZero(); // Check LM.cToken()
+        cToken = CTokenInterface(_cTokenAddress);
+        if (address(cToken) == address(0)) revert AddressZero(); // Check cToken interface cast
+
+        uint256 initialExchangeRate = cToken.exchangeRateStored();
+        // TODO: Decide on scaling/normalization for the index if needed.
+        globalRewardIndex = initialExchangeRate;
     }
 
     function setAuthorizedUpdater(address _newUpdater) external onlyOwner {
@@ -164,23 +172,22 @@ contract RewardsController is
         emit AuthorizedUpdaterChanged(oldUpdater, _newUpdater);
     }
 
-    function addNFTCollection(address collection, uint256 beta) external override onlyOwner {
+    function addNFTCollection(address collection, uint256 beta) external onlyOwner {
         if (collection == address(0)) revert AddressZero();
-        if (!_whitelistedCollections.add(collection)) {
-            revert CollectionAlreadyExists(collection);
-        }
+        if (_whitelistedCollections.contains(collection)) revert CollectionAlreadyExists(collection);
+
+        _whitelistedCollections.add(collection); // Use EnumerableSet add
         collectionBetas[collection] = beta;
+
         emit NFTCollectionAdded(collection, beta);
     }
 
-    function removeNFTCollection(address collection)
-        external
-        override
-        onlyOwner
-        onlyWhitelistedCollection(collection)
-    {
-        _whitelistedCollections.remove(collection);
+    function removeNFTCollection(address collection) external onlyOwner {
+        require(_whitelistedCollections.contains(collection), "RC: Collection not whitelisted"); // Use EnumerableSet contains
+
+        _whitelistedCollections.remove(collection); // Use EnumerableSet remove
         delete collectionBetas[collection];
+
         emit NFTCollectionRemoved(collection);
     }
 
@@ -209,25 +216,22 @@ contract RewardsController is
     {
         if (updates.length == 0) revert EmptyBatch();
 
-        // Verify the passed signer is the authorized updater
         if (signer != authorizedUpdater) {
-            revert InvalidSignature(); // Or a more specific error like InvalidSigner
+            revert InvalidSignature();
         }
 
-        uint256 nonce = authorizedUpdaterNonce[signer]; // Use nonce of the authorized updater
+        uint256 nonce = authorizedUpdaterNonce[signer];
 
         bytes32 updatesHash = _hashUserBalanceUpdates(updates);
         bytes32 structHash = keccak256(abi.encode(BALANCE_UPDATES_TYPEHASH, updatesHash, nonce));
         bytes32 digest = _hashTypedDataV4(structHash);
         address recoveredSigner = ECDSA.recover(digest, signature);
 
-        // Verify the signature matches the passed signer (who must be the authorizedUpdater)
         if (recoveredSigner != signer) {
             revert InvalidSignature();
         }
-        // No need for the second check as we already verified signer == authorizedUpdater
 
-        authorizedUpdaterNonce[signer]++; // Increment nonce for the authorized updater
+        authorizedUpdaterNonce[signer]++;
 
         for (uint256 i = 0; i < updates.length; i++) {
             UserBalanceUpdateData memory update = updates[i];
@@ -255,25 +259,22 @@ contract RewardsController is
     ) external override nonReentrant {
         if (updates.length == 0) revert EmptyBatch();
 
-        // Verify the passed signer is the authorized updater
         if (signer != authorizedUpdater) {
-            revert InvalidSignature(); // Or a more specific error like InvalidSigner
+            revert InvalidSignature();
         }
 
-        uint256 nonce = authorizedUpdaterNonce[signer]; // Use nonce of the authorized updater
+        uint256 nonce = authorizedUpdaterNonce[signer];
 
         bytes32 updatesHash = _hashBalanceUpdates(updates);
         bytes32 structHash = keccak256(abi.encode(USER_BALANCE_UPDATES_TYPEHASH, user, updatesHash, nonce));
         bytes32 digest = _hashTypedDataV4(structHash);
         address recoveredSigner = ECDSA.recover(digest, signature);
 
-        // Verify the signature matches the passed signer (who must be the authorizedUpdater)
         if (recoveredSigner != signer) {
             revert InvalidSignature();
         }
-        // No need for the second check as we already verified signer == authorizedUpdater
 
-        authorizedUpdaterNonce[signer]++; // Increment nonce for the authorized updater
+        authorizedUpdaterNonce[signer]++;
 
         for (uint256 i = 0; i < updates.length; i++) {
             BalanceUpdateData memory update = updates[i];
@@ -299,7 +300,6 @@ contract RewardsController is
     ) external nonReentrant {
         address signer = authorizedUpdater;
 
-        // Build the message to verify
         bytes32 structHash = keccak256(abi.encode(BALANCE_UPDATE_DATA_TYPEHASH, collection, blockNumber, nftDelta, 0));
 
         bytes32 digest = _hashTypedDataV4(structHash);
@@ -335,7 +335,6 @@ contract RewardsController is
     ) external nonReentrant {
         address signer = authorizedUpdater;
 
-        // Build the message to verify
         bytes32 structHash =
             keccak256(abi.encode(BALANCE_UPDATE_DATA_TYPEHASH, collection, blockNumber, 0, depositDelta));
 
@@ -421,8 +420,9 @@ contract RewardsController is
             _updateGlobalRewardIndexTo(updateBlock);
 
             uint256 indexDeltaForPeriod = globalRewardIndex - info.lastRewardIndex;
-            uint256 rewardForPeriod =
-                _calculateRewardsWithDelta(collection, indexDeltaForPeriod, info.lastNFTBalance, info.lastDepositAmount);
+            uint256 rewardForPeriod = _calculateRewardsWithDelta(
+                collection, indexDeltaForPeriod, info.lastRewardIndex, info.lastNFTBalance, info.lastDepositAmount
+            );
 
             info.accruedReward += rewardForPeriod;
 
@@ -458,20 +458,24 @@ contract RewardsController is
     function _calculateRewardsWithDelta(
         address nftCollection,
         uint256 indexDelta,
+        uint256 lastRewardIndex, // <-- Add lastRewardIndex (previous exchange rate)
         uint256 nftBalanceDuringPeriod,
         uint256 depositAmountDuringPeriod
     ) internal view returns (uint256 reward) {
-        if (indexDelta == 0 || depositAmountDuringPeriod == 0) {
+        if (indexDelta == 0 || depositAmountDuringPeriod == 0 || lastRewardIndex == 0) {
             return 0;
         }
 
-        uint256 baseReward = (depositAmountDuringPeriod * indexDelta) / PRECISION_FACTOR;
+        // Calculate base reward based on deposit amount and change in exchange rate relative to the starting rate
+        // reward = deposit * (currentRate - startRate) / startRate = deposit * indexDelta / lastRewardIndex
+        uint256 baseReward = (depositAmountDuringPeriod * indexDelta) / lastRewardIndex;
 
         if (nftBalanceDuringPeriod > 0) {
             uint256 beta = collectionBetas[nftCollection];
             uint256 boostFactor = calculateBoost(nftBalanceDuringPeriod, beta);
 
-            uint256 bonusReward = (baseReward * boostFactor) / PRECISION_FACTOR;
+            // Bonus reward is calculated as a percentage of the base reward
+            uint256 bonusReward = (baseReward * boostFactor) / PRECISION_FACTOR; // Keep PRECISION_FACTOR for boost %
             reward = baseReward + bonusReward;
         } else {
             reward = baseReward;
@@ -480,40 +484,21 @@ contract RewardsController is
         return reward;
     }
 
-    function _calculateGlobalIndexAt(uint256 targetBlock) internal view returns (uint256 currentIndex) {
-        currentIndex = globalRewardIndex; // Start with the last known index
-        if (targetBlock <= lastDistributionBlock) {
-            return currentIndex; // Return stored index if target is not in the future
-        }
+    /**
+     * @notice Calculates the current global index based on the cToken exchange rate.
+     * @dev Calls `accrueInterest` on the cToken to update the rate before reading it.
+     *      The exchange rate itself represents the index.
+     * @param targetBlock The block number to calculate the index for (unused in this implementation,
+     *                    as exchange rate reflects current state after accrual).
+     * @return currentIndex The current exchange rate stored in the cToken contract.
+     */
+    function _calculateGlobalIndexAt(uint256 targetBlock) internal returns (uint256 currentIndex) {
+        targetBlock; // Silence unused parameter warning
 
-        // Calculate index increase from last distribution block up to target block
-        uint256 blockDelta = targetBlock - lastDistributionBlock;
-        if (blockDelta == 0) {
-            return currentIndex; // No blocks passed
-        }
+        uint256 accrualResult = cToken.accrueInterest();
+        accrualResult; // Silence compiler warning
 
-        uint256 currentTotalAssets = lendingManager.totalAssets();
-        if (currentTotalAssets == 0) {
-            // If no assets in LM, no yield is generated, index doesn't increase
-            return currentIndex;
-        }
-
-        // Get the total reward generated per block by the Lending Manager
-        uint256 totalRewardPerBlock = lendingManager.getBaseRewardPerBlock();
-        if (totalRewardPerBlock == 0) {
-            // If no reward rate, index doesn't increase
-            return currentIndex;
-        }
-
-        // Calculate the reward rate per unit of asset per block, scaled by PRECISION_FACTOR
-        // rate = (totalRewardPerBlock / currentTotalAssets) * PRECISION_FACTOR
-        // To avoid front-running issues with totalAssets changing, this uses the current value.
-        // For more accuracy, LM could provide an average rate over the period.
-        uint256 ratePerUnitPerBlock = (totalRewardPerBlock * PRECISION_FACTOR) / currentTotalAssets;
-
-        uint256 indexIncrease = blockDelta * ratePerUnitPerBlock;
-        currentIndex += indexIncrease;
-
+        currentIndex = cToken.exchangeRateStored();
         return currentIndex;
     }
 
@@ -528,40 +513,38 @@ contract RewardsController is
     ) internal view returns (uint256 pendingReward) {
         UserRewardState storage info = userRewardState[user][nftCollection];
 
-        // Initialize simulation state from stored state
         uint256 simTotalReward = info.accruedReward;
         uint256 simNftBalance = info.lastNFTBalance;
         uint256 simDepositAmount = info.lastDepositAmount;
         uint256 simLastProcessedBlock = info.lastUpdateBlock;
         uint256 simLastRewardIndex = info.lastRewardIndex;
 
-        // Handle initialization case (no prior updates for user/collection)
         if (simLastProcessedBlock == 0) {
-            // Determine the starting index based on the first simulation block or last global update
             uint256 startingBlockForIndex = (
                 simulatedUpdates.length > 0 && simulatedUpdates[0].blockNumber < lastDistributionBlock
             ) ? simulatedUpdates[0].blockNumber : lastDistributionBlock;
 
             if (startingBlockForIndex < lastDistributionBlock) {
-                simLastRewardIndex = _calculateGlobalIndexAt(startingBlockForIndex);
+                // Note: _calculateGlobalIndexAt is non-view. This path might need adjustment
+                // if called from a view context without simulations. For preview, it's okay.
+                // For view context, we might need a separate view-only index calculation or accept slight staleness.
+                simLastRewardIndex = globalRewardIndex;
                 simLastProcessedBlock = startingBlockForIndex;
             } else {
                 simLastRewardIndex = globalRewardIndex;
                 simLastProcessedBlock = lastDistributionBlock;
             }
-            // If simulations exist, ensure the start block/index reflect the first simulation
             if (simulatedUpdates.length > 0) {
                 simLastProcessedBlock = simulatedUpdates[0].blockNumber;
-                simLastRewardIndex = _calculateGlobalIndexAt(simLastProcessedBlock);
+                // Recalculate index for the simulation start block if needed (requires non-view or careful handling)
+                simLastRewardIndex = globalRewardIndex;
             }
         }
 
-        // Process simulated updates
         for (uint256 i = 0; i < simulatedUpdates.length; i++) {
             BalanceUpdateData memory update = simulatedUpdates[i];
 
             if (update.collection != nftCollection) {
-                // This should not happen if called correctly by the public function filtering updates
                 continue;
             }
 
@@ -569,33 +552,35 @@ contract RewardsController is
                 revert SimulationUpdateOutOfOrder(update.blockNumber, simLastProcessedBlock);
             }
 
-            // Accrue rewards up to the block of the current simulated update
             if (update.blockNumber > simLastProcessedBlock) {
-                uint256 globalIndexAtSimUpdateBlock = _calculateGlobalIndexAt(update.blockNumber);
+                // Note: _calculateGlobalIndexAt is non-view. This preview function is view.
+                // This means we cannot call accrueInterest here. We must rely on the last known global index.
+                uint256 globalIndexAtSimUpdateBlock = globalRewardIndex;
+
                 uint256 indexDeltaForPeriod = globalIndexAtSimUpdateBlock - simLastRewardIndex;
 
                 if (indexDeltaForPeriod > 0) {
-                    uint256 rewardPeriod =
-                        _calculateRewardsWithDelta(nftCollection, indexDeltaForPeriod, simNftBalance, simDepositAmount);
+                    uint256 rewardPeriod = _calculateRewardsWithDelta(
+                        nftCollection, indexDeltaForPeriod, simLastRewardIndex, simNftBalance, simDepositAmount
+                    );
                     simTotalReward += rewardPeriod;
                 }
                 simLastRewardIndex = globalIndexAtSimUpdateBlock;
             }
 
-            // Apply deltas from the simulated update
             simNftBalance = _applyDeltaSimulated(simNftBalance, update.nftDelta);
             simDepositAmount = _applyDeltaSimulated(simDepositAmount, update.depositDelta);
             simLastProcessedBlock = update.blockNumber;
         }
 
-        // Calculate final rewards (from last update/initial state up to current block)
         uint256 currentBlock = block.number;
-        uint256 finalGlobalIndex = _calculateGlobalIndexAt(currentBlock);
+        uint256 finalGlobalIndex = cToken.exchangeRateStored();
 
         if (currentBlock > simLastProcessedBlock && finalGlobalIndex > simLastRewardIndex) {
             uint256 finalIndexDelta = finalGlobalIndex - simLastRewardIndex;
-            uint256 finalReward =
-                _calculateRewardsWithDelta(nftCollection, finalIndexDelta, simNftBalance, simDepositAmount);
+            uint256 finalReward = _calculateRewardsWithDelta(
+                nftCollection, finalIndexDelta, simLastRewardIndex, simNftBalance, simDepositAmount
+            );
             simTotalReward += finalReward;
         }
 
@@ -620,19 +605,22 @@ contract RewardsController is
      */
     function _updateGlobalRewardIndexTo(uint256 targetBlock) internal {
         if (targetBlock <= lastDistributionBlock) {
-            return; // Already up-to-date or target is in the past
+            return;
         }
 
         uint256 newGlobalIndex = _calculateGlobalIndexAt(targetBlock);
 
-        // Only update if the index actually changed to avoid unnecessary writes
         if (newGlobalIndex != globalRewardIndex) {
             globalRewardIndex = newGlobalIndex;
         }
-        // Always update the block number to prevent re-calculation over the same period
+
         lastDistributionBlock = targetBlock;
     }
 
+    /**
+     * @notice Updates the global reward index up to the current block number.
+     * @dev Convenience wrapper around _updateGlobalRewardIndexTo.
+     */
     function _updateGlobalRewardIndex() internal {
         _updateGlobalRewardIndexTo(block.number);
     }
@@ -640,13 +628,10 @@ contract RewardsController is
     // --- Public View Functions --- //
 
     function calculateBoost(uint256 nftBalance, uint256 beta) public pure returns (uint256 boostFactor) {
-        if (nftBalance == 0) return 0; // No boost if no NFTs
+        if (nftBalance == 0) return 0;
 
-        // Assuming beta is scaled by PRECISION_FACTOR (e.g., 0.1e18 means 10% bonus per NFT).
-        // boostFactor represents the total *bonus* multiplier to be applied to the base reward.
         boostFactor = nftBalance * beta;
 
-        // Cap the boost factor (e.g., max 900% bonus = 9 * 1e18)
         uint256 maxBoostFactor = PRECISION_FACTOR * 9; // Cap bonus at 900%
         if (boostFactor > maxBoostFactor) {
             boostFactor = maxBoostFactor;
@@ -705,7 +690,7 @@ contract RewardsController is
         BalanceUpdateData[] calldata simulatedUpdates
     ) external view override returns (uint256 pendingReward) {
         if (nftCollections.length == 0) {
-            return 0; // Return 0 if no collections specified
+            return 0;
         }
 
         uint256 totalPendingReward = 0;
@@ -723,11 +708,11 @@ contract RewardsController is
 
     // Helper to check whitelist status (used in previewRewards)
     function isCollectionWhitelisted(address collection) public view returns (bool) {
-        return _whitelistedCollections.contains(collection);
+        return _whitelistedCollections.contains(collection); // Use EnumerableSet contains
     }
 
     function getWhitelistedCollections() external view override returns (address[] memory) {
-        return _whitelistedCollections.values();
+        return _whitelistedCollections.values(); // Return values from the EnumerableSet
     }
 
     function claimRewardsForCollection(address nftCollection)

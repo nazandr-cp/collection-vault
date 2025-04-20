@@ -15,6 +15,12 @@ interface ILendingManager {
     function asset() external view returns (IERC20);
 
     /**
+     * @notice Get the cToken address associated with the underlying asset.
+     * @return cToken address.
+     */
+    function cToken() external view returns (address);
+
+    /**
      * @notice Deposit a specified amount of the asset into the lending protocol.
      * @param amount Amount to deposit.
      * @return success True if deposit was successful.

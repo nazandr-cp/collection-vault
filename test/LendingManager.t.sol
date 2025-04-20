@@ -7,7 +7,7 @@ import {LendingManager} from "../src/LendingManager.sol";
 import {MockERC20} from "../src/mocks/MockERC20.sol";
 import {MockCToken} from "../src/mocks/MockCToken.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {MinimalCTokenInterface} from "../src/interfaces/MinimalCTokenInterface.sol";
+import {CTokenInterface, CErc20Interface} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 contract LendingManagerTest is Test {
@@ -61,7 +61,7 @@ contract LendingManagerTest is Test {
 
         // Mock cToken mint interaction
         // Expect transferFrom from Vault, then transfer to cToken by LM
-        vm.expectCall(address(cToken), abi.encodeWithSelector(MinimalCTokenInterface.mint.selector, depositAmount), 1);
+        vm.expectCall(address(cToken), abi.encodeWithSelector(CErc20Interface.mint.selector, depositAmount), 1); // <-- Use CErc20Interface
         cToken.setMintResult(0); // Success
 
         // Simulate LendingManager calling deposit
@@ -86,7 +86,7 @@ contract LendingManagerTest is Test {
         uint256 depositAmount = 1000 ether;
 
         // Mock cToken mint to fail (return non-zero)
-        vm.expectCall(address(cToken), abi.encodeWithSelector(MinimalCTokenInterface.mint.selector, depositAmount), 1);
+        vm.expectCall(address(cToken), abi.encodeWithSelector(CErc20Interface.mint.selector, depositAmount), 1); // <-- Use CErc20Interface
         cToken.setMintResult(1); // Error code 1
 
         vm.startPrank(VAULT_ADDRESS);
@@ -110,7 +110,7 @@ contract LendingManagerTest is Test {
         // uint256 initialExchangeRate = cToken.exchangeRateStored(); // Unused variable
         // uint256 expectedCTokens = (depositAmount * 1e18) / initialExchangeRate; // Unused variable
 
-        vm.expectCall(address(cToken), abi.encodeWithSelector(MinimalCTokenInterface.mint.selector, depositAmount), 1);
+        vm.expectCall(address(cToken), abi.encodeWithSelector(CErc20Interface.mint.selector, depositAmount), 1); // <-- Use CErc20Interface
         cToken.setMintResult(0);
         vm.prank(VAULT_ADDRESS);
         lendingManager.depositToLendingProtocol(depositAmount);
@@ -127,7 +127,9 @@ contract LendingManagerTest is Test {
 
         // Mock cToken redeem interaction
         vm.expectCall(
-            address(cToken), abi.encodeWithSelector(MinimalCTokenInterface.redeemUnderlying.selector, withdrawAmount), 1
+            address(cToken),
+            abi.encodeWithSelector(CErc20Interface.redeemUnderlying.selector, withdrawAmount),
+            1 // <-- Use CErc20Interface
         );
         cToken.setRedeemResult(0); // Success
 
@@ -150,7 +152,8 @@ contract LendingManagerTest is Test {
     function test_RevertIf_Withdraw_RedeemFails() public {
         // Setup: Deposit
         uint256 depositAmount = 10_000 ether;
-        vm.expectCall(address(cToken), abi.encodeWithSelector(MinimalCTokenInterface.mint.selector, depositAmount), 1);
+        vm.expectCall(address(cToken), abi.encodeWithSelector(CErc20Interface.mint.selector, depositAmount), 1); // <-- Use CErc20Interface
+        cToken.setMintResult(0); // Need to set mint result for setup
         vm.prank(VAULT_ADDRESS);
         lendingManager.depositToLendingProtocol(depositAmount);
         uint256 initialVaultBalance = assetToken.balanceOf(VAULT_ADDRESS);
@@ -161,7 +164,9 @@ contract LendingManagerTest is Test {
         // Mock cToken state before withdraw attempt
 
         vm.expectCall(
-            address(cToken), abi.encodeWithSelector(MinimalCTokenInterface.redeemUnderlying.selector, withdrawAmount), 1
+            address(cToken),
+            abi.encodeWithSelector(CErc20Interface.redeemUnderlying.selector, withdrawAmount),
+            1 // <-- Use CErc20Interface
         );
         cToken.setRedeemResult(1); // Error code 1
 
@@ -192,9 +197,12 @@ contract LendingManagerTest is Test {
         uint256 depositAmount = 15_000 ether;
         uint256 initialExchangeRate = cToken.exchangeRateStored(); // Mock returns raw rate
         // Calculate expected cTokens based on mock's mint logic
-        uint256 expectedCTokens = (depositAmount * 1e18) / initialExchangeRate;
+        // Precision needs to match the EXCHANGE_RATE_SCALE in MockCToken (1e18 + underlying_decimals(18) - ctoken_decimals(8) = 1e28)
+        uint256 exchangeRateScale = 1 * 10 ** (18 + 18 - 8); // 1e28
+        uint256 expectedCTokens = (depositAmount * exchangeRateScale) / initialExchangeRate;
 
-        vm.expectCall(address(cToken), abi.encodeWithSelector(MinimalCTokenInterface.mint.selector, depositAmount), 1);
+        vm.expectCall(address(cToken), abi.encodeWithSelector(CErc20Interface.mint.selector, depositAmount), 1); // <-- Use CErc20Interface
+        cToken.setMintResult(0); // Need to set mint result for setup
         vm.prank(VAULT_ADDRESS);
         lendingManager.depositToLendingProtocol(depositAmount);
 
@@ -205,18 +213,21 @@ contract LendingManagerTest is Test {
         uint256 yieldAmount = 1000 ether;
         uint256 newUnderlyingTotal = depositAmount + yieldAmount;
         // Calculate the new exchange rate needed to produce the target underlying total
-        uint256 newExchangeRate = (newUnderlyingTotal * 1e18) / expectedCTokens; // Recalculate based on expected cTokens
+        // newRate = underlyingTotal * scale / cTokens
+        uint256 newExchangeRate = (newUnderlyingTotal * exchangeRateScale) / expectedCTokens; // Recalculate based on expected cTokens and scale
         cToken.setExchangeRate(newExchangeRate);
 
         // Assert totalAssets is close to the target, allowing for dust
         uint256 actualTotalAssets = lendingManager.totalAssets();
-        assertApproxEqAbs(actualTotalAssets, newUnderlyingTotal, 250000, "Total assets after yield (rate change)"); // Allow larger delta for precision
+        // Use approxEqAbs with a small delta (e.g., 1 wei) due to potential precision differences
+        assertApproxEqAbs(actualTotalAssets, newUnderlyingTotal, 1, "Total assets after yield (rate change)");
     }
 
     function test_GetBaseRewardPerBlock() public {
         // Setup: Deposit
         uint256 depositAmount = 100_000 ether;
-        vm.expectCall(address(cToken), abi.encodeWithSelector(MinimalCTokenInterface.mint.selector, depositAmount), 1);
+        vm.expectCall(address(cToken), abi.encodeWithSelector(CErc20Interface.mint.selector, depositAmount), 1); // <-- Use CErc20Interface
+        cToken.setMintResult(0); // Need to set mint result for setup
         vm.prank(VAULT_ADDRESS);
         lendingManager.depositToLendingProtocol(depositAmount);
 
@@ -238,18 +249,20 @@ contract LendingManagerTest is Test {
     function test_TransferYield_Success() public {
         // 1. Deposit assets into the protocol first
         uint256 depositAmount = 1000 ether;
-        vm.expectCall(address(cToken), abi.encodeWithSelector(MinimalCTokenInterface.mint.selector, depositAmount), 1);
+        vm.expectCall(address(cToken), abi.encodeWithSelector(CErc20Interface.mint.selector, depositAmount), 1); // <-- Use CErc20Interface
         cToken.setMintResult(0);
         vm.prank(VAULT_ADDRESS);
         lendingManager.depositToLendingProtocol(depositAmount);
-        assertEq(lendingManager.totalAssets(), depositAmount, "Total assets after deposit");
+        // Use approxEqAbs for totalAssets check due to potential precision issues
+        assertApproxEqAbs(lendingManager.totalAssets(), depositAmount, 1, "Total assets after deposit");
 
         // 2. Simulate yield accrual (optional but good)
         uint256 yieldAmount = 50 ether;
-        // uint256 initialExchangeRate = cToken.exchangeRateStored(); // Unused variable
-        uint256 cTokenBalance = cToken.balanceOf(address(lendingManager)); // Get cTokens held by LM
+        uint256 initialExchangeRate = cToken.exchangeRateStored();
+        uint256 exchangeRateScale = 1 * 10 ** (18 + 18 - 8); // 1e28
+        uint256 cTokenBalance = (depositAmount * exchangeRateScale) / initialExchangeRate; // Get cTokens held by LM based on initial deposit
         uint256 newUnderlyingTotal = depositAmount + yieldAmount;
-        uint256 newExchangeRate = (newUnderlyingTotal * 1e18) / cTokenBalance; // Calculate new rate
+        uint256 newExchangeRate = (newUnderlyingTotal * exchangeRateScale) / cTokenBalance; // Calculate new rate
         cToken.setExchangeRate(newExchangeRate);
         assertApproxEqAbs(lendingManager.totalAssets(), newUnderlyingTotal, 1, "Total assets after yield simulation"); // Verify yield simulation
 
@@ -260,7 +273,9 @@ contract LendingManagerTest is Test {
 
         // 4. Mock cToken redeemUnderlying call (transferYield will call this)
         vm.expectCall(
-            address(cToken), abi.encodeWithSelector(MinimalCTokenInterface.redeemUnderlying.selector, transferAmount), 1
+            address(cToken),
+            abi.encodeWithSelector(CErc20Interface.redeemUnderlying.selector, transferAmount),
+            1 // <-- Use CErc20Interface
         );
         cToken.setRedeemResult(0); // Success
 

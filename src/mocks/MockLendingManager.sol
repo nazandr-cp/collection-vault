@@ -12,6 +12,7 @@ import "forge-std/console.sol";
 contract MockLendingManager is ILendingManager {
     IERC20 private immutable _asset;
     address public rewardsControllerAddress; // Address of the authorized RewardsController
+    address public mockCTokenAddress; // <-- Add mock cToken address
 
     /**
      * @notice Get the underlying ERC20 asset managed by the lending manager.
@@ -19,6 +20,14 @@ contract MockLendingManager is ILendingManager {
      */
     function asset() external view override returns (IERC20) {
         return _asset;
+    }
+
+    /**
+     * @notice Get the mock cToken address.
+     * @return Mock cToken address.
+     */
+    function cToken() external view override returns (address) { // <-- Implement interface function
+        return mockCTokenAddress;
     }
 
     uint256 internal mockBaseRewardPerBlock;
@@ -48,6 +57,10 @@ contract MockLendingManager is ILendingManager {
     function setRewardsController(address _controller) external {
         // In a real scenario, this would likely be restricted (e.g., Ownable)
         rewardsControllerAddress = _controller;
+    }
+
+    function setMockCTokenAddress(address _cToken) external { // <-- Add setter for mock cToken
+        mockCTokenAddress = _cToken;
     }
 
     function setDepositResult(bool _result) external {

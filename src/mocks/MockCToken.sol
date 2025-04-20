@@ -1,33 +1,36 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {MinimalCTokenInterface} from "../interfaces/MinimalCTokenInterface.sol";
+import {CTokenInterface} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol";
+import {CErc20Interface} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol"; // Added import
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ComptrollerInterface} from "compound-protocol-2.8.1/contracts/ComptrollerInterface.sol"; // Added import
+import {InterestRateModel} from "compound-protocol-2.8.1/contracts/InterestRateModel.sol"; // Added import
+import {EIP20NonStandardInterface} from "compound-protocol-2.8.1/contracts/EIP20NonStandardInterface.sol"; // Added import
 
 /**
  * @title MockCToken
  * @notice Mock for Compound cToken interactions in LendingManager tests.
  */
-contract MockCToken is MinimalCTokenInterface {
-    IERC20 public immutable underlyingToken;
-    string public name = "Mock cToken";
-    string public symbol = "mcTOK";
-    uint8 public constant DECIMALS = 8;
+contract MockCToken is
+    CTokenInterface,
+    CErc20Interface // <-- Added inheritance
+{
     uint8 public constant UNDERLYING_DECIMALS = 18; // Assuming underlying is DAI
-    uint256 private constant EXCHANGE_RATE_SCALE = 1 * 10 ** (18 + UNDERLYING_DECIMALS - DECIMALS); // 1e28
+    uint256 private constant EXCHANGE_RATE_SCALE = 1 * 10 ** (18 + UNDERLYING_DECIMALS - 8); // Use inherited decimals (8)
 
     // Stored rate should be scaled: 0.02 * 1e28 = 2e26
-    uint256 public currentExchangeRate = 2 * 10 ** (18 + UNDERLYING_DECIMALS - DECIMALS - 2); // 2e26
+    uint256 public currentExchangeRate = 2 * 10 ** (18 + UNDERLYING_DECIMALS - 8 - 2); // 2e26
     mapping(address => uint256) public cTokenBalances;
 
     uint256 public mintResult = 0;
     uint256 public redeemResult = 0;
 
-    event MockMint(address minter, uint256 mintAmount, uint256 mintTokens);
-    event MockRedeem(address redeemer, uint256 redeemAmount, uint256 redeemTokens);
-
     constructor(address _underlying) {
-        underlyingToken = IERC20(_underlying);
+        underlying = _underlying; // Initialize inherited state variable
+        name = "Mock cToken"; // Initialize inherited state variable
+        symbol = "mcTOK"; // Initialize inherited state variable
+        decimals = 8; // Initialize inherited state variable
     }
 
     // --- Mock Control Functions ---
@@ -45,20 +48,23 @@ contract MockCToken is MinimalCTokenInterface {
     }
 
     // --- MinimalCTokenInterface Implementation ---
-    function mint(uint256 mintAmount) external override returns (uint256) {
+    function mint(uint256 mintAmount) external override(CErc20Interface) returns (uint256) {
+        // Added override specifier
         if (mintResult != 0) return mintResult;
 
-        underlyingToken.transferFrom(msg.sender, address(this), mintAmount);
+        // Simulate transfer from caller (LendingManager) to this mock cToken
+        IERC20(underlying).transferFrom(msg.sender, address(this), mintAmount);
 
         // Calculate cTokens using scaled rate: cTokens = underlying * scale / rate
         uint256 cTokensToMint = mintAmount * EXCHANGE_RATE_SCALE / currentExchangeRate;
         cTokenBalances[msg.sender] += cTokensToMint;
 
-        emit MockMint(msg.sender, mintAmount, cTokensToMint);
-        return 0;
+        emit Mint(msg.sender, mintAmount, cTokensToMint); // Use inherited event
+        return 0; // Return 0 for success as per Compound interface
     }
 
-    function redeemUnderlying(uint256 redeemUnderlyingAmount) external override returns (uint256) {
+    function redeemUnderlying(uint256 redeemUnderlyingAmount) external override(CErc20Interface) returns (uint256) {
+        // Added override specifier
         if (redeemResult != 0) return redeemResult;
 
         // Calculate required cTokens using scaled rate: cTokens = underlying * scale / rate
@@ -69,13 +75,40 @@ contract MockCToken is MinimalCTokenInterface {
 
         // Check if this mock contract has enough underlying (simple check)
         require(
-            underlyingToken.balanceOf(address(this)) >= redeemUnderlyingAmount, "MockCToken: Contract lacks underlying"
+            IERC20(underlying).balanceOf(address(this)) >= redeemUnderlyingAmount,
+            "MockCToken: Contract lacks underlying"
         );
 
         cTokenBalances[msg.sender] -= cTokensToBurn;
-        underlyingToken.transfer(msg.sender, redeemUnderlyingAmount);
+        // Simulate transferring underlying back to the caller (LendingManager)
+        IERC20(underlying).transfer(msg.sender, redeemUnderlyingAmount);
 
-        emit MockRedeem(msg.sender, redeemUnderlyingAmount, cTokensToBurn);
+        emit Redeem(msg.sender, redeemUnderlyingAmount, cTokensToBurn); // Use inherited event
+        return 0; // Return 0 for success as per Compound interface
+    }
+
+    // --- ADDED: Mock Implementation for redeem --- //
+    function redeem(uint256 redeemTokens) external override(CErc20Interface) returns (uint256) {
+        // Added override specifier
+        // Calculate underlying amount based on tokens and rate
+        uint256 underlyingToRedeem = redeemTokens * currentExchangeRate / EXCHANGE_RATE_SCALE;
+
+        require(cTokenBalances[msg.sender] >= redeemTokens, "MockCToken: Insufficient cTokens");
+        require(
+            IERC20(underlying).balanceOf(address(this)) >= underlyingToRedeem, "MockCToken: Contract lacks underlying"
+        );
+
+        cTokenBalances[msg.sender] -= redeemTokens;
+        IERC20(underlying).transfer(msg.sender, underlyingToRedeem);
+
+        emit Redeem(msg.sender, underlyingToRedeem, redeemTokens);
+        return 0;
+    }
+
+    // --- ADDED: Mock Implementation for accrueInterest --- //
+    function accrueInterest() external override returns (uint256) {
+        // Simple mock: return success (0) by default
+        // Could add logic to simulate interest accrual if needed
         return 0;
     }
 
@@ -89,14 +122,6 @@ contract MockCToken is MinimalCTokenInterface {
         return cTokenBalance * currentExchangeRate / EXCHANGE_RATE_SCALE;
     }
 
-    function underlying() external view override returns (address) {
-        return address(underlyingToken);
-    }
-
-    function decimals() external pure override returns (uint8) {
-        return DECIMALS;
-    }
-
     function exchangeRateStored() external view override returns (uint256) {
         return currentExchangeRate;
     }
@@ -104,4 +129,146 @@ contract MockCToken is MinimalCTokenInterface {
     function balanceOf(address owner) external view override returns (uint256) {
         return cTokenBalances[owner];
     }
+
+    // --- Added Minimal Implementations for Abstract Functions ---
+
+    // These are needed to avoid the 'abstract contract' error.
+    // They don't need complex logic for the current tests.
+
+    function _acceptAdmin() external virtual override returns (uint256) {
+        return 0;
+    }
+
+    function _reduceReserves(uint256 /* reduceAmount */ ) external virtual override returns (uint256) {
+        return 0;
+    }
+
+    function _setComptroller(ComptrollerInterface /* newComptroller */ ) external virtual override returns (uint256) {
+        return 0;
+    }
+
+    function _setInterestRateModel(InterestRateModel /* newInterestRateModel */ )
+        external
+        virtual
+        override
+        returns (uint256)
+    {
+        return 0;
+    }
+
+    function _setPendingAdmin(address payable /* newPendingAdmin */ ) external virtual override returns (uint256) {
+        return 0;
+    }
+
+    function _setReserveFactor(uint256 /* newReserveFactorMantissa */ ) external virtual override returns (uint256) {
+        return 0;
+    }
+
+    function allowance(address, /* owner */ address /* spender */ ) external view virtual override returns (uint256) {
+        return type(uint256).max;
+    } // Assume max allowance for simplicity
+
+    function approve(address, /* spender */ uint256 /* amount */ ) external virtual override returns (bool) {
+        return true;
+    }
+
+    function borrowBalanceCurrent(address /* account */ ) external virtual override returns (uint256) {
+        return 0;
+    }
+
+    function borrowBalanceStored(address /* account */ ) external view virtual override returns (uint256) {
+        return 0;
+    }
+
+    function borrowRatePerBlock() external view virtual override returns (uint256) {
+        return 0;
+    }
+
+    function exchangeRateCurrent() external virtual override returns (uint256) {
+        this.accrueInterest();
+        return this.exchangeRateStored();
+    } // Match CErc20Delegator behavior
+
+    function getAccountSnapshot(address /* account */ )
+        external
+        view
+        virtual
+        override
+        returns (uint256, uint256, uint256, uint256)
+    {
+        return (0, 0, 0, 0);
+    }
+
+    function getCash() external view virtual override returns (uint256) {
+        return IERC20(underlying).balanceOf(address(this));
+    } // Return mock's balance
+
+    function seize(address, /* liquidator */ address, /* borrower */ uint256 /* seizeTokens */ )
+        external
+        virtual
+        override
+        returns (uint256)
+    {
+        return 0;
+    }
+
+    function supplyRatePerBlock() external view virtual override returns (uint256) {
+        return 0;
+    }
+
+    function totalBorrowsCurrent() external virtual override returns (uint256) {
+        this.accrueInterest();
+        return totalBorrows;
+    } // Match CErc20Delegator behavior
+
+    function transfer(address dst, uint256 amount) external virtual override returns (bool) {
+        cTokenBalances[msg.sender] -= amount;
+        cTokenBalances[dst] += amount;
+        emit Transfer(msg.sender, dst, amount);
+        return true;
+    }
+
+    function transferFrom(address src, address dst, uint256 amount) external virtual override returns (bool) {
+        cTokenBalances[src] -= amount;
+        cTokenBalances[dst] += amount;
+        emit Transfer(src, dst, amount);
+        return true;
+    } // Simplified: Ignores allowance for mock
+
+    // --- Added Minimal Implementations for CErc20Interface (implicitly required) ---
+    // These are defined in CErc20Interface which CTokenInterface inherits storage from,
+    // but the functions themselves are often implemented in the delegator/delegate pattern.
+    // We need them here because MockCToken directly inherits CTokenInterface.
+
+    function borrow(uint256 /* borrowAmount */ ) external virtual override(CErc20Interface) returns (uint256) {
+        return 0;
+    } // Added override specifier
+
+    function repayBorrow(uint256 /* repayAmount */ ) external virtual override(CErc20Interface) returns (uint256) {
+        return 0;
+    } // Added override specifier
+
+    function repayBorrowBehalf(address, /* borrower */ uint256 /* repayAmount */ )
+        external
+        virtual
+        override(CErc20Interface)
+        returns (uint256)
+    {
+        return 0;
+    } // Added override specifier
+
+    function liquidateBorrow(address, /* borrower */ uint256, /* repayAmount */ CTokenInterface /* cTokenCollateral */ )
+        external
+        virtual
+        override(CErc20Interface)
+        returns (uint256)
+    {
+        return 0;
+    } // Added override specifier
+
+    function sweepToken(EIP20NonStandardInterface /* token */ ) external virtual override(CErc20Interface) {} // Added override specifier
+
+    function _addReserves(uint256 /* addAmount */ ) external virtual override(CErc20Interface) returns (uint256) {
+        return 0;
+    } // Added override specifier
 }

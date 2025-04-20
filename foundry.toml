@@ -13,4 +13,7 @@ forge-std = "1.9.6"
 compound-protocol = { version = "2.8.1", git = "https://github.com/compound-finance/compound-protocol.git", rev = "a3214f67b73310d547e00fc578e8355911c9d376" }
 "@openzeppelin-contracts-upgradeable" = "5.3.0"
 
+[rpc_endpoints]
+mainnet = "${MAINNET_RPC_URL}"
+
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

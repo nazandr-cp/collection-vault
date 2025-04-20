@@ -9,17 +9,13 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
-import "forge-std/console.sol"; // <-- Add console import
 
 /**
  * @title ERC4626Vault
  * @notice ERC-4626 compliant vault delegating asset management to a LendingManager.
  * @dev Uses OpenZeppelin ERC4626 and AccessControl. Overrides _hookDeposit and _hookWithdraw for LendingManager integration.
  */
-contract ERC4626Vault is
-    ERC4626,
-    AccessControl // Inherit AccessControl for role management
-{
+contract ERC4626Vault is ERC4626, AccessControl {
     using SafeERC20 for IERC20;
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -85,8 +81,8 @@ contract ERC4626Vault is
      * @dev Overrides deposit. Calls _hookDeposit after base logic.
      */
     function deposit(uint256 assets, address recipient) public virtual override returns (uint256 shares) {
-        shares = super.deposit(assets, recipient); // Perform standard ERC4626 deposit
-        _hookDeposit(assets); // Delegate assets to Lending Manager
+        shares = super.deposit(assets, recipient);
+        _hookDeposit(assets);
     }
 
     /**
@@ -94,8 +90,8 @@ contract ERC4626Vault is
      * @dev Overrides mint. Calls _hookDeposit after base logic.
      */
     function mint(uint256 shares, address recipient) public virtual override returns (uint256 assets) {
-        assets = super.mint(shares, recipient); // Perform standard ERC4626 mint
-        _hookDeposit(assets); // Delegate deposited assets to Lending Manager
+        assets = super.mint(shares, recipient);
+        _hookDeposit(assets);
     }
 
     /**
@@ -111,8 +107,8 @@ contract ERC4626Vault is
     {
         // Removed check: `if (msg.sender != owner)` to allow standard ERC4626 allowance behavior.
         // The base ERC4626 implementation correctly handles allowances.
-        _hookWithdraw(assets); // Ensure vault has enough assets locally, potentially pulling from LM.
-        shares = super.withdraw(assets, recipient, owner); // Perform standard ERC4626 withdraw.
+        _hookWithdraw(assets);
+        shares = super.withdraw(assets, recipient, owner);
     }
 
     /**
@@ -148,10 +144,10 @@ contract ERC4626Vault is
 
         // 4. Burn the original 'shares' amount
         _burn(owner, shares);
-        emit Transfer(owner, address(0), shares); // Emit burn event
+        emit Transfer(owner, address(0), shares);
 
         // 5. Check for full redeem scenario & sweep LM dust
-        uint256 finalAssetsToTransfer = assets; // Start with the pre-calculated amount
+        uint256 finalAssetsToTransfer = assets;
         bool isFullRedeem = (shares == _totalSupply && shares != 0);
 
         if (isFullRedeem) {
@@ -161,7 +157,6 @@ contract ERC4626Vault is
                 // This calls cToken.redeem() directly, avoiding redeemUnderlying issues with tiny amounts.
                 // The redeemed assets are sent directly to this vault contract.
                 uint256 redeemedDust = lendingManager.redeemAllCTokens(address(this));
-                // Add dust to the amount transferred to the user
                 finalAssetsToTransfer += redeemedDust;
             }
         }
@@ -177,7 +172,6 @@ contract ERC4626Vault is
         // 7. Emit the standard Withdraw event with the final amounts
         emit Withdraw(msg.sender, recipient, owner, finalAssetsToTransfer, shares);
 
-        // Return the final amount transferred
         return finalAssetsToTransfer;
     }
 
@@ -205,14 +199,12 @@ contract ERC4626Vault is
             return; // No assets requested, nothing to do.
         }
 
-        // Check the vault's current balance of the underlying asset.
-        IERC20 assetToken = IERC20(asset()); // Cache asset token instance
+        IERC20 assetToken = IERC20(asset());
         uint256 directBalance = assetToken.balanceOf(address(this));
 
-        // If the vault doesn't have enough assets locally...
         if (directBalance < assets) {
-            uint256 neededFromLM = assets - directBalance; // Calculate the shortfall.
-            uint256 availableInLM = lendingManager.totalAssets(); // Check how much is available in the LM.
+            uint256 neededFromLM = assets - directBalance;
+            uint256 availableInLM = lendingManager.totalAssets();
 
             // If the required amount (neededFromLM) exceeds what's available in the LM,
             // we cannot fulfill the withdrawal. Let the subsequent check handle this.
@@ -224,17 +216,14 @@ contract ERC4626Vault is
                 neededFromLM = availableInLM; // Request max available, which might still be less than shortfall.
             }
 
-            // Only withdraw if needed
             if (neededFromLM > 0) {
-                // Request the Lending Manager to send the needed assets back to this vault contract.
                 bool success = lendingManager.withdrawFromLendingProtocol(neededFromLM);
                 if (!success) {
-                    revert LendingManagerWithdrawFailed(); // Revert if the LM fails to send the assets.
+                    revert LendingManagerWithdrawFailed();
                 }
             }
 
             // Sanity check: Verify the vault's balance is now sufficient after the LM withdrawal.
-            // Use cached assetToken instance and read balance again.
             uint256 balanceAfterLMWithdraw = assetToken.balanceOf(address(this));
             if (balanceAfterLMWithdraw < assets) {
                 // This should not happen if the LM functions correctly. Indicates a potential issue.

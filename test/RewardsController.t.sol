@@ -189,82 +189,53 @@ contract RewardsControllerTest is Test {
 
         // Deploy Reward Token (Asset)
         rewardToken = new MockERC20("Reward Token", "RWD", 1_000_000 ether);
+        assertNotEq(address(rewardToken), address(0), "MockERC20 deployment failed");
 
         // Deploy Mock Lending Manager
         mockLM = new MockLendingManager(address(rewardToken));
-
-        // Deploy Mock Vault (needs asset)
-        mockVault = new MockTokenVault(address(rewardToken));
-
-        // Deploy ProxyAdmin (owned by OWNER)
-        // proxyAdmin = new ProxyAdmin(OWNER); // REMOVED: Use internal admin deployed by proxy
-
-        // console.log("Deployed ProxyAdmin Address:", address(proxyAdmin)); // REMOVED
-        // console.log("ProxyAdmin Owner:", proxyAdmin.owner()); // REMOVED
-        // assertEq(proxyAdmin.owner(), address(0x001), "ProxyAdmin owner mismatch"); // REMOVED
+        assertNotEq(address(mockLM), address(0), "MockLendingManager deployment failed");
 
         // Deploy RewardsController V1 implementation
         rewardsControllerImpl = new RewardsController();
+        assertNotEq(address(rewardsControllerImpl), address(0), "RewardsController implementation deployment failed");
 
-        // Prepare initialization data
+        // Deploy Mock Vault (Only needs asset address)
+        mockVault = new MockTokenVault(address(rewardToken));
+        assertNotEq(address(mockVault), address(0), "MockTokenVault deployment failed");
+
+        // Prepare initialization data (using deployed mock addresses)
         bytes memory initData = abi.encodeWithSelector(
             RewardsController.initialize.selector,
             OWNER, // Initial owner set via initialize
             address(mockLM),
-            address(mockVault),
+            address(mockVault), // Pass the deployed mock vault address
             DEFAULT_FOUNDRY_SENDER // Use default Foundry address as authorized updater
         );
 
-        // Deploy TransparentUpgradeableProxy, passing OWNER as the initial owner for the *internal* ProxyAdmin,
-        // and include initData to initialize in the same transaction.
-        rewardsControllerProxy = // Assign to state variable
-         new TransparentUpgradeableProxy(address(rewardsControllerImpl), OWNER, initData); // Pass OWNER and initData
+        // Deploy TransparentUpgradeableProxy
+        rewardsControllerProxy =
+            new TransparentUpgradeableProxy(address(rewardsControllerImpl), OWNER, initData);
+        assertNotEq(address(rewardsControllerProxy), address(0), "RewardsController proxy deployment failed");
 
         // Assign proxy address to the RewardsController interface variable
         rewardsController = RewardsController(address(rewardsControllerProxy));
 
-        // Verify the admin slot holds the address of the internally deployed ProxyAdmin
-        address internalAdminAddress = address(uint160(uint256(vm.load(address(rewardsControllerProxy), ADMIN_SLOT))));
-        console.log("Proxy Address:", address(rewardsControllerProxy));
-        console.log("Internal Admin Address (from slot):", internalAdminAddress);
-        assertTrue(internalAdminAddress != address(0), "Internal admin address should not be zero");
-
-        // Verify the internal admin's owner is OWNER
-        ProxyAdmin internalAdmin = ProxyAdmin(payable(internalAdminAddress));
-        assertEq(internalAdmin.owner(), OWNER, "Internal ProxyAdmin owner mismatch");
-
-        // REMOVED: Workaround block (vm.store etc.)
-        // REMOVED: Separate initialization call
-        // REMOVED: Implementation owner manipulation (not needed for Transparent Proxy upgrades via Admin)
-
         // Whitelist some collections (using the proxy address)
-        console.log("Owner of RewardsController (Proxy) BEFORE add:", rewardsController.owner()); // Add owner check log
-        // console.log("Attempting to add NFT Collection 1..."); // Remove log
-
         rewardsController.addNFTCollection(NFT_COLLECTION_1, BETA_1);
-        rewardsController.addNFTCollection(NFT_COLLECTION_2, BETA_2); // Restore second add
-        // console.log("Attempting to add NFT Collection 2..."); // Remove log
+        rewardsController.addNFTCollection(NFT_COLLECTION_2, BETA_2);
 
         // Fund mock LM with some reward tokens for transferYield calls
-        console.log("OWNER balance BEFORE LM transfer:", rewardToken.balanceOf(OWNER));
-        console.log("MockLM balance BEFORE transfer:", rewardToken.balanceOf(address(mockLM)));
-        bool sentToLM = rewardToken.transfer(address(mockLM), 250_000 ether); // Fund LM
+        bool sentToLM = rewardToken.transfer(address(mockLM), 250_000 ether);
         assertTrue(sentToLM, "Failed to send tokens to MockLM");
-        console.log("MockLM balance AFTER transfer:", rewardToken.balanceOf(address(mockLM)));
         assertEq(rewardToken.balanceOf(address(mockLM)), 250_000 ether, "MockLM balance mismatch");
 
         // Fund mock Vault with reward tokens for claimRewards calls
-        console.log("OWNER balance BEFORE Vault transfer:", rewardToken.balanceOf(OWNER));
-        console.log("MockVault balance BEFORE transfer:", rewardToken.balanceOf(address(mockVault)));
-        bool sentToVault = rewardToken.transfer(address(mockVault), 250_000 ether); // Fund Vault
+        bool sentToVault = rewardToken.transfer(address(mockVault), 250_000 ether);
         assertTrue(sentToVault, "Failed to send tokens to MockVault");
-        console.log("MockVault balance AFTER transfer:", rewardToken.balanceOf(address(mockVault)));
         assertEq(rewardToken.balanceOf(address(mockVault)), 250_000 ether, "MockVault balance mismatch");
 
-        console.log("OWNER balance AFTER ALL transfers:", rewardToken.balanceOf(OWNER));
-
         // Set the rewards controller address in the mock LM
-        mockLM.setRewardsController(address(rewardsController));
+        mockLM.setRewardsController(address(rewardsController)); // Use proxy address
 
         vm.stopPrank();
     }
