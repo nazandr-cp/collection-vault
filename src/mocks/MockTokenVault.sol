@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {IERC4626VaultMinimal} from "../interfaces/IERC4626VaultMinimal.sol";
-import {IERC20} from "@openzeppelin-contracts-5.2.0/token/ERC20/IERC20.sol";
-import {SafeERC20} from "@openzeppelin-contracts-5.2.0/token/ERC20/utils/SafeERC20.sol";
-import {Ownable} from "@openzeppelin-contracts-5.2.0/access/Ownable.sol";
+import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
  * @title MockTokenVault
  * @notice A simplified mock implementation of IERC4626VaultMinimal for testing RewardsController.
  * @dev Implements minimal functions needed by RewardsController.
  */
-contract MockTokenVault is IERC4626VaultMinimal, Ownable {
+abstract contract MockTokenVault is IERC4626, Ownable {
     using SafeERC20 for IERC20;
 
     IERC20 public immutable underlyingAsset;

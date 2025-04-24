@@ -9,6 +9,11 @@ import {IRewardsController} from "../interfaces/IRewardsController.sol";
  * @dev Needs to implement all functions from IRewardsController.
  */
 contract MockRewardsController is IRewardsController {
+    // --- State Variables ---
+    mapping(address => uint256) public collectionBetas;
+    mapping(address => IRewardsController.RewardBasis) public collectionRewardBasis;
+    address[] public whitelistedCollections; // Declare the array
+
     // Track calls
     struct UpdateBalanceCall {
         address user;
@@ -73,11 +78,47 @@ contract MockRewardsController is IRewardsController {
     }
 
     // --- IRewardsController Implementation (Mocks) --- //
-    function addNFTCollection(address, /*collection*/ uint256 /*beta*/ ) external override {}
+    function addNFTCollection(address collection, uint256 beta, RewardBasis rewardBasis) external override { // Added override
+        collectionBetas[collection] = beta;
+        collectionRewardBasis[collection] = rewardBasis;
+        // Optionally add to whitelistedCollections array if needed by tests
+        bool found = false;
+        for(uint i = 0; i < whitelistedCollections.length; i++) {
+            if (whitelistedCollections[i] == collection) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            whitelistedCollections.push(collection);
+        }
+        emit NFTCollectionAdded(collection, beta, rewardBasis);
+    }
 
-    function removeNFTCollection(address /*collection*/ ) external override {}
+    function removeNFTCollection(address collection) external override {
+        // Simple mock: just emit event, maybe remove beta/basis
+        delete collectionBetas[collection];
+        delete collectionRewardBasis[collection];
+        // Removing from array is complex, skip for basic mock, but ensure it compiles
+        // Find and remove the element (inefficient for mock, but functional)
+        for (uint i = 0; i < whitelistedCollections.length; i++) {
+            if (whitelistedCollections[i] == collection) {
+                // Shift elements left
+                for (uint j = i; j < whitelistedCollections.length - 1; j++) {
+                    whitelistedCollections[j] = whitelistedCollections[j + 1];
+                }
+                whitelistedCollections.pop();
+                break;
+            }
+        }
+        emit NFTCollectionRemoved(collection);
+    }
 
-    function updateBeta(address, /*collection*/ uint256 /*newBeta*/ ) external override {}
+    function updateBeta(address collection, uint256 newBeta) external override {
+        uint256 oldBeta = collectionBetas[collection];
+        collectionBetas[collection] = newBeta;
+        emit BetaUpdated(collection, oldBeta, newBeta);
+    }
 
     function processBalanceUpdates(
         address signer,
@@ -146,10 +187,8 @@ contract MockRewardsController is IRewardsController {
     }
 
     function getWhitelistedCollections() external view override returns (address[] memory) {
-        address[] memory collections = new address[](2);
-        collections[0] = address(0xC1);
-        collections[1] = address(0xC2);
-        return collections;
+        // Return the actual state variable
+        return whitelistedCollections;
     }
 
     function getCollectionBeta(address /*collection*/ ) external view override returns (uint256 beta) {
@@ -166,5 +205,15 @@ contract MockRewardsController is IRewardsController {
         setAuthorizedUpdaterCalledCount++;
         lastSetAuthorizedUpdaterAddress = _newUpdater;
         emit MockSetAuthorizedUpdaterCalled(_newUpdater);
+    }
+
+    function getCollectionRewardBasis(address nftCollection) external view override returns (RewardBasis) {
+        return collectionRewardBasis[nftCollection];
+    }
+
+    // Added missing function from interface
+    function setCollectionRewardBasis(address collection, RewardBasis basis) external {
+         collectionRewardBasis[collection] = basis;
+         // Optionally emit an event if needed for testing
     }
 }

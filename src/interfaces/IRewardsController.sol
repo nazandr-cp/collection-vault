@@ -7,13 +7,19 @@ pragma solidity ^0.8.20;
  * @dev Supports signature-based and batch balance updates, and role-based updater authorization.
  */
 interface IRewardsController {
+    // --- Enums ---
+    enum RewardBasis {
+        DEPOSIT,
+        BORROW
+    } // Added enum
+
     /**
      * @notice Tracks user state for a collection (NFTs and deposits).
      */
     struct UserCollectionTracking {
         uint256 lastUpdateBlock;
         uint256 lastNFTBalance;
-        uint256 lastDepositBalance;
+        uint256 lastBalance; // Renamed from lastDepositBalance
         uint256 lastUserRewardIndex;
     }
 
@@ -23,14 +29,14 @@ interface IRewardsController {
      * @param collection NFT collection address.
      * @param blockNumber Block number of the update.
      * @param nftDelta Change in NFT balance.
-     * @param depositDelta Change in deposit balance.
+     * @param balanceDelta Change in deposit balance.
      */
     struct UserBalanceUpdateData {
         address user;
         address collection;
         uint256 blockNumber;
         int256 nftDelta;
-        int256 depositDelta;
+        int256 balanceDelta; // Renamed from depositDelta
     }
 
     /**
@@ -38,17 +44,17 @@ interface IRewardsController {
      * @param collection NFT collection address.
      * @param blockNumber Block number of the update.
      * @param nftDelta Change in NFT balance.
-     * @param depositDelta Change in deposit balance.
+     * @param balanceDelta Change in deposit balance.
      */
     struct BalanceUpdateData {
         address collection;
         uint256 blockNumber;
         int256 nftDelta;
-        int256 depositDelta;
+        int256 balanceDelta; // Renamed from depositDelta
     }
 
     // --- Events ---
-    event NFTCollectionAdded(address indexed collection, uint256 beta);
+    event NFTCollectionAdded(address indexed collection, uint256 beta, RewardBasis rewardBasis); // Added rewardBasis
     event NFTCollectionRemoved(address indexed collection);
     event BetaUpdated(address indexed collection, uint256 oldBeta, uint256 newBeta);
     event RewardsClaimedForCollection(address indexed user, address indexed collection, uint256 amount);
@@ -121,7 +127,7 @@ interface IRewardsController {
         address user,
         address[] calldata nftCollections,
         BalanceUpdateData[] calldata simulatedUpdates
-    ) external view returns (uint256 pendingReward);
+    ) external returns (uint256 pendingReward); // Removed 'view'
 
     /**
      * @notice Get stored tracking info for a user across multiple collections.
@@ -160,8 +166,9 @@ interface IRewardsController {
      * @notice Add a new NFT collection to the whitelist and set its beta coefficient.
      * @param collection NFT collection address.
      * @param beta Reward coefficient for this collection.
+     * @param rewardBasis Basis for reward calculation (DEPOSIT or BORROW).
      */
-    function addNFTCollection(address collection, uint256 beta) external;
+    function addNFTCollection(address collection, uint256 beta, RewardBasis rewardBasis) external; // Added rewardBasis
 
     /**
      * @notice Remove an NFT collection from the whitelist.
@@ -176,5 +183,10 @@ interface IRewardsController {
      */
     function updateBeta(address collection, uint256 newBeta) external;
 
-    // function setAuthorizedUpdater(address _newUpdater) external; // Removed - Use role management functions
+    /**
+     * @notice Get the reward basis for a specific collection.
+     * @param nftCollection NFT collection address.
+     * @return Reward basis for the collection.
+     */
+    function getCollectionRewardBasis(address nftCollection) external view returns (RewardBasis); // Added function
 }

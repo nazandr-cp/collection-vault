@@ -14,6 +14,7 @@ import {ILendingManager} from "./interfaces/ILendingManager.sol";
  * @title ERC4626Vault
  * @notice ERC-4626 compliant vault delegating asset management to a LendingManager.
  * @dev Uses OpenZeppelin ERC4626 and AccessControl. Overrides _hookDeposit and _hookWithdraw for LendingManager integration.
+ * Adds functionality to track deposits per collection ID.
  */
 contract ERC4626Vault is ERC4626, AccessControl {
     using SafeERC20 for IERC20;
@@ -23,6 +24,18 @@ contract ERC4626Vault is ERC4626, AccessControl {
     /// @notice Role for administrative actions within the vault.
 
     ILendingManager public immutable lendingManager;
+
+    /// @notice Mapping from collection address to total assets deposited for that collection.
+    mapping(address => uint256) public collectionTotalAssetsDeposited;
+
+    /// @notice Emitted when assets are deposited for a specific collection.
+    event CollectionDeposit(
+        address indexed collectionAddress,
+        address indexed caller,
+        address indexed receiver,
+        uint256 assets,
+        uint256 shares
+    );
 
     /// @notice Reverts if depositToLendingProtocol call to LendingManager fails.
     error LendingManagerDepositFailed();
@@ -86,12 +99,54 @@ contract ERC4626Vault is ERC4626, AccessControl {
     }
 
     /**
+     * @notice Deposit assets into the vault for a specific collection, minting shares for the receiver.
+     * @param assets Amount of underlying asset to deposit.
+     * @param receiver Address that will receive the shares.
+     * @param collectionAddress Address of the collection associated with this deposit.
+     * @return shares Amount of shares minted for the receiver.
+     */
+    function depositForCollection(uint256 assets, address receiver, address collectionAddress)
+        public
+        virtual
+        returns (uint256 shares)
+    {
+        // Call the standard deposit function first
+        shares = deposit(assets, receiver);
+
+        // Update collection tracking
+        collectionTotalAssetsDeposited[collectionAddress] += assets;
+        emit CollectionDeposit(collectionAddress, msg.sender, receiver, assets, shares);
+    }
+
+    /**
      * @notice Mint shares for the recipient by depositing required assets.
      * @dev Overrides mint. Calls _hookDeposit after base logic.
      */
     function mint(uint256 shares, address recipient) public virtual override returns (uint256 assets) {
         assets = super.mint(shares, recipient);
         _hookDeposit(assets);
+    }
+
+    /**
+     * @notice Mint shares for the recipient for a specific collection by depositing required assets.
+     * @param shares Amount of shares to mint.
+     * @param receiver Address that will receive the shares.
+     * @param collectionAddress Address of the collection associated with this deposit.
+     * @return assets Amount of underlying assets required for the mint.
+     */
+    function mintForCollection(uint256 shares, address receiver, address collectionAddress)
+        public
+        virtual
+        returns (uint256 assets)
+    {
+        // Call the standard mint function first
+        assets = mint(shares, receiver);
+
+        // Update collection tracking
+        collectionTotalAssetsDeposited[collectionAddress] += assets;
+        // Note: The standard mint function doesn't return shares, so we pass the input shares to the event.
+        // If shares were 0, assets would also be 0 due to the internal _mint logic.
+        emit CollectionDeposit(collectionAddress, msg.sender, receiver, assets, shares);
     }
 
     /**

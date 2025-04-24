@@ -167,7 +167,7 @@ contract ProjectMainUseCaseTest is Test {
         console.log("Collection Address:", MOCK_NFT_COLLECTION);
         console.log("Collection Beta:", NFT_BETA);
         vm.prank(admin); // Only the owner (admin) can add collections
-        rewardsController.addNFTCollection(MOCK_NFT_COLLECTION, NFT_BETA);
+        rewardsController.addNFTCollection(MOCK_NFT_COLLECTION, NFT_BETA, IRewardsController.RewardBasis.DEPOSIT); // Corrected RewardBasis
         // Verify the collection was added correctly
         assertEq(
             rewardsController.getCollectionBeta(MOCK_NFT_COLLECTION), NFT_BETA, "NFT Beta mismatch after whitelisting"
@@ -193,7 +193,7 @@ contract ProjectMainUseCaseTest is Test {
 
     // EIP-712 type hash for the BalanceUpdateData struct, matching the definition in RewardsController.
     bytes32 internal constant BALANCE_UPDATE_DATA_TYPEHASH =
-        keccak256("BalanceUpdateData(address collection,uint256 blockNumber,int256 nftDelta,int256 depositDelta)");
+        keccak256("BalanceUpdateData(address collection,uint256 blockNumber,int256 nftDelta,int256 balanceDelta)");
 
     // EIP-712 type hash for the UserBalanceUpdates struct, matching the definition in RewardsController.
     bytes32 internal constant USER_BALANCE_UPDATES_TYPEHASH =
@@ -220,7 +220,7 @@ contract ProjectMainUseCaseTest is Test {
                     updates[i].collection,
                     updates[i].blockNumber,
                     updates[i].nftDelta,
-                    updates[i].depositDelta
+                    updates[i].balanceDelta
                 )
             );
             // console.log("  - Hashed update %s: %s", i, encodedUpdates[i]);
@@ -352,13 +352,13 @@ contract ProjectMainUseCaseTest is Test {
             collection: MOCK_NFT_COLLECTION, // The relevant NFT collection
             blockNumber: depositBlock, // Block number associated with the event (the deposit)
             nftDelta: 2, // Change in user's NFT balance for this collection (+2 implies they now hold 2)
-            depositDelta: int256(daiToDeposit) // Change in user's deposit balance (+depositAmount)
+            balanceDelta: int256(daiToDeposit) // Corrected field name
         });
         console.log("Prepared Balance Update Data [0]:");
         console.log("  Collection:", updates[0].collection);
         console.log("  Block Number:", updates[0].blockNumber);
         console.log("  NFT Delta:", updates[0].nftDelta);
-        console.log("  Deposit Delta:", updates[0].depositDelta);
+        console.log("  Balance Delta:", updates[0].balanceDelta);
 
         // 3b. Generate the EIP-712 Signature for the update payload.
         console.log("Generating EIP-712 signature for the balance update...");
