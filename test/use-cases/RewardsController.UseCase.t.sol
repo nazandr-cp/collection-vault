@@ -865,10 +865,12 @@ contract RewardsControllerUseCaseTest is Test {
 
         // --- Verify State Reset ---
         (uint256 lastIdx, uint256 accrued,,,) = rewardsController.userNFTData(user, collection);
-        assertEq(accrued, 0, "User accrued should be 0 after claim");
+        // Calculate expected accrued (deficit) = previewed reward - actual amount transferred
+        uint256 expectedAccrued = previewedReward - actualClaimedAmount;
+        assertEq(accrued, expectedAccrued, "User accrued should equal deficit after capped claim");
         assertTrue(lastIdx >= globalIndexAtClaim, "User last index should be updated to at least the claim index"); // Use >= for safety
         console.logString("  State Verification:");
-        console.log("    Accrued reset to:", accrued); // Log 0 directly
+        console.log("    Accrued set to (deficit):", vm.toString(accrued / 1 gwei)); // Log deficit
         console.log("    Last Index updated to (units):", vm.toString(lastIdx / 1 gwei));
     }
 

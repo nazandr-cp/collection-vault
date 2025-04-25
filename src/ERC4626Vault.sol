@@ -160,8 +160,6 @@ contract ERC4626Vault is ERC4626, AccessControl {
         override
         returns (uint256 shares)
     {
-        // Removed check: `if (msg.sender != owner)` to allow standard ERC4626 allowance behavior.
-        // The base ERC4626 implementation correctly handles allowances.
         _hookWithdraw(assets);
         shares = super.withdraw(assets, recipient, owner);
     }
@@ -169,7 +167,6 @@ contract ERC4626Vault is ERC4626, AccessControl {
     /**
      * @notice Redeem shares from the owner, transferring assets to the recipient.
      * @dev Overrides redeem. Calls _hookWithdraw before base logic.
-     * Removed owner check to allow standard ERC4626 allowance mechanism.
      */
     function redeem(uint256 shares, address recipient, address owner)
         public
@@ -261,37 +258,27 @@ contract ERC4626Vault is ERC4626, AccessControl {
             uint256 neededFromLM = assets - directBalance;
             uint256 availableInLM = lendingManager.totalAssets();
 
-            // If the required amount (neededFromLM) exceeds what's available in the LM,
-            // we cannot fulfill the withdrawal. Let the subsequent check handle this.
-            // Note: This check might be redundant if the LM already reverts on insufficient balance,
-            // but it's safer to include. Consider if a specific revert here is better UX.
-            if (neededFromLM > availableInLM) {
-                // Optionally revert here: revert Vault_InsufficientBalanceInLM(neededFromLM, availableInLM);
-                // For now, let the check after LM withdrawal handle the failure.
-                neededFromLM = availableInLM; // Request max available, which might still be less than shortfall.
-            }
-
-            if (neededFromLM > 0) {
-                bool success = lendingManager.withdrawFromLendingProtocol(neededFromLM);
-                if (!success) {
-                    revert LendingManagerWithdrawFailed();
+            // Check if the LM has enough funds to cover the shortfall.
+            if (neededFromLM <= availableInLM) {
+                // Only proceed if LM has enough to cover the shortfall.
+                if (neededFromLM > 0) {
+                    bool success = lendingManager.withdrawFromLendingProtocol(neededFromLM);
+                    if (!success) {
+                        // If LM fails even when it should have funds, revert here.
+                        revert LendingManagerWithdrawFailed();
+                    }
+                    // Sanity check after successful LM withdraw: Ensure vault now has enough.
+                    // This check should ideally not fail if LM transferred correctly.
+                    uint256 balanceAfterLMWithdraw = assetToken.balanceOf(address(this));
+                    if (balanceAfterLMWithdraw < assets) {
+                        // This indicates an internal logic error or unexpected LM behavior.
+                        revert Vault_InsufficientBalancePostLMWithdraw();
+                    }
                 }
             }
-
-            // Sanity check: Verify the vault's balance is now sufficient after the LM withdrawal.
-            uint256 balanceAfterLMWithdraw = assetToken.balanceOf(address(this));
-            if (balanceAfterLMWithdraw < assets) {
-                // This should not happen if the LM functions correctly. Indicates a potential issue.
-                revert Vault_InsufficientBalancePostLMWithdraw();
-            }
+            // If neededFromLM > availableInLM, we do nothing here.
+            // The subsequent super.withdraw() call will fail the previewWithdraw check
+            // because totalAssets() hasn't increased enough, resulting in ERC4626ExceededMaxWithdraw.
         }
     }
-
-    // --- Administrative Functions ---
-    // Access-controlled functions (e.g., onlyRole(ADMIN_ROLE)) can be added here if needed.
-    // Example:
-    // function pause() external onlyRole(ADMIN_ROLE) { /* ... */ }
-
-    // Note: lendingManager is immutable; cannot be changed post-deployment.
-    // Role management (grant/revoke ADMIN_ROLE) is handled by DEFAULT_ADMIN_ROLE via AccessControl.
 }

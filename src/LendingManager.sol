@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol"; // Import for decimals()
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -30,6 +31,8 @@ contract LendingManager is ILendingManager, AccessControl {
     /// @notice Role identifier for administrative tasks within this LendingManager.
 
     IERC20 private immutable _asset;
+    uint8 private immutable underlyingDecimals;
+    uint8 private immutable cTokenDecimals;
 
     /**
      * @notice Get the underlying ERC20 asset managed by the lending manager.
@@ -110,6 +113,12 @@ contract LendingManager is ILendingManager, AccessControl {
         // Set immutable state variables.
         _asset = IERC20(_assetAddress);
         _cToken = CErc20Interface(_cTokenAddress);
+
+        // Fetch and store decimals (assuming they implement IERC20Metadata)
+        underlyingDecimals = IERC20Metadata(_assetAddress).decimals();
+        cTokenDecimals = IERC20Metadata(_cTokenAddress).decimals();
+        // console.log("LM Constructor: Underlying Decimals =", underlyingDecimals); // Removed log
+        // console.log("LM Constructor: cToken Decimals =", cTokenDecimals); // Removed log
 
         // Grant initial roles.
         _grantRole(DEFAULT_ADMIN_ROLE, initialAdmin);
@@ -219,7 +228,21 @@ contract LendingManager is ILendingManager, AccessControl {
         }
 
         // Formula: assets = (cTokenBalance * exchangeRate) / 1e18
-        uint256 assets = (cTokenBalance * exchangeRate) / 1e18;
+        // Based on observed mainnet cToken behavior, exchangeRateStored() is scaled by 1e18.
+        // The formula is: underlying = cTokens * exchangeRateStored / 1e18
+        uint256 scaleFactor = 1e18;
+
+        // Formula: underlying = cTokens * scaledExchangeRate / scaleFactor
+        uint256 assets = (cTokenBalance * exchangeRate) / scaleFactor;
+
+        // console.log("LM totalAssets:"); // Removed logs
+        // console.log("  cTokenBalance:", cTokenBalance);
+        // console.log("  exchangeRate (raw):", exchangeRate);
+        // console.log("  underlyingDecimals:", underlyingDecimals);
+        // console.log("  cTokenDecimals:", cTokenDecimals);
+        // console.log("  calculated scaleFactor:", scaleFactor);
+        // console.log("  calculated assets:", assets);
+
         return assets;
     }
 
@@ -260,14 +283,19 @@ contract LendingManager is ILendingManager, AccessControl {
             (availableBalance > totalPrincipalDeposited) ? availableBalance - totalPrincipalDeposited : 0;
 
         if (amount > availableYield) {
-            console.log("LM.transferYield Warning: Requested amount exceeds available yield.");
-            console.log(" - Requested:", amount);
-            console.log(" - Available Yield:", availableYield);
             amountTransferred = availableYield;
-            console.log(" - Capping transfer amount to:", amountTransferred);
         } else {
             amountTransferred = amount;
         }
+
+        if (amountTransferred == 0) {
+            return 0;
+        }
+        // console.log("LM.transferYield (Before Redeem):"); // Removed log
+        // console.log("  Requested Amount:", amount); // Removed log
+        // console.log("  Available Balance (totalAssets):", availableBalance); // Removed log
+        // console.log("  Total Principal Deposited:", totalPrincipalDeposited); // Removed log
+        // console.log("  Calculated Available Yield:", availableYield); // Removed log
 
         if (amountTransferred == 0) {
             console.log("LM.transferYield: Final amount to transfer (underlying) is 0, skipping redeem/transfer.");
@@ -293,22 +321,28 @@ contract LendingManager is ILendingManager, AccessControl {
         }
         // --- END ADDED CHECK --- //
 
-        console.log("LM.transferYield: Proceeding with transfer amount:", amountTransferred);
-        console.log(" - Calculated cTokens to redeem:", cTokensToRedeem);
+        // console.log("LM.transferYield: Proceeding with transfer amount:", amountTransferred); // Redundant log
 
         // --- CHANGE: Use redeem() instead of redeemUnderlying() --- //
+        uint256 balanceBeforeRedeem = _asset.balanceOf(address(this)); // Get balance before
+
         uint256 redeemResult = _cToken.redeem(cTokensToRedeem);
         if (redeemResult != 0) {
-            console.log("LM.transferYield Error: cToken.redeem failed with code:", redeemResult);
-            console.log(" - cTokens attempted:", cTokensToRedeem);
+            // console.log("LM.transferYield Error: cToken.redeem failed with code:", redeemResult); // Log removed
             revert RedeemFailed();
         }
-        // --- END CHANGE --- //
 
-        _asset.safeTransfer(recipient, amountTransferred);
+        uint256 balanceAfterRedeem = _asset.balanceOf(address(this)); // Get balance after
 
-        emit YieldTransferred(recipient, amountTransferred);
-        return amountTransferred;
+        // Use the actual balance received after redemption for the transfer
+        uint256 actualAmountTransferred = balanceAfterRedeem - balanceBeforeRedeem; // Calculate actual received amount
+
+        if (actualAmountTransferred > 0) {
+            _asset.safeTransfer(recipient, actualAmountTransferred);
+        }
+
+        emit YieldTransferred(recipient, actualAmountTransferred); // Emit the actual amount transferred
+        return actualAmountTransferred; // Return the actual amount transferred
     }
 
     /**
@@ -435,4 +469,15 @@ contract LendingManager is ILendingManager, AccessControl {
         emit WithdrawFromProtocol(recipient, amountRedeemed);
         return amountRedeemed;
     }
+
+    // --- View Functions ---
+    // Note: The public state variable `totalPrincipalDeposited` automatically provides a getter function.
+    // The explicit function below was removed to resolve the compiler error (Identifier already declared).
+    // /**
+    //  * @notice Returns the total principal amount deposited by the Vault into the lending protocol.
+    //  * @return The total principal deposited in the underlying asset's units.
+    //  */
+    // function totalPrincipalDeposited() external view override returns (uint256) {
+    //     return totalPrincipalDeposited;
+    // }
 }

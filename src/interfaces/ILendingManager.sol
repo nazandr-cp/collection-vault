@@ -61,4 +61,10 @@ interface ILendingManager {
      * @return amountRedeemed The amount of underlying asset received from redeeming all cTokens.
      */
     function redeemAllCTokens(address recipient) external returns (uint256 amountRedeemed);
+
+    /**
+     * @notice Returns the total principal amount deposited by the Vault into the lending protocol.
+     * @return The total principal deposited in the underlying asset's units.
+     */
+    function totalPrincipalDeposited() external view returns (uint256);
 }

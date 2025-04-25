@@ -26,7 +26,8 @@ contract MockLendingManager is ILendingManager {
      * @notice Get the mock cToken address.
      * @return Mock cToken address.
      */
-    function cToken() external view override returns (address) { // <-- Implement interface function
+    function cToken() external view override returns (address) {
+        // <-- Implement interface function
         return mockCTokenAddress;
     }
 
@@ -59,7 +60,8 @@ contract MockLendingManager is ILendingManager {
         rewardsControllerAddress = _controller;
     }
 
-    function setMockCTokenAddress(address _cToken) external { // <-- Add setter for mock cToken
+    function setMockCTokenAddress(address _cToken) external {
+        // <-- Add setter for mock cToken
         mockCTokenAddress = _cToken;
     }
 
@@ -125,6 +127,12 @@ contract MockLendingManager is ILendingManager {
         // Return mock value if set, otherwise fallback (e.g., balance)
         return mockTotalAssets > 0 ? mockTotalAssets : _asset.balanceOf(address(this));
     }
+
+    // --- Added to satisfy ILendingManager interface ---
+    function totalPrincipalDeposited() external view override returns (uint256) {
+        return 0; // Simple mock implementation, returns 0
+    }
+    // --- End Added ---
 
     function getBaseRewardPerBlock() external view override returns (uint256) {
         // Return mock value

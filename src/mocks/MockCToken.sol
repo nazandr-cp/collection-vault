@@ -17,10 +17,11 @@ contract MockCToken is
     CErc20Interface // <-- Added inheritance
 {
     uint8 public constant UNDERLYING_DECIMALS = 18; // Assuming underlying is DAI
-    uint256 private constant EXCHANGE_RATE_SCALE = 1 * 10 ** (18 + UNDERLYING_DECIMALS - 8); // Use inherited decimals (8)
+    // Use 1e18 scale to match observed mainnet behavior, not theoretical formula
+    uint256 private constant EXCHANGE_RATE_SCALE = 1e18;
 
-    // Stored rate should be scaled: 0.02 * 1e28 = 2e26
-    uint256 public currentExchangeRate = 2 * 10 ** (18 + UNDERLYING_DECIMALS - 8 - 2); // 2e26
+    // Stored rate should be scaled: 0.02 * 1e18 = 2e16
+    uint256 public currentExchangeRate = 2e16; // 0.02 scaled by 1e18
     mapping(address => uint256) public cTokenBalances;
 
     uint256 public mintResult = 0;

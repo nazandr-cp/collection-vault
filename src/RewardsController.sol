@@ -12,11 +12,12 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import "forge-std/console.sol";
+// import "forge-std/console.sol"; // Removed duplicate
 import {CErc20Interface, CTokenInterface} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol";
 
 import {IRewardsController} from "./interfaces/IRewardsController.sol";
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
+import "forge-std/console.sol";
 
 /**
  * @title RewardsController (Upgradeable)
@@ -714,14 +715,22 @@ contract RewardsController is
 
         // Check if LM transferred less than expected (due to capping)
         uint256 rewardDeficit = 0;
+
         if (amountActuallyTransferred < totalReward) {
             emit YieldTransferCapped(user, totalReward, amountActuallyTransferred); // Emit event if capped
             rewardDeficit = totalReward - amountActuallyTransferred;
-            // Use the actual amount transferred for the user transfer
-            // totalReward = amountActuallyTransferred; // No longer needed, use amountActuallyTransferred directly
+            console.log("RC.claim: Yield capped. Deficit=%s", rewardDeficit); // <-- Change back to console.log
+                // Use the actual amount transferred for the user transfer
+                // totalReward = amountActuallyTransferred; // No longer needed, use amountActuallyTransferred directly
         }
 
         // 5. Update user state
+        console.log( // <-- Change back to console.log
+            "RC.claim: Updating state. accruedReward=%s, lastIdx=%s, lastBlock=%s",
+            rewardDeficit,
+            indexAtClaim,
+            block.number
+        );
         UserRewardState storage info = userRewardState[user][nftCollection];
         // Store the unpaid amount (deficit). It will be added to future calculations.
         info.accruedReward = rewardDeficit;
@@ -757,56 +766,142 @@ contract RewardsController is
             pendingRewardsPerCollection[i] = rewardForCollection; // Store reward by index
             totalRewardsToSend += rewardForCollection;
         }
+        console.logString("RC.claimAll: User=");
+        console.logAddress(msg.sender);
+        console.logString(" Calculated totalRewardsToSend=");
+        console.logUint(totalRewardsToSend); // Log total calculated
 
         if (totalRewardsToSend == 0) revert NoRewardsToClaim();
 
         // Now update the global index state *before* transfers and user state update
         _updateGlobalRewardIndex();
         uint256 indexAtClaim = globalRewardIndex;
+        console.logString("RC.claimAll: User=");
+        console.logAddress(msg.sender);
+        console.logString(" indexAtClaim=");
+        console.logUint(indexAtClaim); // Log index
 
-        uint256 amountActuallyTransferred = lendingManager.transferYield(totalRewardsToSend, address(this));
-        uint256 totalAmountToPayUser;
+        // --- Start: Cap reward request based on LM available yield ---
+        uint256 lmTotalAssets = lendingManager.totalAssets();
+        uint256 lmPrincipal = lendingManager.totalPrincipalDeposited();
+        uint256 maxAvailableYield = (lmTotalAssets > lmPrincipal) ? lmTotalAssets - lmPrincipal : 0;
 
-        if (amountActuallyTransferred < totalRewardsToSend) {
-            emit YieldTransferCapped(user, totalRewardsToSend, amountActuallyTransferred); // Emit event if capped
-            // Calculate the ratio of paid amount vs calculated amount if total is not zero
-            uint256 ratio =
-                totalRewardsToSend > 0 ? (amountActuallyTransferred * PRECISION_FACTOR) / totalRewardsToSend : 0;
+        // Cap the total rewards requested from LM
+        uint256 amountToRequest = Math.min(totalRewardsToSend, maxAvailableYield);
+        uint256 knownDeficitBeforeTransfer = totalRewardsToSend - amountToRequest; // Deficit due to capping before LM call
+        console.logString("RC.claimAll: User=");
+        console.logAddress(msg.sender);
+        console.logString(" maxAvailableYield=");
+        console.logUint(maxAvailableYield);
+        console.logString(" amountToRequest=");
+        console.logUint(amountToRequest);
+        console.logString(" knownDeficitBeforeTransfer=");
+        console.logUint(knownDeficitBeforeTransfer); // Log capping details
+        // --- End: Cap reward request ---
 
-            // Loop through collections again to update state proportionally
+        uint256 amountActuallyTransferred = 0;
+        if (amountToRequest > 0) {
+            // Request the potentially capped amount from LM
+            console.logString("RC.claimAll: User=");
+            console.logAddress(msg.sender);
+            console.logString(" Calling LM.transferYield with amount=");
+            console.logUint(amountToRequest); // Log LM call amount
+            amountActuallyTransferred = lendingManager.transferYield(amountToRequest, address(this));
+            console.logString("RC.claimAll: User=");
+            console.logAddress(msg.sender);
+            console.logString(" LM.transferYield returned amount=");
+            console.logUint(amountActuallyTransferred); // Log LM return amount
+        }
+
+        // Check for unexpected shortfall during LM transfer (amount received < amount requested)
+        uint256 shortfallDuringTransfer = 0;
+        if (amountActuallyTransferred < amountToRequest) {
+            // This indicates an issue within LM.redeem or unexpected state change after our check
+            shortfallDuringTransfer = amountToRequest - amountActuallyTransferred;
+            // Use the YieldTransferCapped event to log this unexpected shortfall
+            emit YieldTransferCapped(user, amountToRequest, amountActuallyTransferred);
+        }
+
+        uint256 totalAmountToPayUser = amountActuallyTransferred; // User receives what LM actually sent
+        uint256 totalDeficit = knownDeficitBeforeTransfer + shortfallDuringTransfer; // Total unpaid reward
+        console.logString("RC.claimAll: User=");
+        console.logAddress(msg.sender);
+        console.logString(" shortfallDuringTransfer=");
+        console.logUint(shortfallDuringTransfer);
+        console.logString(" totalDeficit=");
+        console.logUint(totalDeficit);
+        console.logString(" totalAmountToPayUser=");
+        console.logUint(totalAmountToPayUser); // Log deficit details
+
+        // Distribute the deficit proportionally back to the collections' accruedReward state
+        if (totalDeficit > 0 && totalRewardsToSend > 0) {
+            console.logString("RC.claimAll: User=");
+            console.logAddress(msg.sender);
+            console.logString(" Distributing deficit..."); // Log deficit path
+            // Calculate the ratio of the total deficit to the original total calculated reward
+            uint256 deficitRatio = (totalDeficit * PRECISION_FACTOR) / totalRewardsToSend;
+            console.logString("RC.claimAll: User=");
+            console.logAddress(msg.sender);
+            console.logString(" deficitRatio (1e18)=");
+            console.logUint(deficitRatio); // Log deficit ratio
+
             for (uint256 i = 0; i < collectionsToClaim.length; i++) {
                 address collection = collectionsToClaim[i];
-                // Get the originally calculated reward for this specific collection using the index
                 uint256 rewardForThisCollection = pendingRewardsPerCollection[i];
-                // Calculate how much was effectively paid for this collection based on the ratio
-                uint256 amountPaidForThisCollection = (rewardForThisCollection * ratio) / PRECISION_FACTOR;
-                // Calculate the unpaid portion for this collection
-                uint256 deficitForThisCollection = rewardForThisCollection - amountPaidForThisCollection;
+                // Calculate the deficit portion for this collection
+                uint256 deficitForThisCollection = (rewardForThisCollection * deficitRatio) / PRECISION_FACTOR;
+                console.logString("RC.claimAll: User=");
+                console.logAddress(msg.sender);
+                console.logString(" Collection=");
+                console.logAddress(collection);
+                console.logString(" rewardForThisCollection=");
+                console.logUint(rewardForThisCollection);
+                console.logString(" deficitForThisCollection=");
+                console.logUint(deficitForThisCollection); // Log per-collection deficit
 
                 UserRewardState storage info = userRewardState[user][collection];
                 // Store the unpaid portion as the new accrued reward
                 info.accruedReward = deficitForThisCollection;
-                // Update the index, marking rewards processed up to this point
+                // Update the index and block number, marking rewards processed up to this point
                 info.lastRewardIndex = indexAtClaim;
+                info.lastUpdateBlock = block.number; // Also update block number on claim
+                console.logString("RC.claimAll: User=");
+                console.logAddress(msg.sender);
+                console.logString(" Collection=");
+                console.logAddress(collection);
+                console.logString(" FINAL info.accruedReward=");
+                console.logUint(info.accruedReward); // Log final state in deficit path
             }
-            totalAmountToPayUser = amountActuallyTransferred; // User receives the capped amount
         } else {
-            // Not capped, reset accrued reward for all claimed collections
+            console.logString("RC.claimAll: User=");
+            console.logAddress(msg.sender);
+            console.logString(" No deficit or zero total rewards. Resetting accruedReward."); // Log no-deficit path
+            // No deficit, reset accrued reward for all claimed collections
             for (uint256 i = 0; i < collectionsToClaim.length; i++) {
                 address collection = collectionsToClaim[i];
                 UserRewardState storage info = userRewardState[user][collection];
                 info.accruedReward = 0; // Fully claimed
                 info.lastRewardIndex = indexAtClaim;
+                info.lastUpdateBlock = block.number; // Also update block number on claim
+                console.logString("RC.claimAll: User=");
+                console.logAddress(msg.sender);
+                console.logString(" Collection=");
+                console.logAddress(collection);
+                console.logString(" FINAL info.accruedReward=");
+                console.logUint(info.accruedReward); // Log final state in no-deficit path
             }
-            totalAmountToPayUser = totalRewardsToSend; // User receives the full calculated amount
         }
 
-        // Transfer the total amount (either capped or full) to the user
+        // Transfer the total amount actually received from LM to the user
         if (totalAmountToPayUser > 0) {
             rewardToken.safeTransfer(user, totalAmountToPayUser);
             // Emit one event for the aggregate claim
-            emit RewardsClaimedForAll(user, totalAmountToPayUser); // Corrected event name and parameters
+            emit RewardsClaimedForAll(user, totalAmountToPayUser);
+        } else if (totalRewardsToSend > 0) {
+            // If rewards were calculated but nothing was paid (due to capping or LM issue), still emit event with 0
+            emit RewardsClaimedForAll(user, 0);
         }
+        // If totalRewardsToSend was 0 initially, NoRewardsToClaim would have reverted earlier.
     }
 
     // --- Reward Calculation & Claiming --- //
