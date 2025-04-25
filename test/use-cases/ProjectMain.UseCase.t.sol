@@ -2,6 +2,7 @@
 pragma solidity ^0.8.13;
 
 import {Test, console} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 // Use OpenZeppelin's IERC20 interface for compatibility with the Vault's asset type
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 // Import Compound V2 interfaces for interacting with cTokens and the Comptroller
@@ -296,14 +297,43 @@ contract ProjectMainUseCaseTest is Test {
         console.log("Vault DAI allowance confirmed:", allowance);
 
         // 2. User deposits DAI into the Vault.
-        // The Vault should transfer the DAI, interact with LendingManager, which deposits into Compound,
-        // and mint Vault shares back to the user.
-        console.log("User calling vault.deposit(%s DAI, to user %s)...", daiToDeposit, user);
-        uint256 sharesMinted = vault.deposit(daiToDeposit, user);
-        uint256 depositBlock = block.number; // Record the block number when the deposit occurred.
-        console.log("vault.deposit() executed at block:", depositBlock);
+        console.log(
+            "User calling vault.depositForCollection(%s DAI, to user %s, for collection %s)...",
+            daiToDeposit,
+            user,
+            MOCK_NFT_COLLECTION
+        );
+        vm.recordLogs(); // Start recording logs
+        uint256 sharesMinted = vault.depositForCollection(daiToDeposit, user, MOCK_NFT_COLLECTION);
+        Vm.Log[] memory depositEntries = vm.getRecordedLogs(); // Get logs
+        uint256 depositBlock = block.number;
+        console.log("vault.depositForCollection() executed at block:", depositBlock);
         assertTrue(sharesMinted > 0, "Deposit should mint a non-zero amount of vault shares");
-        console.log("Vault Shares Minted to User:", sharesMinted);
+
+        // --- Manual Event Check (CollectionDeposit) ---
+        bytes32 expectedDepositTopic0 = keccak256("CollectionDeposit(address,address,address,uint256,uint256)");
+        bytes32 expectedDepositTopic1 = bytes32(uint256(uint160(MOCK_NFT_COLLECTION)));
+        bytes32 expectedDepositTopic2 = bytes32(uint256(uint160(user))); // caller
+        bytes32 expectedDepositTopic3 = bytes32(uint256(uint160(user))); // receiver
+        bool depositEventFound = false;
+        for (uint256 i = 0; i < depositEntries.length; i++) {
+            if (
+                depositEntries[i].topics.length == 4 // 1 signature + 3 indexed
+                    && depositEntries[i].topics[0] == expectedDepositTopic0
+                    && depositEntries[i].topics[1] == expectedDepositTopic1
+                    && depositEntries[i].topics[2] == expectedDepositTopic2
+                    && depositEntries[i].topics[3] == expectedDepositTopic3
+            ) {
+                (uint256 emittedAssets, uint256 emittedShares) = abi.decode(depositEntries[i].data, (uint256, uint256));
+                assertEq(emittedAssets, daiToDeposit, "Deposit Event assets mismatch");
+                assertEq(emittedShares, sharesMinted, "Deposit Event shares mismatch");
+                depositEventFound = true;
+                break;
+            }
+        }
+        assertTrue(depositEventFound, "CollectionDeposit event not found or topics mismatch after deposit");
+        // --- End Manual Event Check ---
+        console.log("Vault Shares Minted to User: ", sharesMinted);
 
         // --- Post-Deposit Assertions ---
         console.log("Verifying state changes after deposit...");
@@ -336,7 +366,7 @@ contract ProjectMainUseCaseTest is Test {
         assertEq(dai.balanceOf(address(vault)), 0, "Vault should not hold raw DAI after deposit");
         console.log("Post-deposit state verified successfully.");
 
-        vm.stopPrank(); // Stop simulating calls from the user address
+        vm.stopPrank(); // Stop user prank for deposit
 
         // =======================================================================
         // === Step 3: Process Signed Balance Update (Simulate NFT Holding) ===
@@ -415,6 +445,17 @@ contract ProjectMainUseCaseTest is Test {
         assertEq(accrueInterestResult, 0, "cDai.accrueInterest() failed");
         console.log("Compound interest accrued successfully (returned 0).");
 
+        // --- ADDED: Update Rewards Controller Global Index ---
+        console.log("Updating RewardsController global index...");
+        // Call requires admin role if called directly, or can be triggered by claim
+        // Let's assume claim will trigger it, or call via admin if needed before preview
+        // For simplicity in this flow, let claim handle the update trigger.
+        // If preview *before* claim needs accurate rate, call via admin:
+        // vm.prank(admin);
+        // rewardsController.updateGlobalRewardIndex();
+        // vm.stopPrank();
+        // --- END ADDED ---
+
         // Verification: Check that the Vault's total underlying assets have increased due to the accrued interest.
         uint256 assetsAfterInterest = vault.totalAssets();
         console.log("Vault Total Assets After Interest Accrual:", assetsAfterInterest);
@@ -433,9 +474,12 @@ contract ProjectMainUseCaseTest is Test {
         vm.startPrank(user); // Simulate transaction from the user
         console.log("User calling rewardsController.claimRewardsForAll()...");
         // This function calculates and transfers rewards for all collections the user has interacted with.
-        rewardsController.claimRewardsForAll();
+        // User claims all rewards
+        // vm.startPrank(user); // REMOVED redundant prank
+        // Pass an empty array for simulatedUpdates
+        IRewardsController.BalanceUpdateData[] memory emptyUpdates;
+        rewardsController.claimRewardsForAll(emptyUpdates);
         vm.stopPrank();
-        console.log("rewardsController.claimRewardsForAll() executed.");
 
         // Verification: Check the user's DAI balance increased.
         uint256 daiAfterClaim = dai.balanceOf(user);
@@ -479,13 +523,55 @@ contract ProjectMainUseCaseTest is Test {
         console.log("LM Raw DAI Balance:", dai.balanceOf(address(lendingManager))); // Should be 0 or dust
 
         // 6c. Execute the redeem operation.
-        // User redeems `sharesToRedeem`, requesting the underlying DAI be sent back to `user`.
-        console.log(
-            "--- Executing vault.redeem(%s shares, to receiver %s, from owner %s) ---", sharesToRedeem, user, user
+        console.logString(
+            string(
+                abi.encodePacked(
+                    "--- Executing vault.redeemForCollection(",
+                    vm.toString(sharesToRedeem), // Convert uint256 to string
+                    " shares, to receiver ",
+                    vm.toString(user), // Convert address to string
+                    ", from owner ",
+                    vm.toString(user), // Convert address to string
+                    ", for collection ",
+                    vm.toString(MOCK_NFT_COLLECTION), // Convert address to string
+                    ") ---"
+                )
+            )
         );
-        uint256 daiWithdrawn = vault.redeem(sharesToRedeem, user, user);
-        console.log("--- vault.redeem() Call Completed ---");
-        console.log("DAI amount returned by redeem() call:", daiWithdrawn);
+        // Use redeemForCollection
+        vm.recordLogs(); // Start recording logs for redeem
+        uint256 daiWithdrawn = vault.redeemForCollection(sharesToRedeem, user, user, MOCK_NFT_COLLECTION);
+        Vm.Log[] memory redeemEntries = vm.getRecordedLogs(); // Get logs for redeem
+        console.log("--- vault.redeemForCollection() Call Completed ---");
+        console.log("DAI amount returned by redeemForCollection() call:", daiWithdrawn);
+
+        // --- Manual Event Check (CollectionWithdraw) ---
+        bytes32 expectedWithdrawTopic0 =
+            keccak256("CollectionWithdraw(address,address,address,address,uint256,uint256)");
+        bytes32 expectedWithdrawTopic1 = bytes32(uint256(uint160(MOCK_NFT_COLLECTION)));
+        bytes32 expectedWithdrawTopic2 = bytes32(uint256(uint160(user))); // receiver
+        bytes32 expectedWithdrawTopic3 = bytes32(uint256(uint160(user))); // owner
+        bool withdrawEventFound = false;
+        for (uint256 i = 0; i < redeemEntries.length; i++) {
+            // 1 signature + 3 indexed (collectionAddress, receiver, owner)
+            if (
+                redeemEntries[i].topics.length == 4 && redeemEntries[i].topics[0] == expectedWithdrawTopic0
+                    && redeemEntries[i].topics[1] == expectedWithdrawTopic1
+                    && redeemEntries[i].topics[2] == expectedWithdrawTopic2 // receiver
+                    && redeemEntries[i].topics[3] == expectedWithdrawTopic3 // owner
+            ) {
+                (address emittedCaller, uint256 emittedAssets, uint256 emittedShares) =
+                    abi.decode(redeemEntries[i].data, (address, uint256, uint256));
+                assertEq(emittedCaller, user, "Withdraw Event caller mismatch");
+                // emittedAssets might include dust, check >= expected
+                assertTrue(emittedAssets >= expectedDaiOutPreview, "Withdraw Event assets less than preview");
+                assertEq(emittedShares, sharesToRedeem, "Withdraw Event shares mismatch");
+                withdrawEventFound = true;
+                break;
+            }
+        }
+        assertTrue(withdrawEventFound, "CollectionWithdraw event not found or topics mismatch after redeem");
+        // --- End Manual Event Check ---
 
         // --- Post-Redeem Assertions & Checks ---
         console.log("\n--- Verifying State After Full Redeem ---");

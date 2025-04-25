@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {Test, console2} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 import {ERC4626Vault} from "../src/ERC4626Vault.sol";
 import {ILendingManager} from "../src/interfaces/ILendingManager.sol";
 import {IERC20} from "@openzeppelin-contracts-5.3.0/token/ERC20/IERC20.sol";
@@ -15,6 +16,7 @@ address constant USER_ALICE = address(0x111); // Regular user
 address constant USER_BOB = address(0x222); // Another regular user
 uint256 constant USER_INITIAL_ASSET = 1_000_000 ether;
 address constant DUMMY_NFT_COLLECTION = address(0xdead); // Placeholder, removed from vault logic
+address constant TEST_COLLECTION_ADDRESS = address(0xC011EC7); // Placeholder collection address
 
 contract ERC4626VaultTest is Test {
     ERC4626Vault public vault;
@@ -54,21 +56,38 @@ contract ERC4626VaultTest is Test {
         uint256 depositAmount = 100 ether;
         lendingManager.setDepositResult(true);
 
-        // Vault MUST approve LM to spend vault's assets (done in constructor)
-        // LM MUST approve Vault to pull assets for withdrawal (done in mock LM transfer)
-
-        // --- Simulate asset transfer TO LM in _hookDeposit --- //
-        // No need to check return value for SafeERC20
-
         vm.startPrank(USER_ALICE);
-        uint256 shares = vault.deposit(depositAmount, USER_ALICE);
+        vm.recordLogs(); // Start recording logs
+        uint256 shares = vault.depositForCollection(depositAmount, USER_ALICE, TEST_COLLECTION_ADDRESS);
+        Vm.Log[] memory entries = vm.getRecordedLogs(); // Get logs
         vm.stopPrank();
+
+        // --- Manual Event Check ---
+        bytes32 expectedTopic0 = keccak256("CollectionDeposit(address,address,address,uint256,uint256)");
+        bytes32 expectedTopic1 = bytes32(uint256(uint160(TEST_COLLECTION_ADDRESS)));
+        bytes32 expectedTopic2 = bytes32(uint256(uint160(USER_ALICE))); // caller
+        bytes32 expectedTopic3 = bytes32(uint256(uint160(USER_ALICE))); // receiver
+        bool eventFound = false;
+        for (uint256 i = 0; i < entries.length; i++) {
+            if (
+                entries[i].topics.length == 4 // 1 signature + 3 indexed
+                    && entries[i].topics[0] == expectedTopic0 && entries[i].topics[1] == expectedTopic1
+                    && entries[i].topics[2] == expectedTopic2 && entries[i].topics[3] == expectedTopic3
+            ) {
+                (uint256 emittedAssets, uint256 emittedShares) = abi.decode(entries[i].data, (uint256, uint256));
+                assertEq(emittedAssets, depositAmount, "Event assets mismatch");
+                assertEq(emittedShares, shares, "Event shares mismatch");
+                eventFound = true;
+                break;
+            }
+        }
+        assertTrue(eventFound, "CollectionDeposit event not found or topics mismatch");
+        // --- End Manual Event Check ---
 
         assertTrue(shares > 0, "Shares should be minted");
         assertEq(
             assetToken.balanceOf(USER_ALICE), USER_INITIAL_ASSET - depositAmount, "Alice asset balance after deposit"
         );
-        // Assert assets moved to LM, not stuck in vault
         assertEq(assetToken.balanceOf(address(vault)), 0, "Vault direct asset balance should be 0");
         assertEq(lendingManager.totalAssets(), depositAmount, "LM total assets after deposit");
         assertEq(vault.balanceOf(USER_ALICE), shares, "Alice shares after deposit");
@@ -78,27 +97,52 @@ contract ERC4626VaultTest is Test {
     function test_Withdraw_Success() public {
         uint256 depositAmount = 500 ether;
         lendingManager.setDepositResult(true);
-        // Simulate initial deposit
         vm.prank(USER_ALICE);
-        uint256 sharesAlice = vault.deposit(depositAmount, USER_ALICE);
+        uint256 sharesAlice = vault.depositForCollection(depositAmount, USER_ALICE, TEST_COLLECTION_ADDRESS);
+        vm.stopPrank(); // Stop prank after deposit
 
         uint256 withdrawAmount = 100 ether;
         uint256 vaultTotalAssetsBeforeWithdraw = vault.totalAssets();
 
         // --- Simulate asset transfer FROM LM in _hookWithdraw --- //
-        // Expect transfer FROM LM TO vault, triggered *inside* vault.withdraw by LM mock
         vm.expectCall(
             address(assetToken), abi.encodeWithSelector(IERC20.transfer.selector, address(vault), withdrawAmount)
         );
-        lendingManager.setWithdrawResult(true); // Ensure LM allows withdrawal (mock will transfer)
+        lendingManager.setWithdrawResult(true);
 
         vm.startPrank(USER_ALICE);
-        // Calculate expected shares *before* the state changes
-        // uint256 expectedSharesToWithdraw = vault.previewWithdraw(withdrawAmount); // REMOVED - Calculation depends on post-hook state
-        uint256 sharesBurned = vault.withdraw(withdrawAmount, USER_ALICE, USER_ALICE);
+        vm.recordLogs(); // Start recording logs
+        uint256 sharesBurned =
+            vault.withdrawForCollection(withdrawAmount, USER_ALICE, USER_ALICE, TEST_COLLECTION_ADDRESS);
+        Vm.Log[] memory entries = vm.getRecordedLogs(); // Get logs
         vm.stopPrank();
 
-        // assertEq(sharesBurned, expectedSharesToWithdraw, "Shares burned mismatch"); // REMOVED
+        // --- Manual Event Check ---
+        bytes32 expectedTopic0 = keccak256("CollectionWithdraw(address,address,address,address,uint256,uint256)");
+        bytes32 expectedTopic1 = bytes32(uint256(uint160(TEST_COLLECTION_ADDRESS)));
+        // Note: caller is NOT indexed in CollectionWithdraw
+        bytes32 expectedTopic2 = bytes32(uint256(uint160(USER_ALICE))); // receiver
+        bytes32 expectedTopic3 = bytes32(uint256(uint160(USER_ALICE))); // owner
+        bool eventFound = false;
+        for (uint256 i = 0; i < entries.length; i++) {
+            // 1 signature + 3 indexed (collectionAddress, receiver, owner)
+            if (
+                entries[i].topics.length == 4 && entries[i].topics[0] == expectedTopic0
+                    && entries[i].topics[1] == expectedTopic1 && entries[i].topics[2] == expectedTopic2 // receiver
+                    && entries[i].topics[3] == expectedTopic3 // owner
+            ) {
+                (address emittedCaller, uint256 emittedAssets, uint256 emittedShares) =
+                    abi.decode(entries[i].data, (address, uint256, uint256));
+                assertEq(emittedCaller, USER_ALICE, "Event caller mismatch");
+                assertEq(emittedAssets, withdrawAmount, "Event assets mismatch");
+                assertEq(emittedShares, sharesBurned, "Event shares mismatch");
+                eventFound = true;
+                break;
+            }
+        }
+        assertTrue(eventFound, "CollectionWithdraw event not found or topics mismatch");
+        // --- End Manual Event Check ---
+
         assertEq(
             assetToken.balanceOf(USER_ALICE),
             USER_INITIAL_ASSET - depositAmount + withdrawAmount,
@@ -124,11 +168,34 @@ contract ERC4626VaultTest is Test {
         assetToken.mint(USER_BOB, expectedAssets); // Mint as owner (test contract)
 
         vm.startPrank(USER_BOB); // Start prank for vault interaction
-        uint256 assetsMinted = vault.mint(mintShares, USER_BOB);
+        vm.recordLogs(); // Start recording logs
+        uint256 assetsMinted = vault.mintForCollection(mintShares, USER_BOB, TEST_COLLECTION_ADDRESS);
+        Vm.Log[] memory entries = vm.getRecordedLogs(); // Get logs
         vm.stopPrank();
 
+        // --- Manual Event Check (CollectionDeposit) ---
+        bytes32 expectedTopic0 = keccak256("CollectionDeposit(address,address,address,uint256,uint256)");
+        bytes32 expectedTopic1 = bytes32(uint256(uint160(TEST_COLLECTION_ADDRESS)));
+        bytes32 expectedTopic2 = bytes32(uint256(uint160(USER_BOB))); // caller
+        bytes32 expectedTopic3 = bytes32(uint256(uint160(USER_BOB))); // receiver
+        bool eventFound = false;
+        for (uint256 i = 0; i < entries.length; i++) {
+            if (
+                entries[i].topics.length == 4 // 1 signature + 3 indexed
+                    && entries[i].topics[0] == expectedTopic0 && entries[i].topics[1] == expectedTopic1
+                    && entries[i].topics[2] == expectedTopic2 && entries[i].topics[3] == expectedTopic3
+            ) {
+                (uint256 emittedAssets, uint256 emittedShares) = abi.decode(entries[i].data, (uint256, uint256));
+                assertEq(emittedAssets, assetsMinted, "Event assets mismatch"); // Use actual assetsMinted
+                assertEq(emittedShares, mintShares, "Event shares mismatch"); // Use input mintShares
+                eventFound = true;
+                break;
+            }
+        }
+        assertTrue(eventFound, "CollectionDeposit event not found or topics mismatch");
+        // --- End Manual Event Check ---
+
         assertEq(assetsMinted, expectedAssets, "Mint asset amount mismatch");
-        // Bob's balance: Initial + MintedForTest - PulledByVault
         assertEq(assetToken.balanceOf(USER_BOB), USER_INITIAL_ASSET, "Bob asset after mint");
         assertEq(assetToken.balanceOf(address(vault)), 0, "Vault asset balance after mint should be 0");
         assertEq(vault.balanceOf(USER_BOB), mintShares, "Bob share balance after mint");
@@ -147,39 +214,66 @@ contract ERC4626VaultTest is Test {
         assetToken.mint(USER_BOB, requiredAssets); // Mint as owner (test contract)
 
         vm.startPrank(USER_BOB); // Start prank for vault interaction
-        vault.mint(mintShares, USER_BOB);
+        // Use mintForCollection for setup
+        vault.mintForCollection(mintShares, USER_BOB, TEST_COLLECTION_ADDRESS);
         vm.stopPrank();
 
         uint256 redeemSharesAmount = mintShares / 2;
         uint256 vaultTotalAssetsBeforeRedeem = vault.totalAssets();
-
-        // --- Simulate asset transfer FROM LM in _hookWithdraw --- //
         uint256 expectedAssetsFromRedeem = vault.previewRedeem(redeemSharesAmount);
-        // Expect transfer FROM LM TO vault, triggered *inside* vault.redeem by LM mock
+
+        // --- Simulate asset transfer FROM LM --- //
         vm.expectCall(
             address(assetToken),
-            abi.encodeWithSelector(IERC20.transfer.selector, address(vault), expectedAssetsFromRedeem) // Corrected: To vault
+            abi.encodeWithSelector(IERC20.transfer.selector, address(vault), expectedAssetsFromRedeem)
         );
-        lendingManager.setWithdrawResult(true); // Ensure LM allows withdrawal (mock will transfer)
+        lendingManager.setWithdrawResult(true);
 
         vm.startPrank(USER_BOB);
-        uint256 assetsRedeemed = vault.redeem(redeemSharesAmount, USER_BOB, USER_BOB);
+        vm.recordLogs(); // Start recording logs
+        uint256 assetsRedeemed =
+            vault.redeemForCollection(redeemSharesAmount, USER_BOB, USER_BOB, TEST_COLLECTION_ADDRESS);
+        Vm.Log[] memory entries = vm.getRecordedLogs(); // Get logs
         vm.stopPrank();
 
-        assertEq(assetsRedeemed, expectedAssetsFromRedeem, "Redeem asset amount mismatch");
-        assertEq(
-            assetToken.balanceOf(USER_BOB),
-            USER_INITIAL_ASSET + assetsRedeemed, // Initial + RedeemedAssets
-            "Bob asset balance after redeem"
-        );
+        // --- Manual Event Check (CollectionWithdraw) ---
+        bytes32 expectedTopic0 = keccak256("CollectionWithdraw(address,address,address,address,uint256,uint256)");
+        bytes32 expectedTopic1 = bytes32(uint256(uint160(TEST_COLLECTION_ADDRESS)));
+        bytes32 expectedTopic2 = bytes32(uint256(uint160(USER_BOB))); // receiver
+        bytes32 expectedTopic3 = bytes32(uint256(uint160(USER_BOB))); // owner
+        bool eventFound = false;
+        for (uint256 i = 0; i < entries.length; i++) {
+            // 1 signature + 3 indexed (collectionAddress, receiver, owner)
+            if (
+                entries[i].topics.length == 4 && entries[i].topics[0] == expectedTopic0
+                    && entries[i].topics[1] == expectedTopic1 && entries[i].topics[2] == expectedTopic2 // receiver
+                    && entries[i].topics[3] == expectedTopic3 // owner
+            ) {
+                (address emittedCaller, uint256 emittedAssets, uint256 emittedShares) =
+                    abi.decode(entries[i].data, (address, uint256, uint256));
+                assertEq(emittedCaller, USER_BOB, "Event caller mismatch");
+                // Note: emittedAssets might include dust swept from LM, so compare >= expected
+                assertTrue(emittedAssets >= expectedAssetsFromRedeem, "Event assets less than expected");
+                assertEq(emittedShares, redeemSharesAmount, "Event shares mismatch");
+                eventFound = true;
+                break;
+            }
+        }
+        assertTrue(eventFound, "CollectionWithdraw event not found or topics mismatch");
+        // --- End Manual Event Check ---
+
+        assertEq(assetsRedeemed, expectedAssetsFromRedeem, "Redeem asset amount mismatch"); // Keep original check too
+        assertEq(assetToken.balanceOf(USER_BOB), USER_INITIAL_ASSET + assetsRedeemed, "Bob asset balance after redeem");
         assertEq(assetToken.balanceOf(address(vault)), 0, "Vault asset balance after redeem should be 0");
         assertEq(vault.balanceOf(USER_BOB), mintShares - redeemSharesAmount, "Bob shares after redeem");
-        assertEq(
-            lendingManager.totalAssets(), requiredAssets - expectedAssetsFromRedeem, "LM total assets after redeem"
+        // Use approx check for LM/Vault total assets due to potential dust/rounding in redeemAll
+        assertApproxEqAbs(
+            lendingManager.totalAssets(), requiredAssets - expectedAssetsFromRedeem, 1e6, "LM total assets after redeem"
         );
-        assertEq(
+        assertApproxEqAbs(
             vault.totalAssets(),
             vaultTotalAssetsBeforeRedeem - expectedAssetsFromRedeem,
+            1e6, // Allow some dust difference
             "Vault total assets after redeem"
         );
     }
@@ -196,7 +290,8 @@ contract ERC4626VaultTest is Test {
         uint256 depositAmount = 100 ether;
         lendingManager.setDepositResult(true); // Allow deposit
         vm.prank(USER_ALICE);
-        vault.deposit(depositAmount, USER_ALICE);
+        // Use depositForCollection for setup
+        vault.depositForCollection(depositAmount, USER_ALICE, TEST_COLLECTION_ADDRESS);
         vm.stopPrank();
 
         // Now attempt to withdraw, but configure LM to fail the withdrawal
@@ -205,7 +300,8 @@ contract ERC4626VaultTest is Test {
 
         vm.startPrank(USER_ALICE);
         vm.expectRevert(ERC4626Vault.LendingManagerWithdrawFailed.selector);
-        vault.withdraw(withdrawAmount, USER_ALICE, USER_ALICE);
+        // Use withdrawForCollection
+        vault.withdrawForCollection(withdrawAmount, USER_ALICE, USER_ALICE, TEST_COLLECTION_ADDRESS);
         vm.stopPrank();
     }
 
@@ -218,7 +314,8 @@ contract ERC4626VaultTest is Test {
         uint256 depositAmount = 100 ether;
         lendingManager.setDepositResult(true);
         vm.prank(USER_ALICE);
-        vault.deposit(depositAmount, USER_ALICE);
+        // Use depositForCollection for setup
+        vault.depositForCollection(depositAmount, USER_ALICE, TEST_COLLECTION_ADDRESS);
         vm.stopPrank();
 
         // Attempt to withdraw MORE than available
@@ -239,15 +336,17 @@ contract ERC4626VaultTest is Test {
         // The hook will detect insufficient LM funds and return early.
         // super.withdraw will then revert because assets > maxWithdraw (which uses totalAssets).
         // vm.expectRevert(ERC4626.ERC4626ExceededMaxWithdraw.selector); // Might not match full error data
+        // Expect CollectionInsufficientBalance because the check happens before the base ERC4626 checks
         vm.expectRevert(
             abi.encodeWithSelector(
-                ERC4626.ERC4626ExceededMaxWithdraw.selector,
-                USER_ALICE, // receiver
-                withdrawAmount, // assets
-                currentVaultAssets // max
+                ERC4626Vault.CollectionInsufficientBalance.selector,
+                TEST_COLLECTION_ADDRESS, // collectionAddress
+                withdrawAmount, // assetsRequested
+                depositAmount // assetsAvailable (amount deposited by this collection)
             )
         );
-        vault.withdraw(withdrawAmount, USER_ALICE, USER_ALICE);
+        // Use withdrawForCollection
+        vault.withdrawForCollection(withdrawAmount, USER_ALICE, USER_ALICE, TEST_COLLECTION_ADDRESS);
         vm.stopPrank();
     }
 
@@ -268,10 +367,15 @@ contract ERC4626VaultTest is Test {
         uint256 vaultTotalAssetsBefore = vault.totalAssets();
 
         vm.startPrank(USER_ALICE);
-        uint256 shares = vault.deposit(0, USER_ALICE);
+        // Add check for CollectionDeposit event (should still emit with 0 values) - MUST be before the call
+        vm.expectEmit(true, true, true, true);
+        emit ERC4626Vault.CollectionDeposit(TEST_COLLECTION_ADDRESS, USER_ALICE, USER_ALICE, 0, 0);
+        // Use depositForCollection
+        uint256 shares = vault.depositForCollection(0, USER_ALICE, TEST_COLLECTION_ADDRESS);
         vm.stopPrank();
 
         assertEq(shares, 0, "Shares for 0 deposit");
+        // Event check moved above
         assertEq(assetToken.balanceOf(USER_ALICE), aliceAssetsBefore, "Alice assets unchanged");
         assertEq(vault.balanceOf(USER_ALICE), aliceSharesBefore, "Alice shares unchanged");
         assertEq(lendingManager.totalAssets(), lmTotalAssetsBefore, "LM total assets unchanged");

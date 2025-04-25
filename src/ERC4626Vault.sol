@@ -7,6 +7,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import "forge-std/console.sol"; // Added for logging
 
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
 
@@ -14,10 +15,12 @@ import {ILendingManager} from "./interfaces/ILendingManager.sol";
  * @title ERC4626Vault
  * @notice ERC-4626 compliant vault delegating asset management to a LendingManager.
  * @dev Uses OpenZeppelin ERC4626 and AccessControl. Overrides _hookDeposit and _hookWithdraw for LendingManager integration.
- * Adds functionality to track deposits per collection ID.
+ * Adds functionality to track deposits per collection ID. Standard deposit/mint/withdraw/redeem are disabled.
  */
 contract ERC4626Vault is ERC4626, AccessControl {
     using SafeERC20 for IERC20;
+    // Use Math library for ceiling division
+    using Math for uint256;
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
@@ -37,6 +40,16 @@ contract ERC4626Vault is ERC4626, AccessControl {
         uint256 shares
     );
 
+    /// @notice Emitted when assets are withdrawn/redeemed for a specific collection.
+    event CollectionWithdraw(
+        address indexed collectionAddress,
+        address caller,
+        address indexed receiver,
+        address indexed owner,
+        uint256 assets,
+        uint256 shares
+    );
+
     /// @notice Reverts if depositToLendingProtocol call to LendingManager fails.
     error LendingManagerDepositFailed();
     /// @notice Reverts if withdrawFromLendingProtocol call from LendingManager fails.
@@ -47,6 +60,10 @@ contract ERC4626Vault is ERC4626, AccessControl {
     error AddressZero();
     /// @notice Reverts if vault asset balance is insufficient after LendingManager withdrawal.
     error Vault_InsufficientBalancePostLMWithdraw();
+    /// @notice Reverts if attempting to withdraw/redeem more assets than tracked for a collection.
+    error CollectionInsufficientBalance(address collectionAddress, uint256 requested, uint256 available);
+    /// @notice Reverts if standard deposit/mint/withdraw/redeem functions are called.
+    error FunctionDisabled();
 
     constructor(
         IERC20 _asset,
@@ -90,12 +107,15 @@ contract ERC4626Vault is ERC4626, AccessControl {
     }
 
     /**
-     * @notice Deposit assets into the vault, minting shares for the receiver.
-     * @dev Overrides deposit. Calls _hookDeposit after base logic.
+     * @notice Disabled. Use depositForCollection instead.
      */
-    function deposit(uint256 assets, address recipient) public virtual override returns (uint256 shares) {
-        shares = super.deposit(assets, recipient);
-        _hookDeposit(assets);
+    function deposit(uint256, /* assets */ address /* recipient */ )
+        public
+        virtual
+        override
+        returns (uint256 /* shares */ )
+    {
+        revert FunctionDisabled();
     }
 
     /**
@@ -110,8 +130,14 @@ contract ERC4626Vault is ERC4626, AccessControl {
         virtual
         returns (uint256 shares)
     {
-        // Call the standard deposit function first
-        shares = deposit(assets, receiver);
+        // Calculate shares using internal preview function
+        shares = previewDeposit(assets);
+
+        // Use internal _deposit function to bypass the public override
+        _deposit(msg.sender, receiver, assets, shares);
+
+        // Call hook for Lending Manager integration
+        _hookDeposit(assets);
 
         // Update collection tracking
         collectionTotalAssetsDeposited[collectionAddress] += assets;
@@ -119,12 +145,15 @@ contract ERC4626Vault is ERC4626, AccessControl {
     }
 
     /**
-     * @notice Mint shares for the recipient by depositing required assets.
-     * @dev Overrides mint. Calls _hookDeposit after base logic.
+     * @notice Disabled. Use mintForCollection instead.
      */
-    function mint(uint256 shares, address recipient) public virtual override returns (uint256 assets) {
-        assets = super.mint(shares, recipient);
-        _hookDeposit(assets);
+    function mint(uint256, /* shares */ address /* recipient */ )
+        public
+        virtual
+        override
+        returns (uint256 /* assets */ )
+    {
+        revert FunctionDisabled();
     }
 
     /**
@@ -139,39 +168,89 @@ contract ERC4626Vault is ERC4626, AccessControl {
         virtual
         returns (uint256 assets)
     {
-        // Call the standard mint function first
-        assets = mint(shares, receiver);
+        // Calculate assets using internal preview function
+        assets = previewMint(shares);
+
+        // Use internal _deposit function to handle asset transfer and minting
+        _deposit(msg.sender, receiver, assets, shares);
+
+        // Call hook for Lending Manager integration
+        _hookDeposit(assets);
 
         // Update collection tracking
         collectionTotalAssetsDeposited[collectionAddress] += assets;
-        // Note: The standard mint function doesn't return shares, so we pass the input shares to the event.
-        // If shares were 0, assets would also be 0 due to the internal _mint logic.
         emit CollectionDeposit(collectionAddress, msg.sender, receiver, assets, shares);
     }
 
     /**
-     * @notice Withdraw assets from the vault by burning shares from the owner.
-     * @dev Overrides withdraw. Calls _hookWithdraw before base logic.
-     * Removed owner check to allow standard ERC4626 allowance mechanism.
+     * @notice Disabled. Use withdrawForCollection instead.
      */
-    function withdraw(uint256 assets, address recipient, address owner)
+    function withdraw(uint256, /* assets */ address, /* recipient */ address /* owner */ )
         public
         virtual
         override
-        returns (uint256 shares)
+        returns (uint256 /* shares */ )
     {
-        _hookWithdraw(assets);
-        shares = super.withdraw(assets, recipient, owner);
+        revert FunctionDisabled();
     }
 
     /**
-     * @notice Redeem shares from the owner, transferring assets to the recipient.
-     * @dev Overrides redeem. Calls _hookWithdraw before base logic.
+     * @notice Withdraw assets from the vault for a specific collection by burning shares from the owner.
+     * @param assets Amount of underlying asset to withdraw.
+     * @param receiver Address that will receive the withdrawn assets.
+     * @param owner Address from which shares will be burned.
+     * @param collectionAddress Address of the collection associated with this withdrawal.
+     * @return shares Amount of shares burned.
      */
-    function redeem(uint256 shares, address recipient, address owner)
+    function withdrawForCollection(uint256 assets, address receiver, address owner, address collectionAddress)
+        public
+        virtual
+        returns (uint256 shares)
+    {
+        // Check collection balance BEFORE previewWithdraw to prevent unnecessary calculations
+        uint256 collectionBalance = collectionTotalAssetsDeposited[collectionAddress];
+        if (assets > collectionBalance) {
+            revert CollectionInsufficientBalance(collectionAddress, assets, collectionBalance);
+        }
+
+        // Calculate shares needed using internal preview function
+        shares = previewWithdraw(assets);
+
+        // Call hook before withdrawal logic
+        _hookWithdraw(assets);
+
+        // Use internal _withdraw function to bypass the public override
+        _withdraw(msg.sender, receiver, owner, assets, shares);
+
+        // Update collection tracking (decrease)
+        // Underflow is protected by the initial check `assets <= collectionBalance`
+        collectionTotalAssetsDeposited[collectionAddress] = collectionBalance - assets;
+        emit CollectionWithdraw(collectionAddress, msg.sender, receiver, owner, assets, shares);
+    }
+
+    /**
+     * @notice Disabled. Use redeemForCollection instead.
+     */
+    function redeem(uint256, /* shares */ address, /* recipient */ address /* owner */ )
         public
         virtual
         override
+        returns (uint256 /* assets */ )
+    {
+        revert FunctionDisabled();
+    }
+
+    /**
+     * @notice Redeem shares from the owner for a specific collection, transferring assets to the recipient.
+     * @param shares Amount of shares to redeem.
+     * @param receiver Address that will receive the withdrawn assets.
+     * @param owner Address from which shares will be burned.
+     * @param collectionAddress Address of the collection associated with this redemption.
+     * @return assets Amount of underlying assets transferred.
+     */
+    function redeemForCollection(uint256 shares, address receiver, address owner, address collectionAddress)
+        public
+        virtual
         returns (uint256 assets)
     {
         // 0. Store total supply before potential burn to check for full redemption later.
@@ -184,12 +263,20 @@ contract ERC4626Vault is ERC4626, AccessControl {
             require(shares == 0, "ERC4626: redeem rounds down to zero assets"); // Match OZ revert message
         }
 
+        // 1.5 Check collection balance
+        uint256 collectionBalance = collectionTotalAssetsDeposited[collectionAddress];
+        // if (assets > collectionBalance) { // <-- Removed check: Allows withdrawing principal + yield
+        //     // Use the initially calculated 'assets' for the check
+        //     revert CollectionInsufficientBalance(collectionAddress, assets, collectionBalance);
+        // }
+
         // 2. Ensure vault has enough assets locally for the initial calculated amount, pulling from LM if needed.
         _hookWithdraw(assets);
 
-        // --- Manual Redeem Logic ---
+        // --- Manual Redeem Logic (adapted from original redeem, similar to OZ _redeem but with dust sweep) ---
 
         // 3. Check & spend allowance BEFORE burning shares
+        // Use msg.sender as caller, owner as target
         if (msg.sender != owner) {
             _spendAllowance(owner, msg.sender, shares);
         }
@@ -206,8 +293,6 @@ contract ERC4626Vault is ERC4626, AccessControl {
             uint256 remainingDustInLM = lendingManager.totalAssets();
             if (remainingDustInLM > 0) {
                 // Withdraw the dust from LM to the vault using redeemAllCTokens
-                // This calls cToken.redeem() directly, avoiding redeemUnderlying issues with tiny amounts.
-                // The redeemed assets are sent directly to this vault contract.
                 uint256 redeemedDust = lendingManager.redeemAllCTokens(address(this));
                 finalAssetsToTransfer += redeemedDust;
             }
@@ -219,12 +304,22 @@ contract ERC4626Vault is ERC4626, AccessControl {
             // This indicates an internal logic error or LM failure not caught earlier.
             revert Vault_InsufficientBalancePostLMWithdraw();
         }
-        SafeERC20.safeTransfer(IERC20(asset()), recipient, finalAssetsToTransfer);
+        SafeERC20.safeTransfer(IERC20(asset()), receiver, finalAssetsToTransfer);
 
         // 7. Emit the standard Withdraw event with the final amounts
-        emit Withdraw(msg.sender, recipient, owner, finalAssetsToTransfer, shares);
+        // Use msg.sender as caller
+        emit Withdraw(msg.sender, receiver, owner, finalAssetsToTransfer, shares);
 
-        return finalAssetsToTransfer;
+        // 8. Update collection tracking (decrease using initially calculated assets)
+        // Underflow is protected by the check `assets <= collectionBalance`
+        console.logString("ERC4626Vault.redeemForCollection: Before subtraction: collectionBalance=");
+        console.logUint(collectionBalance);
+        console.logString(" assets=");
+        console.logUint(assets);
+        collectionTotalAssetsDeposited[collectionAddress] = collectionBalance - assets;
+        emit CollectionWithdraw(collectionAddress, msg.sender, receiver, owner, assets, shares); // Emit collection-specific event
+
+        return finalAssetsToTransfer; // Return the actual amount transferred, including dust
     }
 
     /**
@@ -280,5 +375,37 @@ contract ERC4626Vault is ERC4626, AccessControl {
             // The subsequent super.withdraw() call will fail the previewWithdraw check
             // because totalAssets() hasn't increased enough, resulting in ERC4626ExceededMaxWithdraw.
         }
+    }
+
+    // --- Helper functions from ERC4626 needed internally ---
+    // We need these because we are calling _deposit, _mint, _withdraw, _redeem directly
+
+    /**
+     * @dev Internal version of {previewDeposit}.
+     */
+    function _previewDeposit(uint256 assets) internal view virtual returns (uint256) {
+        return convertToShares(assets);
+    }
+
+    /**
+     * @dev Internal version of {previewMint}.
+     */
+    function _previewMint(uint256 shares) internal view virtual returns (uint256) {
+        return convertToAssets(shares);
+    }
+
+    /**
+     * @dev Internal version of {previewWithdraw}.
+     */
+    function _previewWithdraw(uint256 assets) internal view virtual returns (uint256) {
+        // Use ceiling division to prevent withdrawing more shares than expected
+        return convertToShares(assets).ceilDiv(1);
+    }
+
+    /**
+     * @dev Internal version of {previewRedeem}.
+     */
+    function _previewRedeem(uint256 shares) internal view virtual returns (uint256) {
+        return convertToAssets(shares);
     }
 }

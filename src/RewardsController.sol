@@ -581,7 +581,7 @@ contract RewardsController is
      * @notice Updates the global reward index up to the current block number.
      * @dev Convenience wrapper around _updateGlobalRewardIndexTo.
      */
-    function _updateGlobalRewardIndex() internal {
+    function updateGlobalRewardIndex() public {
         _updateGlobalRewardIndexTo(block.number);
     }
 
@@ -687,16 +687,15 @@ contract RewardsController is
         return _whitelistedCollections.values(); // Return values from the EnumerableSet
     }
 
-    function claimRewardsForCollection(address nftCollection)
-        external
-        override
-        nonReentrant
-        onlyWhitelistedCollection(nftCollection)
-    {
+    function claimRewardsForCollection(
+        address nftCollection,
+        BalanceUpdateData[] calldata simulatedUpdates // Added simulatedUpdates parameter
+    ) external override nonReentrant onlyWhitelistedCollection(nftCollection) {
         address user = msg.sender;
 
         // Calculate pending rewards based on index up to current block *before* updating global state
-        uint256 totalReward = _getPendingRewardsSingleCollection(user, nftCollection, new BalanceUpdateData[](0));
+        // Pass simulatedUpdates to the calculation
+        uint256 totalReward = _getPendingRewardsSingleCollection(user, nftCollection, simulatedUpdates);
 
         // Allow claiming 0 rewards to update internal state, but skip transfers if reward is 0.
         // if (totalReward == 0) {
@@ -704,7 +703,7 @@ contract RewardsController is
         // }
 
         // Now update the global index state *before* transfers and user state update
-        _updateGlobalRewardIndex();
+        updateGlobalRewardIndex(); // Updated internal call
         uint256 indexAtClaim = globalRewardIndex; // Capture index *after* global update
 
         // 4. Request yield transfer from LendingManager (only if there's something to claim)
@@ -749,7 +748,9 @@ contract RewardsController is
         }
     }
 
-    function claimRewardsForAll() external override nonReentrant {
+    function claimRewardsForAll(BalanceUpdateData[] calldata simulatedUpdates) external override nonReentrant {
+        // Keep override
+        // Added simulatedUpdates parameter
         address user = msg.sender;
         address[] memory collectionsToClaim = _userActiveCollections[user].values();
         if (collectionsToClaim.length == 0) revert NoRewardsToClaim();
@@ -761,8 +762,8 @@ contract RewardsController is
         // Calculate pending rewards for each collection *before* updating global state
         for (uint256 i = 0; i < collectionsToClaim.length; i++) {
             address collection = collectionsToClaim[i];
-            uint256 rewardForCollection =
-                _getPendingRewardsSingleCollection(user, collection, new BalanceUpdateData[](0));
+            // Pass simulatedUpdates to the calculation
+            uint256 rewardForCollection = _getPendingRewardsSingleCollection(user, collection, simulatedUpdates);
             pendingRewardsPerCollection[i] = rewardForCollection; // Store reward by index
             totalRewardsToSend += rewardForCollection;
         }
@@ -774,7 +775,7 @@ contract RewardsController is
         if (totalRewardsToSend == 0) revert NoRewardsToClaim();
 
         // Now update the global index state *before* transfers and user state update
-        _updateGlobalRewardIndex();
+        updateGlobalRewardIndex(); // Updated internal call
         uint256 indexAtClaim = globalRewardIndex;
         console.logString("RC.claimAll: User=");
         console.logAddress(msg.sender);
@@ -915,6 +916,11 @@ contract RewardsController is
         BalanceUpdateData[] memory simulatedUpdates
     ) internal returns (uint256 pendingReward) {
         // Removed 'view'
+        console.logString("_getPendingRewardsSingleCollection START: User=");
+        console.logAddress(user);
+        console.logString(" Collection=");
+        console.logAddress(nftCollection);
+
         UserRewardState memory currentState = userRewardState[user][nftCollection];
         uint256 currentNFTBalance = currentState.lastNFTBalance;
         uint256 currentBalance = currentState.lastBalance; // Use currentBalance
@@ -922,8 +928,20 @@ contract RewardsController is
         uint256 lastProcessedIndex = currentState.lastRewardIndex;
         uint256 accruedRewardSoFar = currentState.accruedReward; // Start with previously accrued reward
 
+        console.logString(" -> Initial State: lastIdx=");
+        console.logUint(lastProcessedIndex);
+        console.logString(" accruedReward=");
+        console.logUint(accruedRewardSoFar);
+        console.logString(" lastNFTBal=");
+        console.logUint(currentNFTBalance);
+        console.logString(" lastBal=");
+        console.logUint(currentBalance);
+        console.logString(" lastBlock=");
+        console.logUint(lastProcessedBlock);
+
         // Apply simulated updates if any
         if (simulatedUpdates.length > 0) {
+            console.logString(" -> Processing simulated updates...");
             for (uint256 i = 0; i < simulatedUpdates.length; i++) {
                 BalanceUpdateData memory update = simulatedUpdates[i];
 
@@ -933,41 +951,105 @@ contract RewardsController is
                     revert SimulationUpdateOutOfOrder(update.blockNumber, lastProcessedBlock);
                 }
 
+                console.logString(" --> Sim Update [");
+                console.logUint(i);
+                console.logString("]: block=");
+                console.logUint(update.blockNumber);
+                console.logString(" nftDelta=");
+                console.logInt(update.nftDelta);
+                console.logString(" balDelta=");
+                console.logInt(update.balanceDelta);
+
                 // Calculate rewards up to the block *before* this simulated update
                 if (update.blockNumber > lastProcessedBlock) {
+                    console.logString(" ---> Calculating rewards for period [");
+                    console.logUint(lastProcessedBlock);
+                    console.logString(" -> ");
+                    console.logUint(update.blockNumber);
+                    console.logString("]");
                     uint256 indexAtSimUpdateBlock = _calculateGlobalIndexAt(update.blockNumber); // Simulate index at that block
                     uint256 indexDelta = indexAtSimUpdateBlock - lastProcessedIndex;
-                    accruedRewardSoFar += _calculateRewardsWithDelta(
+                    console.logString(" ----> indexAtSimUpdateBlock=");
+                    console.logUint(indexAtSimUpdateBlock);
+                    console.logString(" lastProcessedIndex=");
+                    console.logUint(lastProcessedIndex);
+                    console.logString(" indexDelta=");
+                    console.logUint(indexDelta);
+                    uint256 rewardForPeriod = _calculateRewardsWithDelta(
                         nftCollection,
                         indexDelta,
                         lastProcessedIndex,
                         currentNFTBalance,
                         currentBalance // Use currentBalance
                     );
+                    console.logString(" ----> rewardForPeriod=");
+                    console.logUint(rewardForPeriod);
+                    accruedRewardSoFar += rewardForPeriod;
+                    console.logString(" ----> accruedRewardSoFar=");
+                    console.logUint(accruedRewardSoFar);
                     lastProcessedIndex = indexAtSimUpdateBlock;
                     lastProcessedBlock = update.blockNumber;
+                    console.logString(" ----> Updated lastProcessedIndex=");
+                    console.logUint(lastProcessedIndex);
+                    console.logString(" lastProcessedBlock=");
+                    console.logUint(lastProcessedBlock);
+                } else {
+                    console.logString(" ---> Skipping reward calc (update.blockNumber <= lastProcessedBlock)");
                 }
 
                 // Apply the simulated deltas
+                uint256 oldNFTBalance = currentNFTBalance;
+                uint256 oldBalance = currentBalance;
                 currentNFTBalance = _applyDeltaSimulated(currentNFTBalance, update.nftDelta);
                 currentBalance = _applyDeltaSimulated(currentBalance, update.balanceDelta); // Apply to currentBalance
+                console.logString(" ---> Applied Deltas: oldNFTBal=");
+                console.logUint(oldNFTBalance);
+                console.logString(" -> newNFTBal=");
+                console.logUint(currentNFTBalance);
+                console.logString(" | oldBal=");
+                console.logUint(oldBalance);
+                console.logString(" -> newBal=");
+                console.logUint(currentBalance);
             }
+        } else {
+            console.logString(" -> No simulated updates to process.");
         }
 
         // Calculate rewards from the last processed block (real or simulated) up to the current block
         uint256 currentBlock = block.number;
+        console.logString(" -> Calculating final period rewards: lastProcessedBlock=");
+        console.logUint(lastProcessedBlock);
+        console.logString(" currentBlock=");
+        console.logUint(currentBlock);
         if (currentBlock > lastProcessedBlock) {
             uint256 currentIndex = _calculateGlobalIndexAt(currentBlock); // Get index at current block
             uint256 indexDelta = currentIndex - lastProcessedIndex;
-            accruedRewardSoFar += _calculateRewardsWithDelta(
+            console.logString(" --> currentIndex=");
+            console.logUint(currentIndex);
+            console.logString(" lastProcessedIndex=");
+            console.logUint(lastProcessedIndex);
+            console.logString(" indexDelta=");
+            console.logUint(indexDelta);
+            uint256 rewardForFinalPeriod = _calculateRewardsWithDelta(
                 nftCollection,
                 indexDelta,
                 lastProcessedIndex,
                 currentNFTBalance,
                 currentBalance // Use currentBalance
             );
+            console.logString(" --> rewardForFinalPeriod=");
+            console.logUint(rewardForFinalPeriod);
+            accruedRewardSoFar += rewardForFinalPeriod;
+        } else {
+            console.logString(" -> Skipping final period reward calc (currentBlock <= lastProcessedBlock)");
         }
 
+        console.logString("_getPendingRewardsSingleCollection END: User=");
+        console.logAddress(user);
+        console.logString(" Collection=");
+        console.logAddress(nftCollection);
+        console.logString(" FINAL pendingReward=");
+        console.logUint(accruedRewardSoFar);
         return accruedRewardSoFar;
     }
 

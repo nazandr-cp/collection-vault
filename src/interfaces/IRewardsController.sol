@@ -106,13 +106,15 @@ interface IRewardsController {
     /**
      * @notice Claim accrued rewards for the caller and a single NFT collection.
      * @param nftCollection NFT collection address.
+     * @param simulatedUpdates Array of future updates to simulate before claiming (must be sorted by blockNumber).
      */
-    function claimRewardsForCollection(address nftCollection) external;
+    function claimRewardsForCollection(address nftCollection, BalanceUpdateData[] calldata simulatedUpdates) external; // Added simulatedUpdates
 
     /**
      * @notice Claim accrued rewards for the caller across all tracked NFT collections.
+     * @param simulatedUpdates Array of future updates to simulate before claiming (must be sorted by blockNumber).
      */
-    function claimRewardsForAll() external;
+    function claimRewardsForAll(BalanceUpdateData[] calldata simulatedUpdates) external; // Added simulatedUpdates
 
     // --- View Functions ---
 

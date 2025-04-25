@@ -138,11 +138,11 @@ contract MockRewardsController is IRewardsController {
     }
 
     function processUserBalanceUpdates(
-        address signer,
+        address signer, // Added signer parameter to match interface
         address user,
         BalanceUpdateData[] calldata updates,
         bytes calldata /*signature*/
-    ) external override {
+    ) external override { // Added override
         processUserBalanceUpdatesCalledCount++;
         // Using block.timestamp as placeholder for nonce
         emit MockProcessUserBalanceUpdatesCalled(user, block.timestamp, updates.length); // Note: Event doesn't include signer
@@ -155,13 +155,13 @@ contract MockRewardsController is IRewardsController {
         });
     }
 
-    function claimRewardsForCollection(address collection) external override {
+    function claimRewardsForCollection(address collection, BalanceUpdateData[] calldata /* simulatedUpdates */) external override {
         claimRewardsForCollectionCalledCount++;
         emit MockClaimForCollectionCalled(msg.sender, collection);
         if (!claimResult) revert("Mock claim failed");
     }
 
-    function claimRewardsForAll() external override {
+    function claimRewardsForAll(BalanceUpdateData[] calldata /* simulatedUpdates */) external override {
         claimRewardsForAllCollectionsCalledCount++;
         emit MockClaimForAllCalled(msg.sender);
         if (!claimResult) revert("Mock claim failed");
