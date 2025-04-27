@@ -12,18 +12,16 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-// import "forge-std/console.sol"; // Removed duplicate
 import {CErc20Interface, CTokenInterface} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol";
 
 import {IRewardsController} from "./interfaces/IRewardsController.sol";
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
-import "forge-std/console.sol";
 
 /**
  * @title RewardsController (Upgradeable)
  * @notice Manages reward calculation and distribution, incorporating NFT-based bonus multipliers.
  * @dev Implements IRewardsController. Tracks user NFT balances, calculates yield (base + bonus),
- *      and distributes rewards by pulling base yield from the LendingManager. Uses EIP-712 for signed balance updates (single and batch).
+ *      and distributes rewards by pulling base yield from the LendingManager. Uses EIP-712 for signed balance updates.
  *      Upgradeable using the Transparent Proxy pattern.
  */
 contract RewardsController is
@@ -38,13 +36,12 @@ contract RewardsController is
 
     /**
      * @notice Struct to hold reward tracking data per user per collection.
-     * @dev Mirrors relevant fields needed for internal logic, distinct from IRewardsController.UserNFTInfo if necessary.
      */
     struct UserRewardState {
         uint256 lastRewardIndex; // Global index at the last update for this user/collection
         uint256 accruedReward; // Total rewards accumulated since last claim
         uint256 lastNFTBalance; // NFT balance at the last update
-        uint256 lastBalance; // Relevant balance (deposit or borrow) at the last update - Renamed from lastDepositAmount
+        uint256 lastBalance; // Relevant balance (deposit or borrow) at the last update
         uint256 lastUpdateBlock; // Block number of the last update
     }
 
@@ -62,6 +59,7 @@ contract RewardsController is
         keccak256("UserBalanceUpdates(address user,BalanceUpdateData[] updates,uint256 nonce)");
 
     uint256 private constant PRECISION_FACTOR = 1e18;
+    uint256 private constant MAX_REWARD_SHARE_PERCENTAGE = 10000; // 100.00%
 
     // State variables
     ILendingManager public lendingManager;
@@ -73,7 +71,8 @@ contract RewardsController is
     // NFT Collection Management
     EnumerableSet.AddressSet private _whitelistedCollections;
     mapping(address => uint256) public collectionBetas; // collection => beta (reward coefficient)
-    mapping(address => IRewardsController.RewardBasis) public collectionRewardBasis; // Use fully qualified enum name
+    mapping(address => IRewardsController.RewardBasis) public collectionRewardBasis;
+    mapping(address => uint256) public collectionRewardSharePercentages; // collection => rewardSharePercentage (e.g., 6000 for 60.00%)
 
     // User Reward Tracking
     mapping(address => mapping(address => UserRewardState)) internal userRewardState;
@@ -82,8 +81,9 @@ contract RewardsController is
 
     // Global Reward State
     uint256 public globalRewardIndex;
-    uint256 public lastDistributionBlock;
-    uint256 public baseRewardRate; // Additional base reward rate per deposit per index unit change (scaled by PRECISION_FACTOR)
+
+    // --- Epoch & Scaling State ---
+    uint256 public epochDuration; // Duration of each reward epoch in seconds
 
     // --- Events ---
     // Note: Events are inherited from IRewardsController.
@@ -92,9 +92,9 @@ contract RewardsController is
     );
     event BalanceUpdateProcessed(
         address indexed user, address indexed collection, uint256 blockNumber, int256 balanceDelta, uint256 finalBalance
-    ); // Renamed from DepositUpdateProcessed
-    event BaseRewardRateUpdated(uint256 oldRate, uint256 newRate); // Added event
-    event YieldTransferCapped(address indexed user, uint256 calculatedReward, uint256 transferredAmount); // Added event for transparency
+    );
+    event YieldTransferCapped(address indexed user, uint256 calculatedReward, uint256 transferredAmount);
+    event CollectionRewardShareUpdated(address indexed collection, uint256 oldSharePercentage, uint256 newSharePercentage);
 
     error AddressZero();
     error CollectionNotWhitelisted(address collection);
@@ -114,6 +114,8 @@ contract RewardsController is
     error SimulationBlockInPast(uint256 lastBlock, uint256 simBlock);
     error UserMismatch(address expectedUser, address actualUser);
     error CollectionsArrayEmpty();
+    error InvalidEpochDuration();
+    error InvalidRewardSharePercentage();
 
     modifier onlyWhitelistedCollection(address collection) {
         if (!_whitelistedCollections.contains(collection)) {
@@ -126,7 +128,8 @@ contract RewardsController is
         address initialOwner,
         address _lendingManagerAddress,
         address _vaultAddress,
-        address _authorizedUpdater
+        address _authorizedUpdater,
+        uint256 _initialEpochDuration
     ) public initializer {
         __Ownable_init(initialOwner);
         __ReentrancyGuard_init();
@@ -135,65 +138,67 @@ contract RewardsController is
         if (_lendingManagerAddress == address(0)) revert AddressZero();
         if (_vaultAddress == address(0)) revert AddressZero();
         if (_authorizedUpdater == address(0)) revert AddressZero();
+        if (_initialEpochDuration == 0) revert InvalidEpochDuration();
 
         lendingManager = ILendingManager(_lendingManagerAddress);
         vault = IERC4626(_vaultAddress);
 
-        // --- Assertions Start ---
-        if (address(lendingManager) == address(0)) revert AddressZero(); // Check LM interface cast
-        if (address(vault) == address(0)) revert AddressZero(); // Check Vault interface cast
+        if (address(lendingManager) == address(0)) revert AddressZero();
+        if (address(vault) == address(0)) revert AddressZero();
 
         IERC20 _rewardToken = lendingManager.asset();
-        if (address(_rewardToken) == address(0)) revert AddressZero(); // Check LM.asset()
+        if (address(_rewardToken) == address(0)) revert AddressZero();
 
         address _vaultAsset = vault.asset();
-        if (_vaultAsset == address(0)) revert AddressZero(); // Check Vault.asset()
+        if (_vaultAsset == address(0)) revert AddressZero();
         if (_vaultAsset != address(_rewardToken)) revert VaultMismatch();
-        // --- Assertions End ---
 
         rewardToken = _rewardToken;
         authorizedUpdater = _authorizedUpdater;
 
-        lastDistributionBlock = block.number;
         address _cTokenAddress = address(lendingManager.cToken());
-        if (_cTokenAddress == address(0)) revert AddressZero(); // Check LM.cToken()
+        if (_cTokenAddress == address(0)) revert AddressZero();
         cToken = CTokenInterface(_cTokenAddress);
-        if (address(cToken) == address(0)) revert AddressZero(); // Check cToken interface cast
+        if (address(cToken) == address(0)) revert AddressZero();
 
         uint256 initialExchangeRate = cToken.exchangeRateStored();
-        // TODO: Decide on scaling/normalization for the index if needed.
+        // The cToken exchange rate serves as the base global index.
         globalRewardIndex = initialExchangeRate;
+
+        epochDuration = _initialEpochDuration;
     }
 
     function setAuthorizedUpdater(address _newUpdater) external onlyOwner {
-        // Removed override
         if (_newUpdater == address(0)) revert AddressZero();
         address oldUpdater = authorizedUpdater;
         authorizedUpdater = _newUpdater;
         emit AuthorizedUpdaterChanged(oldUpdater, _newUpdater);
     }
 
-    // Use fully qualified enum name in parameter
-    function addNFTCollection(address collection, uint256 beta, IRewardsController.RewardBasis rewardBasis)
+    function addNFTCollection(address collection, uint256 beta, IRewardsController.RewardBasis rewardBasis, uint256 rewardSharePercentage)
         external
+        override
         onlyOwner
     {
         if (collection == address(0)) revert AddressZero();
         if (_whitelistedCollections.contains(collection)) revert CollectionAlreadyExists(collection);
+        if (rewardSharePercentage > MAX_REWARD_SHARE_PERCENTAGE) revert InvalidRewardSharePercentage();
 
-        _whitelistedCollections.add(collection); // Use EnumerableSet add
+        _whitelistedCollections.add(collection);
         collectionBetas[collection] = beta;
-        collectionRewardBasis[collection] = rewardBasis; // Store reward basis
+        collectionRewardBasis[collection] = rewardBasis;
+        collectionRewardSharePercentages[collection] = rewardSharePercentage;
 
-        emit NFTCollectionAdded(collection, beta, rewardBasis); // Emit updated event
+        emit NFTCollectionAdded(collection, beta, rewardBasis, rewardSharePercentage);
     }
 
-    function removeNFTCollection(address collection) external onlyOwner {
-        require(_whitelistedCollections.contains(collection), "RC: Collection not whitelisted"); // Use EnumerableSet contains
+    function removeNFTCollection(address collection) external override onlyOwner {
+        require(_whitelistedCollections.contains(collection), "RC: Collection not whitelisted");
 
-        _whitelistedCollections.remove(collection); // Use EnumerableSet remove
+        _whitelistedCollections.remove(collection);
         delete collectionBetas[collection];
-        delete collectionRewardBasis[collection]; // Clean up reward basis
+        delete collectionRewardBasis[collection];
+        delete collectionRewardSharePercentages[collection];
 
         emit NFTCollectionRemoved(collection);
     }
@@ -209,14 +214,28 @@ contract RewardsController is
         emit BetaUpdated(collection, oldBeta, newBeta);
     }
 
+    // --- Epoch & Scaling Admin Functions ---
+
     /**
-     * @notice Sets the additional base reward rate.
-     * @param _newRate The new base reward rate, scaled by PRECISION_FACTOR.
+     * @notice Set the duration for reward epochs.
+     * @inheritdoc IRewardsController
      */
-    function setBaseRewardRate(uint256 _newRate) external onlyOwner {
-        uint256 oldRate = baseRewardRate;
-        baseRewardRate = _newRate;
-        emit BaseRewardRateUpdated(oldRate, _newRate);
+    function setEpochDuration(uint256 newDuration) external onlyOwner {
+        if (newDuration == 0) revert InvalidEpochDuration();
+        uint256 oldDuration = epochDuration;
+        epochDuration = newDuration;
+        // Consider adding an event if needed for off-chain tracking
+    }
+
+    /**
+     * @notice Set the percentage of lending yield allocated to rewards for a specific collection.
+     * @inheritdoc IRewardsController
+     */
+    function setCollectionRewardSharePercentage(address collection, uint256 newSharePercentage) external override onlyOwner onlyWhitelistedCollection(collection) {
+        if (newSharePercentage > MAX_REWARD_SHARE_PERCENTAGE) revert InvalidRewardSharePercentage();
+        uint256 oldSharePercentage = collectionRewardSharePercentages[collection];
+        collectionRewardSharePercentages[collection] = newSharePercentage;
+        emit CollectionRewardShareUpdated(collection, oldSharePercentage, newSharePercentage);
     }
 
     // --- Balance Update Processing --- //
@@ -225,7 +244,6 @@ contract RewardsController is
      * @notice Processes a batch of signed balance updates (NFT and/or deposit) for multiple users/collections.
      * @dev Uses authorized updater's nonce. Emits BalanceUpdatesProcessed.
      */
-    // Added 'address signer' parameter to match interface
     function processBalanceUpdates(address signer, UserBalanceUpdateData[] calldata updates, bytes calldata signature)
         external
         override
@@ -267,7 +285,6 @@ contract RewardsController is
      * @notice Processes a batch of signed balance updates (NFT and/or deposit) for a single user across multiple collections.
      * @dev Uses authorized updater's nonce. Emits UserBalanceUpdatesProcessed.
      */
-    // Added 'address signer' parameter to match interface
     function processUserBalanceUpdates(
         address signer,
         address user,
@@ -297,7 +314,6 @@ contract RewardsController is
             if (!_whitelistedCollections.contains(updates[i].collection)) {
                 revert CollectionNotWhitelisted(updates[i].collection);
             }
-            // Use balanceDelta instead of depositDelta
             _processSingleUpdate(
                 user, updates[i].collection, updates[i].blockNumber, updates[i].nftDelta, updates[i].balanceDelta
             );
@@ -349,12 +365,11 @@ contract RewardsController is
         address user,
         address collection,
         uint256 blockNumber,
-        int256 depositDelta, // Keep param name for test function signature consistency
+        int256 depositDelta,
         bytes calldata signature
     ) external nonReentrant {
         address signer = authorizedUpdater;
 
-        // Hash using BALANCE_UPDATE_DATA_TYPEHASH with 0 for nftDelta and depositDelta for balanceDelta
         bytes32 structHash =
             keccak256(abi.encode(BALANCE_UPDATE_DATA_TYPEHASH, collection, blockNumber, 0, depositDelta));
 
@@ -365,24 +380,20 @@ contract RewardsController is
             revert InvalidSignature();
         }
 
-        // Nonce increment was missing here, adding it back
-        // uint256 nonce = authorizedUpdaterNonce[signer]; // <-- Remove unused variable
         authorizedUpdaterNonce[signer]++;
 
         if (!_whitelistedCollections.contains(collection)) {
             revert CollectionNotWhitelisted(collection);
         }
 
-        // Call _processSingleUpdate with 0 for nftDelta and depositDelta for balanceDelta
         _processSingleUpdate(user, collection, blockNumber, 0, depositDelta);
 
-        // Emit the renamed event with correct parameters
         emit BalanceUpdateProcessed(
             user,
             collection,
             blockNumber,
             depositDelta,
-            userRewardState[user][collection].lastBalance // Use lastBalance
+            userRewardState[user][collection].lastBalance
         );
     }
 
@@ -398,7 +409,7 @@ contract RewardsController is
                     updates[i].collection,
                     updates[i].blockNumber,
                     updates[i].nftDelta,
-                    updates[i].balanceDelta // Use balanceDelta
+                    updates[i].balanceDelta
                 )
             );
         }
@@ -414,7 +425,7 @@ contract RewardsController is
                     updates[i].collection,
                     updates[i].blockNumber,
                     updates[i].nftDelta,
-                    updates[i].balanceDelta // Use balanceDelta
+                    updates[i].balanceDelta
                 )
             );
         }
@@ -423,69 +434,52 @@ contract RewardsController is
 
     // --- Core Update Logic --- //
 
-    // Updated parameter name: balanceDelta
+    /**
+     * @dev Processes a single balance update, updating user state but not calculating rewards.
+     *      Handles out-of-order updates and updates active collection list.
+     */
     function _processSingleUpdate(
         address user,
         address collection,
         uint256 updateBlock,
         int256 nftDelta,
-        int256 balanceDelta // Renamed from depositDelta
+        int256 balanceDelta
     ) internal {
         UserRewardState storage info = userRewardState[user][collection];
 
         // Handle updates arriving out of order or for blocks already processed
         if (updateBlock < info.lastUpdateBlock) {
             // Allow updates for the *current* block even if lastUpdateBlock is the same
-            // This handles multiple updates within the same block (e.g., deposit + NFT transfer)
             if (updateBlock != block.number) {
                 revert UpdateOutOfOrder(user, collection, updateBlock, info.lastUpdateBlock);
             }
-            // If updateBlock == block.number == info.lastUpdateBlock, proceed to apply deltas below
         }
 
-        // If this is the first update or the update is for a future block
+        // If this is the first update or the update is for a future block relative to the last state update
         if (info.lastUpdateBlock == 0 || updateBlock > info.lastUpdateBlock) {
-            // Update global index up to the block *before* the update if necessary
-            // If the update is for a block later than the last distribution, update the global index.
-            if (updateBlock > lastDistributionBlock) {
-                _updateGlobalRewardIndexTo(updateBlock);
-            }
-
-            // If it's not the very first update, calculate rewards for the period ended
-            if (info.lastUpdateBlock != 0) {
-                uint256 indexDeltaForPeriod = globalRewardIndex - info.lastRewardIndex;
-                // Pass lastBalance instead of lastDepositAmount
-                uint256 rewardForPeriod = _calculateRewardsWithDelta(
-                    collection, indexDeltaForPeriod, info.lastRewardIndex, info.lastNFTBalance, info.lastBalance
-                );
-                info.accruedReward += rewardForPeriod;
-            }
-
-            // Set the user's index and block to the current global state *after* potential update
-            info.lastRewardIndex = globalRewardIndex;
-            info.lastUpdateBlock = updateBlock;
+            // Rewards are calculated lazily in _getPendingRewards... functions.
+            // Set the user's index and block to the current global state
+            info.lastRewardIndex = globalRewardIndex; // Record the index corresponding to this update block
+            info.lastUpdateBlock = updateBlock; // Record the block number of this update
         }
-        // If updateBlock == info.lastUpdateBlock (and potentially == block.number),
-        // we don't recalculate rewards or update index/block, just apply deltas.
 
         // Apply deltas to the stored state
         info.lastNFTBalance = _applyDelta(info.lastNFTBalance, nftDelta);
-        info.lastBalance = _applyDelta(info.lastBalance, balanceDelta); // Update lastBalance
+        info.lastBalance = _applyDelta(info.lastBalance, balanceDelta);
 
-        // Emit events (Consider combining into one event?)
+        // Emit events
         if (nftDelta != 0) {
             emit NFTBalanceUpdateProcessed(user, collection, updateBlock, nftDelta, info.lastNFTBalance);
         }
         if (balanceDelta != 0) {
-            // Use the renamed event
             emit BalanceUpdateProcessed(user, collection, updateBlock, balanceDelta, info.lastBalance);
         }
 
         // Update active collections list based on final state
         if (info.lastNFTBalance > 0 || info.lastBalance > 0) {
-            _userActiveCollections[user].add(collection); // Idempotent add
+            _userActiveCollections[user].add(collection);
         } else {
-            _userActiveCollections[user].remove(collection); // Idempotent remove
+            _userActiveCollections[user].remove(collection);
         }
     }
 
@@ -501,88 +495,57 @@ contract RewardsController is
         }
     }
 
+    /**
+     * @notice Calculates the raw, unscaled reward for a specific period based on index change and balances.
+     * @dev Applies the collection's reward share percentage.
+     * @param nftCollection The collection address.
+     * @param indexDelta The change in the global index during the period.
+     * @param lastRewardIndex The global index at the *start* of the period.
+     * @param nftBalanceDuringPeriod The user's NFT balance held constant during the period.
+     * @param balanceDuringPeriod The user's deposit/borrow balance held constant during the period.
+     * @param rewardSharePercentage The reward share percentage for this specific collection.
+     * @return rawReward The raw reward for the period, incorporating the share percentage.
+     */
     function _calculateRewardsWithDelta(
         address nftCollection,
         uint256 indexDelta,
-        uint256 lastRewardIndex, // <-- Add lastRewardIndex (previous exchange rate)
+        uint256 lastRewardIndex,
         uint256 nftBalanceDuringPeriod,
-        uint256 balanceDuringPeriod // Renamed from depositAmountDuringPeriod
-    ) internal view returns (uint256 reward) {
-        // If user has no NFTs from this collection during the period, they get no reward for it.
-        if (nftBalanceDuringPeriod == 0) {
-            return 0;
-        }
-
-        if (indexDelta == 0 || balanceDuringPeriod == 0 || lastRewardIndex == 0) {
+        uint256 balanceDuringPeriod,
+        uint256 rewardSharePercentage
+    ) internal view returns (uint256 rawReward) {
+        if (nftBalanceDuringPeriod == 0 || indexDelta == 0 || balanceDuringPeriod == 0 || lastRewardIndex == 0) {
             return 0;
         }
 
         // Calculate base reward from yield (change in exchange rate)
         uint256 yieldReward = (balanceDuringPeriod * indexDelta) / lastRewardIndex;
 
-        // Calculate additional base reward based on the configurable rate
-        uint256 additionalBaseReward = 0;
-        if (baseRewardRate > 0) {
-            // Scale similarly to yield reward: deposit * indexDelta * rate / (lastIndex * precision)
-            additionalBaseReward =
-                (balanceDuringPeriod * indexDelta * baseRewardRate) / (lastRewardIndex * PRECISION_FACTOR);
-        }
+        // Apply the collection's reward share percentage to the yield reward
+        uint256 allocatedYieldReward = (yieldReward * rewardSharePercentage) / MAX_REWARD_SHARE_PERCENTAGE;
 
-        uint256 totalBaseReward = yieldReward + additionalBaseReward;
-
-        // NFT balance check is now at the top, so we know nftBalanceDuringPeriod > 0 here.
         uint256 beta = collectionBetas[nftCollection];
         uint256 boostFactor = calculateBoost(nftBalanceDuringPeriod, beta);
 
-        // Bonus reward is calculated as a percentage of the *total* base reward
-        uint256 bonusReward = (totalBaseReward * boostFactor) / PRECISION_FACTOR;
-        reward = totalBaseReward + bonusReward;
+        // Bonus reward is calculated as a percentage of the *allocated* base reward
+        uint256 bonusReward = (allocatedYieldReward * boostFactor) / PRECISION_FACTOR;
+        rawReward = allocatedYieldReward + bonusReward;
 
-        return reward;
+        return rawReward;
     }
 
     /**
      * @notice Calculates the current global index based on the cToken exchange rate.
      * @dev Calls `accrueInterest` on the cToken to update the rate before reading it.
      *      The exchange rate itself represents the index.
-     * @param targetBlock The block number to calculate the index for (unused in this implementation,
-     *                    as exchange rate reflects current state after accrual).
-     * @return currentIndex The current exchange rate stored in the cToken contract.
+     * @return currentIndex The current exchange rate stored in the cToken contract after interest accrual.
      */
-    function _calculateGlobalIndexAt(uint256 targetBlock) internal returns (uint256 currentIndex) {
-        targetBlock; // Silence unused parameter warning
-
+    function _calculateGlobalIndexAt() internal returns (uint256 currentIndex) {
         uint256 accrualResult = cToken.accrueInterest();
         accrualResult; // Silence compiler warning
 
         currentIndex = cToken.exchangeRateStored();
         return currentIndex;
-    }
-
-    /**
-     * @notice Updates the global reward index and last distribution block up to the specified target block.
-     * @dev Reads the current reward rate from the LendingManager to calculate the index increase.
-     */
-    function _updateGlobalRewardIndexTo(uint256 targetBlock) internal {
-        if (targetBlock <= lastDistributionBlock) {
-            return;
-        }
-
-        uint256 newGlobalIndex = _calculateGlobalIndexAt(targetBlock);
-
-        if (newGlobalIndex != globalRewardIndex) {
-            globalRewardIndex = newGlobalIndex;
-        }
-
-        lastDistributionBlock = targetBlock;
-    }
-
-    /**
-     * @notice Updates the global reward index up to the current block number.
-     * @dev Convenience wrapper around _updateGlobalRewardIndexTo.
-     */
-    function updateGlobalRewardIndex() public {
-        _updateGlobalRewardIndexTo(block.number);
     }
 
     // --- Public View Functions --- //
@@ -619,7 +582,7 @@ contract RewardsController is
             trackingInfo[i] = UserCollectionTracking({
                 lastUpdateBlock: internalInfo.lastUpdateBlock,
                 lastNFTBalance: internalInfo.lastNFTBalance,
-                lastBalance: internalInfo.lastBalance, // Use renamed field
+                lastBalance: internalInfo.lastBalance,
                 lastUserRewardIndex: internalInfo.lastRewardIndex
             });
         }
@@ -636,7 +599,6 @@ contract RewardsController is
         return collectionBetas[nftCollection];
     }
 
-    // Use fully qualified enum name in return type
     function getCollectionRewardBasis(address nftCollection)
         external
         view
@@ -654,403 +616,221 @@ contract RewardsController is
     /**
      * @notice Preview total pending rewards for a user across multiple specified collections, optionally simulating future updates.
      * @inheritdoc IRewardsController
+     * @dev Calculates raw rewards using per-collection share percentages.
      */
     function previewRewards(
         address user,
         address[] calldata nftCollections,
         BalanceUpdateData[] calldata simulatedUpdates
     ) external override returns (uint256 pendingReward) {
-        // Added 'override' back
+        // Note: This function modifies state by calling _calculateGlobalIndexAt -> accrueInterest
         if (nftCollections.length == 0) {
             return 0;
         }
 
-        uint256 totalPendingReward = 0;
+        uint256 totalRawPendingReward = 0;
         for (uint256 i = 0; i < nftCollections.length; i++) {
             address collection = nftCollections[i];
             if (!isCollectionWhitelisted(collection)) {
-                continue; // Skip non-whitelisted collections
+                revert CollectionNotWhitelisted(collection);
             }
-            // Internal function will filter simulated updates by collection
-            totalPendingReward += _getPendingRewardsSingleCollection(user, collection, simulatedUpdates);
+            totalRawPendingReward += _getRawPendingRewardsSingleCollection(user, collection, simulatedUpdates);
         }
 
-        return totalPendingReward;
+        pendingReward = totalRawPendingReward;
+
+        return pendingReward;
     }
 
-    // Helper to check whitelist status (used in previewRewards)
     function isCollectionWhitelisted(address collection) public view returns (bool) {
-        return _whitelistedCollections.contains(collection); // Use EnumerableSet contains
+        return _whitelistedCollections.contains(collection);
     }
 
     function getWhitelistedCollections() external view override returns (address[] memory) {
-        return _whitelistedCollections.values(); // Return values from the EnumerableSet
+        return _whitelistedCollections.values();
     }
+
+    // --- Claiming Functions ---
 
     function claimRewardsForCollection(
         address nftCollection,
-        BalanceUpdateData[] calldata simulatedUpdates // Added simulatedUpdates parameter
+        BalanceUpdateData[] calldata simulatedUpdates
     ) external override nonReentrant onlyWhitelistedCollection(nftCollection) {
         address user = msg.sender;
 
-        // Calculate pending rewards based on index up to current block *before* updating global state
-        // Pass simulatedUpdates to the calculation
-        uint256 totalReward = _getPendingRewardsSingleCollection(user, nftCollection, simulatedUpdates);
+        // 1. Calculate raw pending rewards (includes share percentage)
+        uint256 rawReward = _getRawPendingRewardsSingleCollection(user, nftCollection, simulatedUpdates);
 
-        // Allow claiming 0 rewards to update internal state, but skip transfers if reward is 0.
-        // if (totalReward == 0) {
-        //     revert NoRewardsToClaim();
-        // }
+        // 2. Update global index state *before* transfers and user state update
+        uint256 indexAtClaim = _calculateGlobalIndexAt();
+        globalRewardIndex = indexAtClaim;
 
-        // Now update the global index state *before* transfers and user state update
-        updateGlobalRewardIndex(); // Updated internal call
-        uint256 indexAtClaim = globalRewardIndex; // Capture index *after* global update
-
-        // 4. Request yield transfer from LendingManager (only if there's something to claim)
+        // 3. Request yield transfer from LendingManager
         uint256 amountActuallyTransferred = 0;
-        if (totalReward > 0) {
-            amountActuallyTransferred = lendingManager.transferYield(totalReward, address(this));
+        if (rawReward > 0) {
+            amountActuallyTransferred = lendingManager.transferYield(rawReward, address(this));
         }
 
-        // Check if LM transferred less than expected (due to capping)
-        uint256 rewardDeficit = 0;
-
-        if (amountActuallyTransferred < totalReward) {
-            emit YieldTransferCapped(user, totalReward, amountActuallyTransferred); // Emit event if capped
-            rewardDeficit = totalReward - amountActuallyTransferred;
-            console.log("RC.claim: Yield capped. Deficit=%s", rewardDeficit); // <-- Change back to console.log
-                // Use the actual amount transferred for the user transfer
-                // totalReward = amountActuallyTransferred; // No longer needed, use amountActuallyTransferred directly
+        // 4. Check if LM transferred less than requested
+        if (amountActuallyTransferred < rawReward) {
+            emit YieldTransferCapped(user, rawReward, amountActuallyTransferred);
         }
 
         // 5. Update user state
-        console.log( // <-- Change back to console.log
-            "RC.claim: Updating state. accruedReward=%s, lastIdx=%s, lastBlock=%s",
-            rewardDeficit,
-            indexAtClaim,
-            block.number
-        );
         UserRewardState storage info = userRewardState[user][nftCollection];
-        // Store the unpaid amount (deficit). It will be added to future calculations.
-        info.accruedReward = rewardDeficit;
-        // Update the index to mark rewards accounted for up to this point
+        info.accruedReward = 0; // Reset accrued reward
         info.lastRewardIndex = indexAtClaim;
-        // Also update the last update block to the current claim block
         info.lastUpdateBlock = block.number;
 
-        // 6. Transfer the (potentially capped) amount to the user
-        // Emit the event regardless of the amount transferred
-        emit RewardsClaimedForCollection(user, nftCollection, amountActuallyTransferred); // Corrected event name
+        // 6. Transfer the amount actually received from LM to the user
+        emit RewardsClaimedForCollection(user, nftCollection, amountActuallyTransferred);
 
-        // Transfer only if there's an amount > 0
         if (amountActuallyTransferred > 0) {
             rewardToken.safeTransfer(user, amountActuallyTransferred);
         }
     }
 
     function claimRewardsForAll(BalanceUpdateData[] calldata simulatedUpdates) external override nonReentrant {
-        // Keep override
-        // Added simulatedUpdates parameter
         address user = msg.sender;
         address[] memory collectionsToClaim = _userActiveCollections[user].values();
         if (collectionsToClaim.length == 0) revert NoRewardsToClaim();
 
-        // Use arrays to store pending rewards per collection temporarily
-        uint256[] memory pendingRewardsPerCollection = new uint256[](collectionsToClaim.length);
-        uint256 totalRewardsToSend = 0;
-
-        // Calculate pending rewards for each collection *before* updating global state
+        // 1. Calculate total raw pending rewards across all collections
+        uint256 totalRawRewards = 0;
         for (uint256 i = 0; i < collectionsToClaim.length; i++) {
             address collection = collectionsToClaim[i];
-            // Pass simulatedUpdates to the calculation
-            uint256 rewardForCollection = _getPendingRewardsSingleCollection(user, collection, simulatedUpdates);
-            pendingRewardsPerCollection[i] = rewardForCollection; // Store reward by index
-            totalRewardsToSend += rewardForCollection;
+            totalRawRewards += _getRawPendingRewardsSingleCollection(user, collection, simulatedUpdates);
         }
-        console.logString("RC.claimAll: User=");
-        console.logAddress(msg.sender);
-        console.logString(" Calculated totalRewardsToSend=");
-        console.logUint(totalRewardsToSend); // Log total calculated
 
-        if (totalRewardsToSend == 0) revert NoRewardsToClaim();
+        // 2. Update global index state
+        uint256 indexAtClaim = _calculateGlobalIndexAt();
+        globalRewardIndex = indexAtClaim;
 
-        // Now update the global index state *before* transfers and user state update
-        updateGlobalRewardIndex(); // Updated internal call
-        uint256 indexAtClaim = globalRewardIndex;
-        console.logString("RC.claimAll: User=");
-        console.logAddress(msg.sender);
-        console.logString(" indexAtClaim=");
-        console.logUint(indexAtClaim); // Log index
-
-        // --- Start: Cap reward request based on LM available yield ---
+        // 3. Request yield transfer from LendingManager, capped by available yield
         uint256 lmTotalAssets = lendingManager.totalAssets();
         uint256 lmPrincipal = lendingManager.totalPrincipalDeposited();
         uint256 maxAvailableYield = (lmTotalAssets > lmPrincipal) ? lmTotalAssets - lmPrincipal : 0;
-
-        // Cap the total rewards requested from LM
-        uint256 amountToRequest = Math.min(totalRewardsToSend, maxAvailableYield);
-        uint256 knownDeficitBeforeTransfer = totalRewardsToSend - amountToRequest; // Deficit due to capping before LM call
-        console.logString("RC.claimAll: User=");
-        console.logAddress(msg.sender);
-        console.logString(" maxAvailableYield=");
-        console.logUint(maxAvailableYield);
-        console.logString(" amountToRequest=");
-        console.logUint(amountToRequest);
-        console.logString(" knownDeficitBeforeTransfer=");
-        console.logUint(knownDeficitBeforeTransfer); // Log capping details
-        // --- End: Cap reward request ---
+        uint256 amountToRequest = Math.min(totalRawRewards, maxAvailableYield);
 
         uint256 amountActuallyTransferred = 0;
         if (amountToRequest > 0) {
-            // Request the potentially capped amount from LM
-            console.logString("RC.claimAll: User=");
-            console.logAddress(msg.sender);
-            console.logString(" Calling LM.transferYield with amount=");
-            console.logUint(amountToRequest); // Log LM call amount
             amountActuallyTransferred = lendingManager.transferYield(amountToRequest, address(this));
-            console.logString("RC.claimAll: User=");
-            console.logAddress(msg.sender);
-            console.logString(" LM.transferYield returned amount=");
-            console.logUint(amountActuallyTransferred); // Log LM return amount
         }
 
-        // Check for unexpected shortfall during LM transfer (amount received < amount requested)
-        uint256 shortfallDuringTransfer = 0;
+        // 4. Check if LM transferred less than requested
         if (amountActuallyTransferred < amountToRequest) {
-            // This indicates an issue within LM.redeem or unexpected state change after our check
-            shortfallDuringTransfer = amountToRequest - amountActuallyTransferred;
-            // Use the YieldTransferCapped event to log this unexpected shortfall
             emit YieldTransferCapped(user, amountToRequest, amountActuallyTransferred);
         }
 
-        uint256 totalAmountToPayUser = amountActuallyTransferred; // User receives what LM actually sent
-        uint256 totalDeficit = knownDeficitBeforeTransfer + shortfallDuringTransfer; // Total unpaid reward
-        console.logString("RC.claimAll: User=");
-        console.logAddress(msg.sender);
-        console.logString(" shortfallDuringTransfer=");
-        console.logUint(shortfallDuringTransfer);
-        console.logString(" totalDeficit=");
-        console.logUint(totalDeficit);
-        console.logString(" totalAmountToPayUser=");
-        console.logUint(totalAmountToPayUser); // Log deficit details
-
-        // Distribute the deficit proportionally back to the collections' accruedReward state
-        if (totalDeficit > 0 && totalRewardsToSend > 0) {
-            console.logString("RC.claimAll: User=");
-            console.logAddress(msg.sender);
-            console.logString(" Distributing deficit..."); // Log deficit path
-            // Calculate the ratio of the total deficit to the original total calculated reward
-            uint256 deficitRatio = (totalDeficit * PRECISION_FACTOR) / totalRewardsToSend;
-            console.logString("RC.claimAll: User=");
-            console.logAddress(msg.sender);
-            console.logString(" deficitRatio (1e18)=");
-            console.logUint(deficitRatio); // Log deficit ratio
-
-            for (uint256 i = 0; i < collectionsToClaim.length; i++) {
-                address collection = collectionsToClaim[i];
-                uint256 rewardForThisCollection = pendingRewardsPerCollection[i];
-                // Calculate the deficit portion for this collection
-                uint256 deficitForThisCollection = (rewardForThisCollection * deficitRatio) / PRECISION_FACTOR;
-                console.logString("RC.claimAll: User=");
-                console.logAddress(msg.sender);
-                console.logString(" Collection=");
-                console.logAddress(collection);
-                console.logString(" rewardForThisCollection=");
-                console.logUint(rewardForThisCollection);
-                console.logString(" deficitForThisCollection=");
-                console.logUint(deficitForThisCollection); // Log per-collection deficit
-
-                UserRewardState storage info = userRewardState[user][collection];
-                // Store the unpaid portion as the new accrued reward
-                info.accruedReward = deficitForThisCollection;
-                // Update the index and block number, marking rewards processed up to this point
-                info.lastRewardIndex = indexAtClaim;
-                info.lastUpdateBlock = block.number; // Also update block number on claim
-                console.logString("RC.claimAll: User=");
-                console.logAddress(msg.sender);
-                console.logString(" Collection=");
-                console.logAddress(collection);
-                console.logString(" FINAL info.accruedReward=");
-                console.logUint(info.accruedReward); // Log final state in deficit path
-            }
-        } else {
-            console.logString("RC.claimAll: User=");
-            console.logAddress(msg.sender);
-            console.logString(" No deficit or zero total rewards. Resetting accruedReward."); // Log no-deficit path
-            // No deficit, reset accrued reward for all claimed collections
-            for (uint256 i = 0; i < collectionsToClaim.length; i++) {
-                address collection = collectionsToClaim[i];
-                UserRewardState storage info = userRewardState[user][collection];
-                info.accruedReward = 0; // Fully claimed
-                info.lastRewardIndex = indexAtClaim;
-                info.lastUpdateBlock = block.number; // Also update block number on claim
-                console.logString("RC.claimAll: User=");
-                console.logAddress(msg.sender);
-                console.logString(" Collection=");
-                console.logAddress(collection);
-                console.logString(" FINAL info.accruedReward=");
-                console.logUint(info.accruedReward); // Log final state in no-deficit path
-            }
+        // 5. Update user state for ALL claimed collections
+        for (uint256 i = 0; i < collectionsToClaim.length; i++) {
+            address collection = collectionsToClaim[i];
+            UserRewardState storage info = userRewardState[user][collection];
+            info.accruedReward = 0;
+            info.lastRewardIndex = indexAtClaim;
+            info.lastUpdateBlock = block.number;
         }
 
-        // Transfer the total amount actually received from LM to the user
-        if (totalAmountToPayUser > 0) {
-            rewardToken.safeTransfer(user, totalAmountToPayUser);
-            // Emit one event for the aggregate claim
-            emit RewardsClaimedForAll(user, totalAmountToPayUser);
-        } else if (totalRewardsToSend > 0) {
-            // If rewards were calculated but nothing was paid (due to capping or LM issue), still emit event with 0
-            emit RewardsClaimedForAll(user, 0);
+        // 6. Transfer the total amount actually received from LM to the user
+        emit RewardsClaimedForAll(user, amountActuallyTransferred);
+
+        if (amountActuallyTransferred > 0) {
+            rewardToken.safeTransfer(user, amountActuallyTransferred);
         }
-        // If totalRewardsToSend was 0 initially, NoRewardsToClaim would have reverted earlier.
     }
 
-    // --- Reward Calculation & Claiming --- //
+    // --- Reward Calculation --- //
 
-    // Restored full function definition
-    // Updated parameter name: simulatedUpdates
-    // Updated internal variable names: simBalance
-    function _getPendingRewardsSingleCollection(
-        address user,
-        address nftCollection,
-        BalanceUpdateData[] memory simulatedUpdates
-    ) internal returns (uint256 pendingReward) {
-        // Removed 'view'
-        console.logString("_getPendingRewardsSingleCollection START: User=");
-        console.logAddress(user);
-        console.logString(" Collection=");
-        console.logAddress(nftCollection);
-
+    /**
+     * @notice Calculates the total raw, unscaled pending rewards for a single user/collection.
+     * @dev Iterates through stored state and simulated updates to calculate rewards period by period.
+     *      Calls _calculateGlobalIndexAt to get index values for specific blocks.
+     *      Uses the collection's specific rewardSharePercentage.
+     * @param user The user address.
+     * @param nftCollection The NFT collection address.
+     * @param simulatedUpdates Array of future updates to simulate (must be sorted by blockNumber).
+     * @return totalRawReward The total raw reward accrued up to the current block, including simulations and share percentage.
+     */
+    function _getRawPendingRewardsSingleCollection(
+        address user, address nftCollection, BalanceUpdateData[] memory simulatedUpdates
+    ) internal returns (uint256 totalRawReward) {
         UserRewardState memory currentState = userRewardState[user][nftCollection];
         uint256 currentNFTBalance = currentState.lastNFTBalance;
-        uint256 currentBalance = currentState.lastBalance; // Use currentBalance
+        uint256 currentBalance = currentState.lastBalance;
         uint256 lastProcessedBlock = currentState.lastUpdateBlock;
         uint256 lastProcessedIndex = currentState.lastRewardIndex;
-        uint256 accruedRewardSoFar = currentState.accruedReward; // Start with previously accrued reward
+        totalRawReward = currentState.accruedReward; // Should be 0
+        uint256 collectionSharePercentage = collectionRewardSharePercentages[nftCollection];
 
-        console.logString(" -> Initial State: lastIdx=");
-        console.logUint(lastProcessedIndex);
-        console.logString(" accruedReward=");
-        console.logUint(accruedRewardSoFar);
-        console.logString(" lastNFTBal=");
-        console.logUint(currentNFTBalance);
-        console.logString(" lastBal=");
-        console.logUint(currentBalance);
-        console.logString(" lastBlock=");
-        console.logUint(lastProcessedBlock);
+        // --- Process Simulated Updates ---
+        uint256 simIndex = 0;
+        while (simIndex < simulatedUpdates.length) {
+            BalanceUpdateData memory update = simulatedUpdates[simIndex];
 
-        // Apply simulated updates if any
-        if (simulatedUpdates.length > 0) {
-            console.logString(" -> Processing simulated updates...");
-            for (uint256 i = 0; i < simulatedUpdates.length; i++) {
-                BalanceUpdateData memory update = simulatedUpdates[i];
-
-                // Ensure simulated updates are for the correct collection and are in order
-                if (update.collection != nftCollection) continue; // Skip updates for other collections
-                if (update.blockNumber < lastProcessedBlock) {
-                    revert SimulationUpdateOutOfOrder(update.blockNumber, lastProcessedBlock);
-                }
-
-                console.logString(" --> Sim Update [");
-                console.logUint(i);
-                console.logString("]: block=");
-                console.logUint(update.blockNumber);
-                console.logString(" nftDelta=");
-                console.logInt(update.nftDelta);
-                console.logString(" balDelta=");
-                console.logInt(update.balanceDelta);
-
-                // Calculate rewards up to the block *before* this simulated update
-                if (update.blockNumber > lastProcessedBlock) {
-                    console.logString(" ---> Calculating rewards for period [");
-                    console.logUint(lastProcessedBlock);
-                    console.logString(" -> ");
-                    console.logUint(update.blockNumber);
-                    console.logString("]");
-                    uint256 indexAtSimUpdateBlock = _calculateGlobalIndexAt(update.blockNumber); // Simulate index at that block
-                    uint256 indexDelta = indexAtSimUpdateBlock - lastProcessedIndex;
-                    console.logString(" ----> indexAtSimUpdateBlock=");
-                    console.logUint(indexAtSimUpdateBlock);
-                    console.logString(" lastProcessedIndex=");
-                    console.logUint(lastProcessedIndex);
-                    console.logString(" indexDelta=");
-                    console.logUint(indexDelta);
-                    uint256 rewardForPeriod = _calculateRewardsWithDelta(
-                        nftCollection,
-                        indexDelta,
-                        lastProcessedIndex,
-                        currentNFTBalance,
-                        currentBalance // Use currentBalance
-                    );
-                    console.logString(" ----> rewardForPeriod=");
-                    console.logUint(rewardForPeriod);
-                    accruedRewardSoFar += rewardForPeriod;
-                    console.logString(" ----> accruedRewardSoFar=");
-                    console.logUint(accruedRewardSoFar);
-                    lastProcessedIndex = indexAtSimUpdateBlock;
-                    lastProcessedBlock = update.blockNumber;
-                    console.logString(" ----> Updated lastProcessedIndex=");
-                    console.logUint(lastProcessedIndex);
-                    console.logString(" lastProcessedBlock=");
-                    console.logUint(lastProcessedBlock);
-                } else {
-                    console.logString(" ---> Skipping reward calc (update.blockNumber <= lastProcessedBlock)");
-                }
-
-                // Apply the simulated deltas
-                uint256 oldNFTBalance = currentNFTBalance;
-                uint256 oldBalance = currentBalance;
-                currentNFTBalance = _applyDeltaSimulated(currentNFTBalance, update.nftDelta);
-                currentBalance = _applyDeltaSimulated(currentBalance, update.balanceDelta); // Apply to currentBalance
-                console.logString(" ---> Applied Deltas: oldNFTBal=");
-                console.logUint(oldNFTBalance);
-                console.logString(" -> newNFTBal=");
-                console.logUint(currentNFTBalance);
-                console.logString(" | oldBal=");
-                console.logUint(oldBalance);
-                console.logString(" -> newBal=");
-                console.logUint(currentBalance);
+            if (update.collection != nftCollection) {
+                simIndex++;
+                continue;
             }
-        } else {
-            console.logString(" -> No simulated updates to process.");
+            if (update.blockNumber < lastProcessedBlock) {
+                revert SimulationUpdateOutOfOrder(update.blockNumber, lastProcessedBlock);
+            }
+            if (update.blockNumber == lastProcessedBlock && update.blockNumber != 0) {
+                 currentNFTBalance = _applyDeltaSimulated(currentNFTBalance, update.nftDelta);
+                 currentBalance = _applyDeltaSimulated(currentBalance, update.balanceDelta);
+                 simIndex++;
+                 continue;
+            }
+
+            // Calculate rewards for the period ending *before* this simulated update
+            if (update.blockNumber > lastProcessedBlock) {
+                uint256 indexAtPeriodEnd = _calculateGlobalIndexAt();
+                uint256 indexDelta = 0;
+                if (indexAtPeriodEnd > lastProcessedIndex) {
+                    indexDelta = indexAtPeriodEnd - lastProcessedIndex;
+                }
+
+                uint256 rewardForPeriod = _calculateRewardsWithDelta(
+                    nftCollection,
+                    indexDelta,
+                    lastProcessedIndex,
+                    currentNFTBalance,
+                    currentBalance,
+                    collectionSharePercentage
+                );
+                totalRawReward += rewardForPeriod;
+                lastProcessedIndex = indexAtPeriodEnd;
+                lastProcessedBlock = update.blockNumber;
+            }
+
+            // Apply the simulated deltas
+            currentNFTBalance = _applyDeltaSimulated(currentNFTBalance, update.nftDelta);
+            currentBalance = _applyDeltaSimulated(currentBalance, update.balanceDelta);
+
+            simIndex++;
         }
 
-        // Calculate rewards from the last processed block (real or simulated) up to the current block
+        // --- Calculate Final Period (from last update/sim block to current block) ---
         uint256 currentBlock = block.number;
-        console.logString(" -> Calculating final period rewards: lastProcessedBlock=");
-        console.logUint(lastProcessedBlock);
-        console.logString(" currentBlock=");
-        console.logUint(currentBlock);
         if (currentBlock > lastProcessedBlock) {
-            uint256 currentIndex = _calculateGlobalIndexAt(currentBlock); // Get index at current block
-            uint256 indexDelta = currentIndex - lastProcessedIndex;
-            console.logString(" --> currentIndex=");
-            console.logUint(currentIndex);
-            console.logString(" lastProcessedIndex=");
-            console.logUint(lastProcessedIndex);
-            console.logString(" indexDelta=");
-            console.logUint(indexDelta);
-            uint256 rewardForFinalPeriod = _calculateRewardsWithDelta(
+            uint256 indexAtPeriodEnd = _calculateGlobalIndexAt();
+            uint256 indexDelta = 0;
+            if (indexAtPeriodEnd > lastProcessedIndex) {
+                indexDelta = indexAtPeriodEnd - lastProcessedIndex;
+            }
+
+            uint256 rewardForPeriod = _calculateRewardsWithDelta(
                 nftCollection,
                 indexDelta,
                 lastProcessedIndex,
                 currentNFTBalance,
-                currentBalance // Use currentBalance
+                currentBalance,
+                collectionSharePercentage
             );
-            console.logString(" --> rewardForFinalPeriod=");
-            console.logUint(rewardForFinalPeriod);
-            accruedRewardSoFar += rewardForFinalPeriod;
-        } else {
-            console.logString(" -> Skipping final period reward calc (currentBlock <= lastProcessedBlock)");
+            totalRawReward += rewardForPeriod;
         }
 
-        console.logString("_getPendingRewardsSingleCollection END: User=");
-        console.logAddress(user);
-        console.logString(" Collection=");
-        console.logAddress(nftCollection);
-        console.logString(" FINAL pendingReward=");
-        console.logUint(accruedRewardSoFar);
-        return accruedRewardSoFar;
+        // Return the total raw reward calculated across all periods
+        return totalRawReward;
     }
 
     /**
@@ -1070,7 +850,7 @@ contract RewardsController is
 
     /**
      * @notice Exposes the internal user reward state for testing.
-     * @dev Not part of the standard interface. Returns lastBalance instead of lastDepositAmount.
+     * @dev Not part of the standard interface.
      */
     function userNFTData(address user, address collection)
         external
@@ -1079,7 +859,7 @@ contract RewardsController is
             uint256 lastRewardIndex,
             uint256 accruedReward,
             uint256 lastNFTBalance,
-            uint256 lastBalance, // Renamed from lastDepositAmount
+            uint256 lastBalance,
             uint256 lastUpdateBlock
         )
     {
@@ -1087,12 +867,22 @@ contract RewardsController is
         lastRewardIndex = info.lastRewardIndex;
         accruedReward = info.accruedReward;
         lastNFTBalance = info.lastNFTBalance;
-        lastBalance = info.lastBalance; // Return renamed field
+        lastBalance = info.lastBalance;
         lastUpdateBlock = info.lastUpdateBlock;
-        // Return values are implicitly handled by named returns
     }
 
-    // --- Storage Gap --- //
-    // Added storage gap for upgradeability
-    uint256[49] private __gap;
+    // --- Internal Helper Functions ---
+
+    /**
+     * @notice Calculates the epoch ID (start timestamp) for a given timestamp.
+     */
+    function _getEpochId(uint256 timestamp) internal view returns (uint256) {
+        if (epochDuration == 0) return 0; // Avoid division by zero
+        return timestamp - (timestamp % epochDuration);
+    }
+
+    // --- Storage Gap ---
+    // Gap ensures storage layout remains compatible during upgrades.
+    // Previous gap: 45. Removed 4 slots, Added 1 slot. Net change: -3. New gap: 45 + 3 = 48.
+    uint256[48] private __gap;
 }

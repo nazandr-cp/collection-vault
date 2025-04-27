@@ -54,7 +54,7 @@ interface IRewardsController {
     }
 
     // --- Events ---
-    event NFTCollectionAdded(address indexed collection, uint256 beta, RewardBasis rewardBasis); // Added rewardBasis
+    event NFTCollectionAdded(address indexed collection, uint256 beta, RewardBasis rewardBasis, uint256 rewardSharePercentage); // Added rewardSharePercentage
     event NFTCollectionRemoved(address indexed collection);
     event BetaUpdated(address indexed collection, uint256 oldBeta, uint256 newBeta);
     event RewardsClaimedForCollection(address indexed user, address indexed collection, uint256 amount);
@@ -75,6 +75,44 @@ interface IRewardsController {
      * @param numUpdates The number of updates processed in the batch.
      */
     event UserBalanceUpdatesProcessed(address indexed user, uint256 nonce, uint256 numUpdates);
+
+    // --- Admin Functions --- //
+
+    /**
+     * @notice Add a new NFT collection to the whitelist and set its beta coefficient and reward share percentage.
+     * @param collection NFT collection address.
+     * @param beta Reward coefficient for this collection.
+     * @param rewardBasis Basis for reward calculation (DEPOSIT or BORROW).
+     * @param rewardSharePercentage Percentage of yield allocated to rewards for this collection (e.g., 6000 for 60.00%).
+     */
+    function addNFTCollection(address collection, uint256 beta, RewardBasis rewardBasis, uint256 rewardSharePercentage) external; // Added rewardSharePercentage
+
+    /**
+     * @notice Remove an NFT collection from the whitelist.
+     * @param collection NFT collection address.
+     */
+    function removeNFTCollection(address collection) external;
+
+    /**
+     * @notice Update the beta coefficient for a whitelisted NFT collection.
+     * @param collection NFT collection address.
+     * @param newBeta New reward coefficient.
+     */
+    function updateBeta(address collection, uint256 newBeta) external;
+
+    /**
+     * @notice Get the reward share percentage for a specific collection.
+     * @param collection NFT collection address.
+     * @return sharePercentage Reward share (e.g., 6000 for 60.00%).
+     */
+    function getCollectionRewardSharePercentage(address collection) external view returns (uint256 sharePercentage); // Added function
+
+    /**
+     * @notice Get the reward basis for a specific collection.
+     * @param nftCollection NFT collection address.
+     * @return Reward basis for the collection.
+     */
+    function getCollectionRewardBasis(address nftCollection) external view returns (RewardBasis); // Added function
 
     // --- Balance Update Functions (Signature Based) ---
 
@@ -162,33 +200,14 @@ interface IRewardsController {
      */
     function getUserNFTCollections(address user) external view returns (address[] memory);
 
-    // --- Admin Functions --- //
+    // --- Epoch & Scaling Admin Functions --- // REMOVED
 
     /**
-     * @notice Add a new NFT collection to the whitelist and set its beta coefficient.
-     * @param collection NFT collection address.
-     * @param beta Reward coefficient for this collection.
-     * @param rewardBasis Basis for reward calculation (DEPOSIT or BORROW).
+     * @notice Set the percentage of lending yield allocated to rewards for a specific collection.
+     * @dev Only callable by the owner.
+     * @param collection The address of the collection to update.
+     * @param newSharePercentage New reward share (e.g., 6000 for 60.00%). Must be <= 10000.
      */
-    function addNFTCollection(address collection, uint256 beta, RewardBasis rewardBasis) external; // Added rewardBasis
+    function setCollectionRewardSharePercentage(address collection, uint256 newSharePercentage) external; // Added per-collection setter
 
-    /**
-     * @notice Remove an NFT collection from the whitelist.
-     * @param collection NFT collection address.
-     */
-    function removeNFTCollection(address collection) external;
-
-    /**
-     * @notice Update the beta coefficient for a whitelisted NFT collection.
-     * @param collection NFT collection address.
-     * @param newBeta New reward coefficient.
-     */
-    function updateBeta(address collection, uint256 newBeta) external;
-
-    /**
-     * @notice Get the reward basis for a specific collection.
-     * @param nftCollection NFT collection address.
-     * @return Reward basis for the collection.
-     */
-    function getCollectionRewardBasis(address nftCollection) external view returns (RewardBasis); // Added function
 }
