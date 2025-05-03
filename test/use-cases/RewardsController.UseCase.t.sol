@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {Test, console} from "forge-std/Test.sol";
+import {Test, Vm, console} from "forge-std/Test.sol";
 import {StdCheats} from "forge-std/StdCheats.sol";
 import {Vm} from "forge-std/Vm.sol";
 
@@ -23,43 +23,28 @@ import {ITransparentUpgradeableProxy} from
 import {ProxyAdmin} from "@openzeppelin-contracts-5.3.0/proxy/transparent/ProxyAdmin.sol";
 
 contract RewardsControllerUseCaseTest is Test {
-    // EIP-712 Type Hashes
+    // --- EIP-712 Type Hashes ---
     bytes32 public constant USER_BALANCE_UPDATE_DATA_TYPEHASH = keccak256(
-        "UserBalanceUpdateData(address user,address collection,uint256 blockNumber,int256 nftDelta,int256 balanceDelta)" // Changed depositDelta to balanceDelta
+        "UserBalanceUpdateData(address user,address collection,uint256 blockNumber,int256 nftDelta,int256 balanceDelta)"
     );
     bytes32 public constant BALANCE_UPDATES_TYPEHASH =
         keccak256("BalanceUpdates(UserBalanceUpdateData[] updates,uint256 nonce)");
     bytes32 public constant BALANCE_UPDATE_DATA_TYPEHASH =
-        keccak256("BalanceUpdateData(address collection,uint256 blockNumber,int256 nftDelta,int256 balanceDelta)"); // Changed depositDelta to balanceDelta
+        keccak256("BalanceUpdateData(address collection,uint256 blockNumber,int256 nftDelta,int256 balanceDelta)");
     bytes32 public constant USER_BALANCE_UPDATES_TYPEHASH =
         keccak256("UserBalanceUpdates(address user,BalanceUpdateData[] updates,uint256 nonce)");
 
-    // --- Constants & Config ---
-    address constant USER_A = address(0xAAA);
-    address constant USER_B = address(0xBBB);
-    address constant USER_C = address(0xCCC); // New User
-    address constant USER_D = address(0xDDD); // New User
-    address constant USER_E = address(0xEEE); // New User with 0 NFTs
-    address constant NFT_COLLECTION_1 = address(0xC1);
-    address constant NFT_COLLECTION_2 = address(0xC2);
     address constant OWNER = address(0x001);
     address constant OTHER_ADDRESS = address(0x123);
-    address constant NFT_UPDATER = address(0xBAD); // Simulate NFTDataUpdater
-    // Define Foundry constants at contract level
+    address constant NFT_UPDATER = address(0xBAD);
     address constant DEFAULT_FOUNDRY_SENDER = 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266;
     uint256 constant DEFAULT_FOUNDRY_PRIVATE_KEY = 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
-
     uint256 constant PRECISION = 1e18;
-    uint256 constant BETA_1 = 0.1 ether; // Example beta (10% per NFT)
-    uint256 constant BETA_2 = 0.05 ether; // Example beta (5% per NFT)
-    // Mainnet Addresses
-    address constant CDAI_ADDRESS = 0x5d3a536E4D6DbD6114cc1Ead35777bAB948E3643;
-    address constant DAI_ADDRESS = 0x6B175474E89094C44Da98b954EedeAC495271d0F;
-    // Forking Config
-    uint256 constant FORK_BLOCK_NUMBER = 19670000; // Example block number, adjust as needed
-    string constant MAINNET_RPC_URL_ENV = "MAINNET_RPC_URL"; // Ensure this env var is set
-    // Known DAI holder on Mainnet
-    address constant DAI_WHALE = 0x47ac0Fb4F2D84898e4D9E7b4DaB3C24507a6D503; // Example whale
+    uint256 constant BETA_1 = 0.1 ether;
+    uint256 constant BETA_2 = 0.05 ether;
+    uint256 constant FORK_BLOCK_NUMBER = 19670000;
+    string constant MAINNET_RPC_URL_ENV = "MAINNET_RPC_URL";
+    address constant DAI_WHALE = 0x47ac0Fb4F2D84898e4D9E7b4DaB3C24507a6D503;
 
     // EIP-1967 Storage Slots
     bytes32 constant IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
@@ -67,6 +52,20 @@ contract RewardsControllerUseCaseTest is Test {
 
     uint256 constant GWEI = 1e9; // Define GWEI constant
 
+    // --- Constants Copied from RewardsController.t.sol ---
+    address constant USER_A = address(0xAAA);
+    address constant USER_B = address(0xBBB);
+    address constant USER_C = address(0xCCC);
+    address constant USER_D = address(0xDDD); // Added for use case
+    address constant USER_E = address(0xEEE); // Added for use case
+    address constant NFT_COLLECTION_1 = address(0xC1);
+    address constant NFT_COLLECTION_2 = address(0xC2);
+    address constant NFT_COLLECTION_3 = address(0xC3); // Non-whitelisted (from original)
+    address constant CDAI_ADDRESS = 0x5d3a536E4D6DbD6114cc1Ead35777bAB948E3643;
+    address constant DAI_ADDRESS = 0x6B175474E89094C44Da98b954EedeAC495271d0F;
+    uint256 constant MAX_REWARD_SHARE_PERCENTAGE = 10000; // Added, might be needed
+    uint256 constant VALID_REWARD_SHARE_PERCENTAGE = 5000; // Added, might be needed
+    uint256 constant INVALID_REWARD_SHARE_PERCENTAGE = 10001; // Added, might be needed
     // --- Contracts ---
     RewardsController rewardsController; // This will point to the proxy
     RewardsController rewardsControllerImpl; // Implementation contract
@@ -184,8 +183,9 @@ contract RewardsControllerUseCaseTest is Test {
         lendingManager.grantRewardsControllerRole(address(rewardsController)); // Use proxy address
 
         // Whitelist collections in RewardsController
-        rewardsController.addNFTCollection(NFT_COLLECTION_1, BETA_1, IRewardsController.RewardBasis.BORROW); // Added RewardBasis
-        rewardsController.addNFTCollection(NFT_COLLECTION_2, BETA_2, IRewardsController.RewardBasis.DEPOSIT); // Added RewardBasis
+        // Add the missing rewardSharePercentage argument (using 5000 as a default valid value)
+        rewardsController.addNFTCollection(NFT_COLLECTION_1, BETA_1, IRewardsController.RewardBasis.BORROW, 5000); // Added RewardBasis and Share
+        rewardsController.addNFTCollection(NFT_COLLECTION_2, BETA_2, IRewardsController.RewardBasis.DEPOSIT, 5000); // Added RewardBasis and Share
 
         // Fund contracts using transfer from DAI_WHALE
         vm.stopPrank(); // Stop OWNER prank before whale prank
@@ -294,7 +294,7 @@ contract RewardsControllerUseCaseTest is Test {
         console.log("Updating global reward index...");
         // Requires OWNER/ADMIN role
         vm.prank(OWNER);
-        rewardsController.updateGlobalRewardIndex();
+        // rewardsController.updateGlobalRewardIndex(); // Function does not exist, commented out
         vm.stopPrank();
         // ---------------------------------------------- //
 
@@ -309,7 +309,7 @@ contract RewardsControllerUseCaseTest is Test {
         uint256 deltaIndex = globalIndexBeforePreview - userLastIndexBeforePreview;
         uint256 beta = rewardsController.getCollectionBeta(collection); // Correct function call
         uint256 boostFactor = rewardsController.calculateBoost(nftCount, beta);
-        uint256 currentBaseRate = rewardsController.baseRewardRate(); // Get current base rate
+        // uint256 currentBaseRate = rewardsController.baseRewardRate(); // Function does not exist, commented out
 
         // Replicate the logic from _calculateRewardsWithDelta
         uint256 yieldRewardManual = 0;
@@ -317,10 +317,10 @@ contract RewardsControllerUseCaseTest is Test {
         if (userLastIndexBeforePreview > 0 && depositAmount > 0) {
             // Check divisor and deposit
             yieldRewardManual = (depositAmount * deltaIndex) / userLastIndexBeforePreview;
-            if (currentBaseRate > 0) {
+            /* if (currentBaseRate > 0) {
                 additionalBaseRewardManual =
                     (depositAmount * deltaIndex * currentBaseRate) / (userLastIndexBeforePreview * PRECISION);
-            }
+            } */
         }
         uint256 totalBaseRewardManual = yieldRewardManual + additionalBaseRewardManual;
 
@@ -335,7 +335,7 @@ contract RewardsControllerUseCaseTest is Test {
         console.log("Delta Index (units):", deltaIndex / 1 gwei); // Format index
         console.log("Collection Beta (units):", beta / 1 gwei); // Format rate
         console.log("Boost Factor (units):", boostFactor / 1 gwei); // Format factor
-        console.log("Base Reward Rate (units):", currentBaseRate / 1 gwei); // Format rate
+        // console.log("Base Reward Rate (units):", currentBaseRate / 1 gwei); // Format rate - currentBaseRate is commented out
         console.log("Manually Calculated Yield Reward :", yieldRewardManual / 1 gwei); // Format reward
         console.log("Manually Calculated Additional Base Reward :", additionalBaseRewardManual / 1 gwei); // Format reward
         console.log("Manually Calculated Total Base Reward :", totalBaseRewardManual / 1 gwei); // Format reward
@@ -805,7 +805,7 @@ contract RewardsControllerUseCaseTest is Test {
         uint256 deltaIndex = globalIndexAtClaim - userIndexAtStart;
         uint256 beta = rewardsController.getCollectionBeta(collection);
         uint256 boostFactor = rewardsController.calculateBoost(nftCount, beta);
-        uint256 currentBaseRate = rewardsController.baseRewardRate();
+        // uint256 currentBaseRate = rewardsController.baseRewardRate(); // Function does not exist, commented out
 
         // Initialize rewards
         uint256 yieldRewardManual = 0;
@@ -822,12 +822,12 @@ contract RewardsControllerUseCaseTest is Test {
             // Here, we use `userBalance` passed in, assuming it matches the intended basis.
             if (userIndexAtStart > 0 && userBalance > 0 && deltaIndex > 0) {
                 yieldRewardManual = (userBalance * deltaIndex) / userIndexAtStart;
-                if (currentBaseRate > 0) {
+                /* if (currentBaseRate > 0) {
                     additionalBaseRewardManual =
                         (userBalance * deltaIndex * currentBaseRate) / (userIndexAtStart * PRECISION);
-                }
+                } */
             }
-            totalBaseRewardManual = yieldRewardManual + additionalBaseRewardManual;
+            totalBaseRewardManual = yieldRewardManual + additionalBaseRewardManual; // additionalBaseRewardManual will be 0
             bonusRewardManual = (totalBaseRewardManual * boostFactor) / PRECISION; // Boost applies to total base
             expectedRewardManual = totalBaseRewardManual + bonusRewardManual;
         } // If nftCount is 0, all rewards remain 0, matching the contract logic.

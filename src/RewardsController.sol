@@ -7,6 +7,7 @@ import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/ut
 import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
 
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {console} from "forge-std/console.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -21,7 +22,7 @@ import {ILendingManager} from "./interfaces/ILendingManager.sol";
  * @title RewardsController (Upgradeable)
  * @notice Manages reward calculation and distribution, incorporating NFT-based bonus multipliers.
  * @dev Implements IRewardsController. Tracks user NFT balances, calculates yield (base + bonus),
- *      and distributes rewards by pulling base yield from the LendingManager. Uses EIP-712 for signed balance updates.
+ *      and distributes rewards by pulling base yield from the LendingManager. Uses EIP-712 for signed balance updates (single and batch).
  *      Upgradeable using the Transparent Proxy pattern.
  */
 contract RewardsController is
@@ -39,7 +40,7 @@ contract RewardsController is
      */
     struct UserRewardState {
         uint256 lastRewardIndex; // Global index at the last update for this user/collection
-        uint256 accruedReward; // Total rewards accumulated since last claim
+        uint256 accruedReward; // Total rewards accumulated since last claim (should generally be 0)
         uint256 lastNFTBalance; // NFT balance at the last update
         uint256 lastBalance; // Relevant balance (deposit or borrow) at the last update
         uint256 lastUpdateBlock; // Block number of the last update
@@ -80,46 +81,33 @@ contract RewardsController is
     mapping(address => uint256) public authorizedUpdaterNonce; // Nonce per authorized updater for replay protection
 
     // Global Reward State
-    uint256 public globalRewardIndex;
-
-    // --- Epoch & Scaling State ---
-    uint256 public epochDuration; // Duration of each reward epoch in seconds
+    uint256 public globalRewardIndex; // Represents the cToken exchange rate
 
     // --- Events ---
-    // Note: Events are inherited from IRewardsController.
+    // Note: Events like NFTCollectionAdded, NFTCollectionRemoved, BetaUpdated, AuthorizedUpdaterChanged,
+    // RewardsClaimedForCollection, RewardsClaimedForAll, YieldTransferCapped, CollectionRewardShareUpdated,
+    // BalanceUpdatesProcessed, UserBalanceUpdatesProcessed are inherited from IRewardsController.
     event NFTBalanceUpdateProcessed(
         address indexed user, address indexed collection, uint256 blockNumber, int256 nftDelta, uint256 finalNFTBalance
     );
     event BalanceUpdateProcessed(
         address indexed user, address indexed collection, uint256 blockNumber, int256 balanceDelta, uint256 finalBalance
     );
-    event YieldTransferCapped(address indexed user, uint256 calculatedReward, uint256 transferredAmount);
-    event CollectionRewardShareUpdated(address indexed collection, uint256 oldSharePercentage, uint256 newSharePercentage);
 
-    error AddressZero();
-    error CollectionNotWhitelisted(address collection);
-    error CollectionAlreadyExists(address collection);
-    error InvalidSignature();
-    error InvalidNonce(uint256 expectedNonce, uint256 actualNonce);
-    error ArrayLengthMismatch();
-    error InsufficientYieldFromLendingManager();
-    error NoRewardsToClaim();
-    error NormalizationError();
-    error VaultMismatch();
+    // --- Errors ---
+    // Note: Errors like AddressZero, CollectionNotWhitelisted, CollectionAlreadyExists, InvalidSignature,
+    // InvalidNonce, ArrayLengthMismatch, InsufficientYieldFromLendingManager, NoRewardsToClaim,
+    // EmptyBatch, CollectionsArrayEmpty, InvalidRewardSharePercentage, InvalidEpochDuration,
+    // SimulationUpdateOutOfOrder, SimulationBalanceUpdateUnderflow, SimulationBlockInPast
+    // are inherited from IRewardsController.
     error BalanceUpdateUnderflow(uint256 currentValue, uint256 deltaMagnitude);
     error UpdateOutOfOrder(address user, address collection, uint256 updateBlock, uint256 lastProcessedBlock);
-    error EmptyBatch();
-    error SimulationUpdateOutOfOrder(uint256 updateBlock, uint256 lastProcessedBlock);
-    error SimulationBalanceUpdateUnderflow(uint256 currentValue, uint256 deltaMagnitude);
-    error SimulationBlockInPast(uint256 lastBlock, uint256 simBlock);
     error UserMismatch(address expectedUser, address actualUser);
-    error CollectionsArrayEmpty();
-    error InvalidEpochDuration();
-    error InvalidRewardSharePercentage();
+    error VaultMismatch(); // Define locally as it's not in the interface
 
     modifier onlyWhitelistedCollection(address collection) {
         if (!_whitelistedCollections.contains(collection)) {
-            revert CollectionNotWhitelisted(collection);
+            revert IRewardsController.CollectionNotWhitelisted(collection); // Use inherited error
         }
         _;
     }
@@ -128,61 +116,62 @@ contract RewardsController is
         address initialOwner,
         address _lendingManagerAddress,
         address _vaultAddress,
-        address _authorizedUpdater,
-        uint256 _initialEpochDuration
+        address _authorizedUpdater
     ) public initializer {
         __Ownable_init(initialOwner);
         __ReentrancyGuard_init();
         __EIP712_init("RewardsController", "1");
 
-        if (_lendingManagerAddress == address(0)) revert AddressZero();
-        if (_vaultAddress == address(0)) revert AddressZero();
-        if (_authorizedUpdater == address(0)) revert AddressZero();
-        if (_initialEpochDuration == 0) revert InvalidEpochDuration();
+        if (_lendingManagerAddress == address(0)) revert IRewardsController.AddressZero(); // Use inherited error
+        if (_vaultAddress == address(0)) revert IRewardsController.AddressZero(); // Use inherited error
+        if (_authorizedUpdater == address(0)) revert IRewardsController.AddressZero(); // Use inherited error
 
         lendingManager = ILendingManager(_lendingManagerAddress);
         vault = IERC4626(_vaultAddress);
 
-        if (address(lendingManager) == address(0)) revert AddressZero();
-        if (address(vault) == address(0)) revert AddressZero();
+        // --- Assertions Start ---
+        if (address(lendingManager) == address(0)) revert IRewardsController.AddressZero(); // Use inherited error
+        if (address(vault) == address(0)) revert IRewardsController.AddressZero(); // Use inherited error
 
         IERC20 _rewardToken = lendingManager.asset();
-        if (address(_rewardToken) == address(0)) revert AddressZero();
+        if (address(_rewardToken) == address(0)) revert IRewardsController.AddressZero(); // Use inherited error
 
         address _vaultAsset = vault.asset();
-        if (_vaultAsset == address(0)) revert AddressZero();
-        if (_vaultAsset != address(_rewardToken)) revert VaultMismatch();
+        if (_vaultAsset == address(0)) revert IRewardsController.AddressZero(); // Use inherited error
+        if (_vaultAsset != address(_rewardToken)) revert VaultMismatch(); // Use locally defined error
+        // --- Assertions End ---
 
         rewardToken = _rewardToken;
         authorizedUpdater = _authorizedUpdater;
 
         address _cTokenAddress = address(lendingManager.cToken());
-        if (_cTokenAddress == address(0)) revert AddressZero();
+        if (_cTokenAddress == address(0)) revert IRewardsController.AddressZero(); // Use inherited error
         cToken = CTokenInterface(_cTokenAddress);
-        if (address(cToken) == address(0)) revert AddressZero();
+        if (address(cToken) == address(0)) revert IRewardsController.AddressZero(); // Use inherited error
 
         uint256 initialExchangeRate = cToken.exchangeRateStored();
         // The cToken exchange rate serves as the base global index.
         globalRewardIndex = initialExchangeRate;
-
-        epochDuration = _initialEpochDuration;
     }
 
-    function setAuthorizedUpdater(address _newUpdater) external onlyOwner {
-        if (_newUpdater == address(0)) revert AddressZero();
+    function setAuthorizedUpdater(address _newUpdater) external override onlyOwner {
+        if (_newUpdater == address(0)) revert IRewardsController.AddressZero(); // Use inherited error
         address oldUpdater = authorizedUpdater;
         authorizedUpdater = _newUpdater;
         emit AuthorizedUpdaterChanged(oldUpdater, _newUpdater);
     }
 
-    function addNFTCollection(address collection, uint256 beta, IRewardsController.RewardBasis rewardBasis, uint256 rewardSharePercentage)
-        external
-        override
-        onlyOwner
-    {
-        if (collection == address(0)) revert AddressZero();
-        if (_whitelistedCollections.contains(collection)) revert CollectionAlreadyExists(collection);
-        if (rewardSharePercentage > MAX_REWARD_SHARE_PERCENTAGE) revert InvalidRewardSharePercentage();
+    function addNFTCollection(
+        address collection,
+        uint256 beta,
+        IRewardsController.RewardBasis rewardBasis,
+        uint256 rewardSharePercentage
+    ) external override onlyOwner {
+        if (collection == address(0)) revert IRewardsController.AddressZero(); // Use inherited error
+        if (_whitelistedCollections.contains(collection)) revert IRewardsController.CollectionAlreadyExists(collection); // Use inherited error
+        if (rewardSharePercentage > MAX_REWARD_SHARE_PERCENTAGE) {
+            revert IRewardsController.InvalidRewardSharePercentage();
+        } // Use inherited error
 
         _whitelistedCollections.add(collection);
         collectionBetas[collection] = beta;
@@ -193,7 +182,10 @@ contract RewardsController is
     }
 
     function removeNFTCollection(address collection) external override onlyOwner {
-        require(_whitelistedCollections.contains(collection), "RC: Collection not whitelisted");
+        // Use inherited error via modifier
+        if (!_whitelistedCollections.contains(collection)) {
+            revert IRewardsController.CollectionNotWhitelisted(collection);
+        }
 
         _whitelistedCollections.remove(collection);
         delete collectionBetas[collection];
@@ -214,25 +206,17 @@ contract RewardsController is
         emit BetaUpdated(collection, oldBeta, newBeta);
     }
 
-    // --- Epoch & Scaling Admin Functions ---
-
-    /**
-     * @notice Set the duration for reward epochs.
-     * @inheritdoc IRewardsController
-     */
-    function setEpochDuration(uint256 newDuration) external onlyOwner {
-        if (newDuration == 0) revert InvalidEpochDuration();
-        uint256 oldDuration = epochDuration;
-        epochDuration = newDuration;
-        // Consider adding an event if needed for off-chain tracking
-    }
-
     /**
      * @notice Set the percentage of lending yield allocated to rewards for a specific collection.
      * @inheritdoc IRewardsController
      */
-    function setCollectionRewardSharePercentage(address collection, uint256 newSharePercentage) external override onlyOwner onlyWhitelistedCollection(collection) {
-        if (newSharePercentage > MAX_REWARD_SHARE_PERCENTAGE) revert InvalidRewardSharePercentage();
+    function setCollectionRewardSharePercentage(address collection, uint256 newSharePercentage)
+        external
+        override
+        onlyOwner
+        onlyWhitelistedCollection(collection)
+    {
+        if (newSharePercentage > MAX_REWARD_SHARE_PERCENTAGE) revert IRewardsController.InvalidRewardSharePercentage(); // Use inherited error
         uint256 oldSharePercentage = collectionRewardSharePercentages[collection];
         collectionRewardSharePercentages[collection] = newSharePercentage;
         emit CollectionRewardShareUpdated(collection, oldSharePercentage, newSharePercentage);
@@ -249,10 +233,10 @@ contract RewardsController is
         override
         nonReentrant
     {
-        if (updates.length == 0) revert EmptyBatch();
+        if (updates.length == 0) revert IRewardsController.EmptyBatch(); // Use inherited error
 
         if (signer != authorizedUpdater) {
-            revert InvalidSignature();
+            revert IRewardsController.InvalidSignature(); // Use inherited error
         }
 
         uint256 nonce = authorizedUpdaterNonce[signer];
@@ -263,7 +247,7 @@ contract RewardsController is
         address recoveredSigner = ECDSA.recover(digest, signature);
 
         if (recoveredSigner != signer) {
-            revert InvalidSignature();
+            revert IRewardsController.InvalidSignature(); // Use inherited error
         }
 
         authorizedUpdaterNonce[signer]++;
@@ -271,14 +255,14 @@ contract RewardsController is
         for (uint256 i = 0; i < updates.length; i++) {
             UserBalanceUpdateData memory update = updates[i];
             if (!_whitelistedCollections.contains(update.collection)) {
-                revert CollectionNotWhitelisted(update.collection);
+                revert IRewardsController.CollectionNotWhitelisted(update.collection); // Use inherited error
             }
             _processSingleUpdate(
                 update.user, update.collection, update.blockNumber, update.nftDelta, update.balanceDelta
             );
         }
 
-        emit BalanceUpdatesProcessed(signer, nonce, updates.length);
+        emit BalanceUpdatesProcessed(signer, nonce, updates.length); // Align event emission with interface (count)
     }
 
     /**
@@ -291,10 +275,10 @@ contract RewardsController is
         BalanceUpdateData[] calldata updates,
         bytes calldata signature
     ) external override nonReentrant {
-        if (updates.length == 0) revert EmptyBatch();
+        if (updates.length == 0) revert IRewardsController.EmptyBatch(); // Use inherited error
 
         if (signer != authorizedUpdater) {
-            revert InvalidSignature();
+            revert IRewardsController.InvalidSignature(); // Use inherited error
         }
 
         uint256 nonce = authorizedUpdaterNonce[signer];
@@ -305,21 +289,21 @@ contract RewardsController is
         address recoveredSigner = ECDSA.recover(digest, signature);
 
         if (recoveredSigner != signer) {
-            revert InvalidSignature();
+            revert IRewardsController.InvalidSignature(); // Use inherited error
         }
 
         authorizedUpdaterNonce[signer]++;
 
         for (uint256 i = 0; i < updates.length; i++) {
             if (!_whitelistedCollections.contains(updates[i].collection)) {
-                revert CollectionNotWhitelisted(updates[i].collection);
+                revert IRewardsController.CollectionNotWhitelisted(updates[i].collection); // Use inherited error
             }
             _processSingleUpdate(
                 user, updates[i].collection, updates[i].blockNumber, updates[i].nftDelta, updates[i].balanceDelta
             );
         }
 
-        emit UserBalanceUpdatesProcessed(user, nonce, updates.length);
+        emit UserBalanceUpdatesProcessed(user, nonce, updates.length); // Align event emission with interface (count)
     }
 
     /**
@@ -341,13 +325,13 @@ contract RewardsController is
         address recoveredSigner = ECDSA.recover(digest, signature);
 
         if (recoveredSigner != signer) {
-            revert InvalidSignature();
+            revert IRewardsController.InvalidSignature(); // Use inherited error
         }
 
         authorizedUpdaterNonce[signer]++;
 
         if (!_whitelistedCollections.contains(collection)) {
-            revert CollectionNotWhitelisted(collection);
+            revert IRewardsController.CollectionNotWhitelisted(collection); // Use inherited error
         }
 
         _processSingleUpdate(user, collection, blockNumber, nftDelta, 0);
@@ -377,23 +361,19 @@ contract RewardsController is
         address recoveredSigner = ECDSA.recover(digest, signature);
 
         if (recoveredSigner != signer) {
-            revert InvalidSignature();
+            revert IRewardsController.InvalidSignature(); // Use inherited error
         }
 
         authorizedUpdaterNonce[signer]++;
 
         if (!_whitelistedCollections.contains(collection)) {
-            revert CollectionNotWhitelisted(collection);
+            revert IRewardsController.CollectionNotWhitelisted(collection); // Use inherited error
         }
 
         _processSingleUpdate(user, collection, blockNumber, 0, depositDelta);
 
         emit BalanceUpdateProcessed(
-            user,
-            collection,
-            blockNumber,
-            depositDelta,
-            userRewardState[user][collection].lastBalance
+            user, collection, blockNumber, depositDelta, userRewardState[user][collection].lastBalance
         );
     }
 
@@ -435,8 +415,9 @@ contract RewardsController is
     // --- Core Update Logic --- //
 
     /**
-     * @dev Processes a single balance update, updating user state but not calculating rewards.
-     *      Handles out-of-order updates and updates active collection list.
+     * @notice Processes a single balance update (NFT and/or deposit/borrow).
+     * @dev Updates the user's state (balances, last update block, last index). Does NOT calculate rewards here.
+     *      Handles out-of-order updates. Updates the user's active collection list.
      */
     function _processSingleUpdate(
         address user,
@@ -449,7 +430,8 @@ contract RewardsController is
 
         // Handle updates arriving out of order or for blocks already processed
         if (updateBlock < info.lastUpdateBlock) {
-            // Allow updates for the *current* block even if lastUpdateBlock is the same
+            // Revert if the update block is in the past relative to the last processed block for this user/collection,
+            // unless the update block is the current block number (allowing same-block updates).
             if (updateBlock != block.number) {
                 revert UpdateOutOfOrder(user, collection, updateBlock, info.lastUpdateBlock);
             }
@@ -457,11 +439,13 @@ contract RewardsController is
 
         // If this is the first update or the update is for a future block relative to the last state update
         if (info.lastUpdateBlock == 0 || updateBlock > info.lastUpdateBlock) {
-            // Rewards are calculated lazily in _getPendingRewards... functions.
-            // Set the user's index and block to the current global state
+            // Rewards are calculated lazily in _getRawPendingRewardsSingleCollection.
+            // Set the user's index and block to the current global state.
             info.lastRewardIndex = globalRewardIndex; // Record the index corresponding to this update block
             info.lastUpdateBlock = updateBlock; // Record the block number of this update
         }
+        // If updateBlock == info.lastUpdateBlock (and potentially == block.number),
+        // we don't update index/block again, just apply deltas below.
 
         // Apply deltas to the stored state
         info.lastNFTBalance = _applyDelta(info.lastNFTBalance, nftDelta);
@@ -479,6 +463,7 @@ contract RewardsController is
         if (info.lastNFTBalance > 0 || info.lastBalance > 0) {
             _userActiveCollections[user].add(collection);
         } else {
+            // If both balances become zero, remove from active list
             _userActiveCollections[user].remove(collection);
         }
     }
@@ -489,14 +474,16 @@ contract RewardsController is
         } else {
             uint256 absDelta = uint256(-delta);
             if (absDelta > value) {
+                // Ensure revert happens if delta magnitude exceeds current value
                 revert BalanceUpdateUnderflow(value, absDelta);
             }
+            // If delta magnitude is not greater, subtraction is safe
             return value - absDelta;
         }
     }
 
     /**
-     * @notice Calculates the raw, unscaled reward for a specific period based on index change and balances.
+     * @notice Calculates the raw reward for a specific period based on index change and balances.
      * @dev Applies the collection's reward share percentage.
      * @param nftCollection The collection address.
      * @param indexDelta The change in the global index during the period.
@@ -514,7 +501,12 @@ contract RewardsController is
         uint256 balanceDuringPeriod,
         uint256 rewardSharePercentage
     ) internal view returns (uint256 rawReward) {
-        if (nftBalanceDuringPeriod == 0 || indexDelta == 0 || balanceDuringPeriod == 0 || lastRewardIndex == 0) {
+        // If user has no NFTs from this collection during the period, they get no reward for it.
+        if (nftBalanceDuringPeriod == 0) {
+            return 0;
+        }
+
+        if (indexDelta == 0 || balanceDuringPeriod == 0 || lastRewardIndex == 0) {
             return 0;
         }
 
@@ -542,7 +534,7 @@ contract RewardsController is
      */
     function _calculateGlobalIndexAt() internal returns (uint256 currentIndex) {
         uint256 accrualResult = cToken.accrueInterest();
-        accrualResult; // Silence compiler warning
+        accrualResult; // Silence compiler warning if accrueInterest returns a value
 
         currentIndex = cToken.exchangeRateStored();
         return currentIndex;
@@ -573,7 +565,7 @@ contract RewardsController is
         returns (UserCollectionTracking[] memory trackingInfo)
     {
         if (nftCollections.length == 0) {
-            revert CollectionsArrayEmpty();
+            revert IRewardsController.CollectionsArrayEmpty(); // Use inherited error
         }
         trackingInfo = new UserCollectionTracking[](nftCollections.length);
         for (uint256 i = 0; i < nftCollections.length; i++) {
@@ -623,7 +615,7 @@ contract RewardsController is
         address[] calldata nftCollections,
         BalanceUpdateData[] calldata simulatedUpdates
     ) external override returns (uint256 pendingReward) {
-        // Note: This function modifies state by calling _calculateGlobalIndexAt -> accrueInterest
+        // Note: Not 'view' as _getRawPendingRewardsSingleCollection calls _calculateGlobalIndexAt which modifies state (accrueInterest)
         if (nftCollections.length == 0) {
             return 0;
         }
@@ -632,8 +624,9 @@ contract RewardsController is
         for (uint256 i = 0; i < nftCollections.length; i++) {
             address collection = nftCollections[i];
             if (!isCollectionWhitelisted(collection)) {
-                revert CollectionNotWhitelisted(collection);
+                revert IRewardsController.CollectionNotWhitelisted(collection); // Use inherited error
             }
+            // Internal function calculates raw reward (which includes share percentage)
             totalRawPendingReward += _getRawPendingRewardsSingleCollection(user, collection, simulatedUpdates);
         }
 
@@ -642,6 +635,7 @@ contract RewardsController is
         return pendingReward;
     }
 
+    // Helper to check whitelist status
     function isCollectionWhitelisted(address collection) public view returns (bool) {
         return _whitelistedCollections.contains(collection);
     }
@@ -652,35 +646,41 @@ contract RewardsController is
 
     // --- Claiming Functions ---
 
-    function claimRewardsForCollection(
-        address nftCollection,
-        BalanceUpdateData[] calldata simulatedUpdates
-    ) external override nonReentrant onlyWhitelistedCollection(nftCollection) {
+    function claimRewardsForCollection(address nftCollection, BalanceUpdateData[] calldata simulatedUpdates)
+        external
+        override
+        nonReentrant
+        onlyWhitelistedCollection(nftCollection)
+    {
         address user = msg.sender;
 
         // 1. Calculate raw pending rewards (includes share percentage)
         uint256 rawReward = _getRawPendingRewardsSingleCollection(user, nftCollection, simulatedUpdates);
 
+        // Allow claiming 0 rewards to update internal state, but skip transfers if reward is 0.
+
+        uint256 rewardToClaim = rawReward;
+
         // 2. Update global index state *before* transfers and user state update
-        uint256 indexAtClaim = _calculateGlobalIndexAt();
-        globalRewardIndex = indexAtClaim;
+        uint256 indexAtClaim = _calculateGlobalIndexAt(); // Ensure index is current before claim processing
+        globalRewardIndex = indexAtClaim; // Update global state
 
-        // 3. Request yield transfer from LendingManager
+        // 3. Request yield transfer from LendingManager based on rewardToClaim
         uint256 amountActuallyTransferred = 0;
-        if (rawReward > 0) {
-            amountActuallyTransferred = lendingManager.transferYield(rawReward, address(this));
+        if (rewardToClaim > 0) {
+            amountActuallyTransferred = lendingManager.transferYield(rewardToClaim, address(this));
         }
 
-        // 4. Check if LM transferred less than requested
-        if (amountActuallyTransferred < rawReward) {
-            emit YieldTransferCapped(user, rawReward, amountActuallyTransferred);
+        // 4. Check if LM transferred less than requested (due to its own capping)
+        if (amountActuallyTransferred < rewardToClaim) {
+            emit YieldTransferCapped(user, rewardToClaim, amountActuallyTransferred);
         }
 
-        // 5. Update user state
+        // 5. Update user state: Reset accrued reward and update index/block
         UserRewardState storage info = userRewardState[user][nftCollection];
         info.accruedReward = 0; // Reset accrued reward
-        info.lastRewardIndex = indexAtClaim;
-        info.lastUpdateBlock = block.number;
+        info.lastRewardIndex = indexAtClaim; // Update the index
+        info.lastUpdateBlock = block.number; // Update the last update block
 
         // 6. Transfer the amount actually received from LM to the user
         emit RewardsClaimedForCollection(user, nftCollection, amountActuallyTransferred);
@@ -693,24 +693,29 @@ contract RewardsController is
     function claimRewardsForAll(BalanceUpdateData[] calldata simulatedUpdates) external override nonReentrant {
         address user = msg.sender;
         address[] memory collectionsToClaim = _userActiveCollections[user].values();
-        if (collectionsToClaim.length == 0) revert NoRewardsToClaim();
+        if (collectionsToClaim.length == 0) revert IRewardsController.NoRewardsToClaim(); // Use inherited error
 
-        // 1. Calculate total raw pending rewards across all collections
+        // 1. Calculate total raw pending rewards across all collections (includes share percentages)
         uint256 totalRawRewards = 0;
         for (uint256 i = 0; i < collectionsToClaim.length; i++) {
             address collection = collectionsToClaim[i];
             totalRawRewards += _getRawPendingRewardsSingleCollection(user, collection, simulatedUpdates);
         }
 
-        // 2. Update global index state
-        uint256 indexAtClaim = _calculateGlobalIndexAt();
-        globalRewardIndex = indexAtClaim;
+        // Allow claiming 0 rewards to update internal state
 
-        // 3. Request yield transfer from LendingManager, capped by available yield
+        uint256 totalRewardToClaim = totalRawRewards;
+
+        // 2. Update global index state *before* transfers and user state update
+        uint256 indexAtClaim = _calculateGlobalIndexAt(); // Ensure index is current before claim processing
+        globalRewardIndex = indexAtClaim; // Update global state
+
+        // 3. Request yield transfer from LendingManager based on totalRewardToClaim
+        // Optional: Cap request based on LM available yield
         uint256 lmTotalAssets = lendingManager.totalAssets();
         uint256 lmPrincipal = lendingManager.totalPrincipalDeposited();
         uint256 maxAvailableYield = (lmTotalAssets > lmPrincipal) ? lmTotalAssets - lmPrincipal : 0;
-        uint256 amountToRequest = Math.min(totalRawRewards, maxAvailableYield);
+        uint256 amountToRequest = Math.min(totalRewardToClaim, maxAvailableYield);
 
         uint256 amountActuallyTransferred = 0;
         if (amountToRequest > 0) {
@@ -722,13 +727,13 @@ contract RewardsController is
             emit YieldTransferCapped(user, amountToRequest, amountActuallyTransferred);
         }
 
-        // 5. Update user state for ALL claimed collections
+        // 5. Update user state for ALL claimed collections: Reset accrued reward, update index/block
         for (uint256 i = 0; i < collectionsToClaim.length; i++) {
             address collection = collectionsToClaim[i];
             UserRewardState storage info = userRewardState[user][collection];
-            info.accruedReward = 0;
-            info.lastRewardIndex = indexAtClaim;
-            info.lastUpdateBlock = block.number;
+            info.accruedReward = 0; // Reset accrued reward
+            info.lastRewardIndex = indexAtClaim; // Update index
+            info.lastUpdateBlock = block.number; // Update block
         }
 
         // 6. Transfer the total amount actually received from LM to the user
@@ -742,7 +747,7 @@ contract RewardsController is
     // --- Reward Calculation --- //
 
     /**
-     * @notice Calculates the total raw, unscaled pending rewards for a single user/collection.
+     * @notice Calculates the total raw pending rewards for a single user/collection.
      * @dev Iterates through stored state and simulated updates to calculate rewards period by period.
      *      Calls _calculateGlobalIndexAt to get index values for specific blocks.
      *      Uses the collection's specific rewardSharePercentage.
@@ -752,14 +757,18 @@ contract RewardsController is
      * @return totalRawReward The total raw reward accrued up to the current block, including simulations and share percentage.
      */
     function _getRawPendingRewardsSingleCollection(
-        address user, address nftCollection, BalanceUpdateData[] memory simulatedUpdates
+        address user,
+        address nftCollection,
+        BalanceUpdateData[] memory simulatedUpdates
     ) internal returns (uint256 totalRawReward) {
+        // Get the last saved state for the user/collection
         UserRewardState memory currentState = userRewardState[user][nftCollection];
         uint256 currentNFTBalance = currentState.lastNFTBalance;
         uint256 currentBalance = currentState.lastBalance;
         uint256 lastProcessedBlock = currentState.lastUpdateBlock;
         uint256 lastProcessedIndex = currentState.lastRewardIndex;
-        totalRawReward = currentState.accruedReward; // Should be 0
+        // Start with the previously accrued reward (should be 0)
+        totalRawReward = currentState.accruedReward;
         uint256 collectionSharePercentage = collectionRewardSharePercentages[nftCollection];
 
         // --- Process Simulated Updates ---
@@ -767,6 +776,7 @@ contract RewardsController is
         while (simIndex < simulatedUpdates.length) {
             BalanceUpdateData memory update = simulatedUpdates[simIndex];
 
+            // Skip updates for other collections or out-of-order updates
             if (update.collection != nftCollection) {
                 simIndex++;
                 continue;
@@ -774,15 +784,18 @@ contract RewardsController is
             if (update.blockNumber < lastProcessedBlock) {
                 revert SimulationUpdateOutOfOrder(update.blockNumber, lastProcessedBlock);
             }
+            // Allow multiple updates in the same block
             if (update.blockNumber == lastProcessedBlock && update.blockNumber != 0) {
-                 currentNFTBalance = _applyDeltaSimulated(currentNFTBalance, update.nftDelta);
-                 currentBalance = _applyDeltaSimulated(currentBalance, update.balanceDelta);
-                 simIndex++;
-                 continue;
+                // Apply deltas without calculating rewards for a zero-duration period
+                currentNFTBalance = _applyDeltaSimulated(currentNFTBalance, update.nftDelta);
+                currentBalance = _applyDeltaSimulated(currentBalance, update.balanceDelta);
+                simIndex++;
+                continue;
             }
 
             // Calculate rewards for the period ending *before* this simulated update
             if (update.blockNumber > lastProcessedBlock) {
+                // Get index at the end of the period (start of the update block)
                 uint256 indexAtPeriodEnd = _calculateGlobalIndexAt();
                 uint256 indexDelta = 0;
                 if (indexAtPeriodEnd > lastProcessedIndex) {
@@ -793,16 +806,16 @@ contract RewardsController is
                     nftCollection,
                     indexDelta,
                     lastProcessedIndex,
-                    currentNFTBalance,
-                    currentBalance,
+                    currentNFTBalance, // Balance *during* the period
+                    currentBalance, // Balance *during* the period
                     collectionSharePercentage
                 );
                 totalRawReward += rewardForPeriod;
-                lastProcessedIndex = indexAtPeriodEnd;
-                lastProcessedBlock = update.blockNumber;
+                lastProcessedIndex = indexAtPeriodEnd; // Update index for the next period
+                lastProcessedBlock = update.blockNumber; // Update block for the next period
             }
 
-            // Apply the simulated deltas
+            // Apply the simulated deltas for the *next* period's calculation
             currentNFTBalance = _applyDeltaSimulated(currentNFTBalance, update.nftDelta);
             currentBalance = _applyDeltaSimulated(currentBalance, update.balanceDelta);
 
@@ -812,6 +825,7 @@ contract RewardsController is
         // --- Calculate Final Period (from last update/sim block to current block) ---
         uint256 currentBlock = block.number;
         if (currentBlock > lastProcessedBlock) {
+            // Get index at the current block (end of the final period)
             uint256 indexAtPeriodEnd = _calculateGlobalIndexAt();
             uint256 indexDelta = 0;
             if (indexAtPeriodEnd > lastProcessedIndex) {
@@ -822,8 +836,8 @@ contract RewardsController is
                 nftCollection,
                 indexDelta,
                 lastProcessedIndex,
-                currentNFTBalance,
-                currentBalance,
+                currentNFTBalance, // Balance during the final period
+                currentBalance, // Balance during the final period
                 collectionSharePercentage
             );
             totalRawReward += rewardForPeriod;
@@ -871,18 +885,24 @@ contract RewardsController is
         lastUpdateBlock = info.lastUpdateBlock;
     }
 
-    // --- Internal Helper Functions ---
+    uint256 public epochDuration; // Add state variable for epoch duration
 
     /**
-     * @notice Calculates the epoch ID (start timestamp) for a given timestamp.
+     * @notice Sets the duration of a reward epoch.
+     * @dev Placeholder implementation. Actual logic might be needed depending on requirements.
+     * @param newDuration The new epoch duration (e.g., in blocks or seconds).
      */
-    function _getEpochId(uint256 timestamp) internal view returns (uint256) {
-        if (epochDuration == 0) return 0; // Avoid division by zero
-        return timestamp - (timestamp % epochDuration);
+    function setEpochDuration(uint256 newDuration) external override onlyOwner {
+        // Add validation if necessary, e.g., newDuration > 0
+        if (newDuration == 0) revert IRewardsController.InvalidEpochDuration();
+        // uint256 oldDuration = epochDuration;
+        epochDuration = newDuration;
+        // Emit an event if needed
+        // emit EpochDurationUpdated(oldDuration, newDuration);
     }
 
-    // --- Storage Gap ---
-    // Gap ensures storage layout remains compatible during upgrades.
-    // Previous gap: 45. Removed 4 slots, Added 1 slot. Net change: -3. New gap: 45 + 3 = 48.
-    uint256[48] private __gap;
+    // --- Storage Gap --- //
+    // Gap ensures storage layout compatibility for future upgrades
+    // Adjust gap size if new state variables are added above
+    uint256[47] private __gap; // Reduced gap size by 1 due to adding epochDuration
 }

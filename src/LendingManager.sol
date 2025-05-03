@@ -8,7 +8,6 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
 import {CErc20Interface, CTokenInterface} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol";
-import "forge-std/console.sol";
 
 /**
  * @title LendingManager (Compound V2 Fork Adapter)
@@ -117,8 +116,6 @@ contract LendingManager is ILendingManager, AccessControl {
         // Fetch and store decimals (assuming they implement IERC20Metadata)
         underlyingDecimals = IERC20Metadata(_assetAddress).decimals();
         cTokenDecimals = IERC20Metadata(_cTokenAddress).decimals();
-        // console.log("LM Constructor: Underlying Decimals =", underlyingDecimals); // Removed log
-        // console.log("LM Constructor: cToken Decimals =", cTokenDecimals); // Removed log
 
         // Grant initial roles.
         _grantRole(DEFAULT_ADMIN_ROLE, initialAdmin);
@@ -235,14 +232,6 @@ contract LendingManager is ILendingManager, AccessControl {
         // Formula: underlying = cTokens * scaledExchangeRate / scaleFactor
         uint256 assets = (cTokenBalance * exchangeRate) / scaleFactor;
 
-        // console.log("LM totalAssets:"); // Removed logs
-        // console.log("  cTokenBalance:", cTokenBalance);
-        // console.log("  exchangeRate (raw):", exchangeRate);
-        // console.log("  underlyingDecimals:", underlyingDecimals);
-        // console.log("  cTokenDecimals:", cTokenDecimals);
-        // console.log("  calculated scaleFactor:", scaleFactor);
-        // console.log("  calculated assets:", assets);
-
         return assets;
     }
 
@@ -291,44 +280,22 @@ contract LendingManager is ILendingManager, AccessControl {
         if (amountTransferred == 0) {
             return 0;
         }
-        // console.log("LM.transferYield (Before Redeem):"); // Removed log
-        // console.log("  Requested Amount:", amount); // Removed log
-        // console.log("  Available Balance (totalAssets):", availableBalance); // Removed log
-        // console.log("  Total Principal Deposited:", totalPrincipalDeposited); // Removed log
-        // console.log("  Calculated Available Yield:", availableYield); // Removed log
 
-        if (amountTransferred == 0) {
-            console.log("LM.transferYield: Final amount to transfer (underlying) is 0, skipping redeem/transfer.");
-            return 0;
-        }
-
-        // --- ADDED CHECK: Calculate cTokens required for the underlying amount --- //
         uint256 exchangeRate = CTokenInterface(address(_cToken)).exchangeRateStored();
         if (exchangeRate == 0) {
-            console.log("LM.transferYield Error: Exchange rate is zero.");
             return 0;
         }
         // Formula: cTokens = underlying * 1e18 / exchangeRate
         uint256 cTokensToRedeem = (amountTransferred * 1e18) / exchangeRate;
 
         if (cTokensToRedeem == 0) {
-            console.log(
-                "LM.transferYield: Underlying amount %s corresponds to 0 cTokens at rate %s. Skipping redeem/transfer.",
-                amountTransferred,
-                exchangeRate
-            );
             return 0;
         }
-        // --- END ADDED CHECK --- //
 
-        // console.log("LM.transferYield: Proceeding with transfer amount:", amountTransferred); // Redundant log
-
-        // --- CHANGE: Use redeem() instead of redeemUnderlying() --- //
         uint256 balanceBeforeRedeem = _asset.balanceOf(address(this)); // Get balance before
 
         uint256 redeemResult = _cToken.redeem(cTokensToRedeem);
         if (redeemResult != 0) {
-            // console.log("LM.transferYield Error: cToken.redeem failed with code:", redeemResult); // Log removed
             revert RedeemFailed();
         }
 
@@ -453,7 +420,6 @@ contract LendingManager is ILendingManager, AccessControl {
 
         uint256 redeemResult = _cToken.redeem(cTokenBalance);
         if (redeemResult != 0) {
-            console.log("LendingManager.redeemAllCTokens: cToken.redeem failed with code:", redeemResult);
             revert RedeemFailed();
         }
 

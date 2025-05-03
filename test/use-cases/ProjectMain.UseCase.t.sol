@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
-import {Test, console} from "forge-std/Test.sol";
+import {Test, Vm, console} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 // Use OpenZeppelin's IERC20 interface for compatibility with the Vault's asset type
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -168,7 +168,8 @@ contract ProjectMainUseCaseTest is Test {
         console.log("Collection Address:", MOCK_NFT_COLLECTION);
         console.log("Collection Beta:", NFT_BETA);
         vm.prank(admin); // Only the owner (admin) can add collections
-        rewardsController.addNFTCollection(MOCK_NFT_COLLECTION, NFT_BETA, IRewardsController.RewardBasis.DEPOSIT); // Corrected RewardBasis
+        // Add the missing rewardSharePercentage argument (using 5000 as a default valid value)
+        rewardsController.addNFTCollection(MOCK_NFT_COLLECTION, NFT_BETA, IRewardsController.RewardBasis.DEPOSIT, 5000); // Corrected RewardBasis
         // Verify the collection was added correctly
         assertEq(
             rewardsController.getCollectionBeta(MOCK_NFT_COLLECTION), NFT_BETA, "NFT Beta mismatch after whitelisting"
