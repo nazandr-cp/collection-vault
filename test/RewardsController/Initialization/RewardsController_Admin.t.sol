@@ -2,8 +2,8 @@
 pragma solidity ^0.8.20;
 
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import {IRewardsController} from "../../src/interfaces/IRewardsController.sol";
-import {RewardsController_Test_Base} from "./RewardsController_Test_Base.sol";
+import {IRewardsController} from "../../../src/interfaces/IRewardsController.sol";
+import {RewardsController_Test_Base} from "../RewardsController_Test_Base.sol";
 
 contract RewardsController_Admin is RewardsController_Test_Base {
     // --- Admin Function Tests ---

@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import {console} from "forge-std/console.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import {IRewardsController} from "../../src/interfaces/IRewardsController.sol";
-import {RewardsController} from "../../src/RewardsController.sol";
-import {RewardsController_Test_Base} from "./RewardsController_Test_Base.sol";
+import {IRewardsController} from "../../../src/interfaces/IRewardsController.sol";
+import {RewardsController} from "../../../src/RewardsController.sol";
+import {RewardsController_Test_Base} from "../RewardsController_Test_Base.sol";
 
 contract RewardsController_Balance_Updates is RewardsController_Test_Base {
     // --- Balance Update Tests ---
@@ -223,7 +224,9 @@ contract RewardsController_Balance_Updates is RewardsController_Test_Base {
         address collection = NFT_COLLECTION_1;
 
         // --- First update (successful, using direct call) ---
-        uint256 block1 = block.number + 5; // Update in the future
+        uint256 initialBlock = block.number;
+        uint256 block1 = initialBlock + 5; // Update in the future
+        uint256 attemptedUpdateBlock = block1 - 2; // Calculate this BEFORE the first call
         vm.roll(block1);
         int256 nftDelta1 = 1;
         int256 balanceDelta1 = 100 ether;
@@ -248,7 +251,7 @@ contract RewardsController_Balance_Updates is RewardsController_Test_Base {
         );
 
         // --- Second update (attempted in the past, should revert) ---
-        uint256 attemptedUpdateBlock = block1 - 2; // Try to update in the past relative to block1
+        // uint256 attemptedUpdateBlock = block1 - 2; // Moved calculation earlier
         int256 nftDelta2 = 1;
         int256 balanceDelta2 = 50 ether;
 
@@ -267,10 +270,18 @@ contract RewardsController_Balance_Updates is RewardsController_Test_Base {
         assertEq(nonce2, nonce1 + 1, "Nonce for update 2 should be nonce1 + 1");
 
         // Expect the internal revert from _processSingleUpdate (checking selector only)
-        vm.expectRevert(RewardsController.UpdateOutOfOrder.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                RewardsController.UpdateOutOfOrder.selector,
+                user,
+                collection,
+                attemptedUpdateBlock, // The block number causing the revert
+                block1 // The last processed block number stored in state
+            )
+        );
 
         // Call the function directly for the second update, providing ample gas
-        rewardsController.processUserBalanceUpdates{gas: 500_000}(AUTHORIZED_UPDATER, user, updates2, sig2);
+        rewardsController.processUserBalanceUpdates(AUTHORIZED_UPDATER, user, updates2, sig2);
     }
 
     function test_ProcessSingleUpdate_SameBlockUpdate() public {
@@ -333,14 +344,14 @@ contract RewardsController_Balance_Updates is RewardsController_Test_Base {
         assertEq(rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER), nonce + 1, "Nonce mismatch");
 
         // Verify state for collection 1
-        (uint256 lastIdx1,, uint256 nftBal1, uint256 balance1, uint256 lastUpdate1) =
+        (,, uint256 nftBal1, uint256 balance1, uint256 lastUpdate1) =
             rewardsController.userNFTData(USER_A, NFT_COLLECTION_1);
         assertEq(nftBal1, 2);
         assertEq(balance1, 100 ether);
         assertEq(lastUpdate1, block1); // Should be block of the update
 
         // Verify state for collection 2
-        (uint256 lastIdx2,, uint256 nftBal2, uint256 balance2, uint256 lastUpdate2) =
+        (,, uint256 nftBal2, uint256 balance2, uint256 lastUpdate2) =
             rewardsController.userNFTData(USER_A, NFT_COLLECTION_2);
         assertEq(nftBal2, 1);
         assertEq(balance2, 50 ether);

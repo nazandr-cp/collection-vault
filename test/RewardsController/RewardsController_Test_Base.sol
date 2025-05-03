@@ -25,7 +25,6 @@ import {MockLendingManager} from "../../src/mocks/MockLendingManager.sol"; // Im
 contract RewardsController_Test_Base is Test {
     using Strings for uint256;
 
-    // --- EIP-712 Type Hashes ---
     bytes32 public constant USER_BALANCE_UPDATE_DATA_TYPEHASH = keccak256(
         "UserBalanceUpdateData(address user,address collection,uint256 blockNumber,int256 nftDelta,int256 balanceDelta)"
     );
@@ -36,13 +35,12 @@ contract RewardsController_Test_Base is Test {
     bytes32 public constant USER_BALANCE_UPDATES_TYPEHASH =
         keccak256("UserBalanceUpdates(address user,BalanceUpdateData[] updates,uint256 nonce)");
 
-    // --- Constants & Config ---
     address constant USER_A = address(0xAAA);
     address constant USER_B = address(0xBBB);
     address constant USER_C = address(0xCCC);
     address constant NFT_COLLECTION_1 = address(0xC1);
     address constant NFT_COLLECTION_2 = address(0xC2);
-    address constant NFT_COLLECTION_3 = address(0xC3); // Non-whitelisted
+    address constant NFT_COLLECTION_3 = address(0xC3);
     address constant OWNER = address(0x001);
     address constant ADMIN = address(0xAD01);
     address constant OTHER_ADDRESS = address(0x123);
@@ -60,66 +58,45 @@ contract RewardsController_Test_Base is Test {
     uint256 constant FORK_BLOCK_NUMBER = 19670000;
     address constant DAI_WHALE = 0x47ac0Fb4F2D84898e4D9E7b4DaB3C24507a6D503;
 
-    // --- Contracts ---
-    RewardsController internal rewardsController; // Proxy
-    RewardsController internal rewardsControllerImpl; // Implementation
-    LendingManager internal lendingManager; // Implementation (no proxy needed based on use-case)
-    ERC4626Vault internal tokenVault; // Implementation (no proxy needed based on use-case)
-    IERC20 internal rewardToken; // DAI
-    CTokenInterface internal cToken; // cDAI - Use CTokenInterface for accrueInterest
-    ProxyAdmin internal proxyAdmin;
+    RewardsController internal rewardsController;
+    RewardsController internal rewardsControllerImpl;
+    LendingManager internal lendingManager;
+    ERC4626Vault internal tokenVault;
+    IERC20 internal rewardToken;
+    CTokenInterface internal cToken;
+    ProxyAdmin public proxyAdmin;
 
-    // --- Setup ---
     function setUp() public virtual {
-        // --- Fork Mainnet ---
         uint256 forkId = vm.createFork("mainnet", FORK_BLOCK_NUMBER);
         vm.selectFork(forkId);
 
-        // --- Get Real Contracts ---
         rewardToken = IERC20(DAI_ADDRESS);
-        cToken = CTokenInterface(CDAI_ADDRESS); // Cast to CTokenInterface
-        require(CErc20Interface(CDAI_ADDRESS).underlying() == DAI_ADDRESS, "cToken underlying mismatch"); // Check underlying via CErc20Interface if needed
+        cToken = CTokenInterface(CDAI_ADDRESS);
+        require(CErc20Interface(CDAI_ADDRESS).underlying() == DAI_ADDRESS, "cToken underlying mismatch");
 
-        // --- Deploy Contracts ---
         vm.startPrank(OWNER);
 
-        // Deploy Implementations
         rewardsControllerImpl = new RewardsController();
-        lendingManager = new LendingManager(
-            OWNER, // initialAdmin
-            address(1), // vaultAddress placeholder
-            address(1), // rewardsControllerAddress placeholder
-            DAI_ADDRESS,
-            CDAI_ADDRESS
-        );
-        tokenVault = new ERC4626Vault(
-            rewardToken,
-            "Vaulted DAI Test",
-            "vDAIt",
-            OWNER, // initialAdmin
-            address(lendingManager) // Actual LM address
-        );
+        lendingManager = new LendingManager(OWNER, address(1), address(1), DAI_ADDRESS, CDAI_ADDRESS);
+        tokenVault = new ERC4626Vault(rewardToken, "Vaulted DAI Test", "vDAIt", OWNER, address(lendingManager));
 
-        // Deploy ProxyAdmin (Owned by ADMIN for separation of concerns)
         vm.stopPrank();
         vm.startPrank(ADMIN);
         proxyAdmin = new ProxyAdmin(ADMIN);
         vm.stopPrank();
 
-        // Deploy RewardsController Proxy and Initialize (OWNER deploys proxy, ADMIN owns ProxyAdmin)
         vm.startPrank(OWNER);
         bytes memory initData = abi.encodeWithSelector(
             RewardsController.initialize.selector,
-            OWNER, // initialOwner for RewardsController's Ownable
+            OWNER,
             address(lendingManager),
             address(tokenVault),
-            AUTHORIZED_UPDATER // Use Foundry default sender
+            AUTHORIZED_UPDATER
         );
         TransparentUpgradeableProxy proxy =
             new TransparentUpgradeableProxy(address(rewardsControllerImpl), address(proxyAdmin), initData);
         rewardsController = RewardsController(address(proxy));
 
-        // Verify authorizedUpdater was set correctly during initialization
         address actualUpdater = rewardsController.authorizedUpdater();
         address derivedSignerAddress = vm.addr(UPDATER_PRIVATE_KEY);
         assertEq(actualUpdater, AUTHORIZED_UPDATER, "Authorized updater mismatch after init");
@@ -127,11 +104,9 @@ contract RewardsController_Test_Base is Test {
             derivedSignerAddress, AUTHORIZED_UPDATER, "Mismatch between constant address and derived address from PK"
         );
 
-        // Grant roles on LendingManager
         lendingManager.grantVaultRole(address(tokenVault));
-        lendingManager.grantRewardsControllerRole(address(rewardsController)); // Use proxy address
+        lendingManager.grantRewardsControllerRole(address(rewardsController));
 
-        // Whitelist initial collections
         rewardsController.addNFTCollection(
             NFT_COLLECTION_1, BETA_1, IRewardsController.RewardBasis.BORROW, VALID_REWARD_SHARE_PERCENTAGE
         );
@@ -139,20 +114,18 @@ contract RewardsController_Test_Base is Test {
             NFT_COLLECTION_2, BETA_2, IRewardsController.RewardBasis.DEPOSIT, VALID_REWARD_SHARE_PERCENTAGE
         );
 
-        vm.stopPrank(); // Stop OWNER prank
+        vm.stopPrank();
 
-        // --- Fund Accounts ---
         uint256 initialFunding = 1_000_000 ether;
         uint256 userFunding = 10_000 ether;
-        deal(DAI_ADDRESS, DAI_WHALE, initialFunding * 2); // Ensure whale has enough
+        deal(DAI_ADDRESS, DAI_WHALE, initialFunding * 2);
 
         vm.startPrank(DAI_WHALE);
         rewardToken.transfer(USER_A, userFunding);
         rewardToken.transfer(USER_B, userFunding);
         rewardToken.transfer(USER_C, userFunding);
-        vm.stopPrank(); // Stop whale prank
+        vm.stopPrank();
 
-        // Label addresses for easier debugging
         vm.label(OWNER, "OWNER");
         vm.label(ADMIN, "ADMIN");
         vm.label(AUTHORIZED_UPDATER, "AUTHORIZED_UPDATER");

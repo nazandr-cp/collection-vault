@@ -21,9 +21,6 @@ import {ILendingManager} from "./interfaces/ILendingManager.sol";
 /**
  * @title RewardsController (Upgradeable)
  * @notice Manages reward calculation and distribution, incorporating NFT-based bonus multipliers.
- * @dev Implements IRewardsController. Tracks user NFT balances, calculates yield (base + bonus),
- *      and distributes rewards by pulling base yield from the LendingManager. Uses EIP-712 for signed balance updates (single and batch).
- *      Upgradeable using the Transparent Proxy pattern.
  */
 contract RewardsController is
     Initializable,
@@ -35,15 +32,12 @@ contract RewardsController is
     using SafeERC20 for IERC20;
     using EnumerableSet for EnumerableSet.AddressSet;
 
-    /**
-     * @notice Struct to hold reward tracking data per user per collection.
-     */
     struct UserRewardState {
-        uint256 lastRewardIndex; // Global index at the last update for this user/collection
-        uint256 accruedReward; // Total rewards accumulated since last claim (should generally be 0)
-        uint256 lastNFTBalance; // NFT balance at the last update
-        uint256 lastBalance; // Relevant balance (deposit or borrow) at the last update
-        uint256 lastUpdateBlock; // Block number of the last update
+        uint256 lastRewardIndex;
+        uint256 accruedReward;
+        uint256 lastNFTBalance;
+        uint256 lastBalance;
+        uint256 lastUpdateBlock;
     }
 
     // Multi-User Batch Update
@@ -84,9 +78,6 @@ contract RewardsController is
     uint256 public globalRewardIndex; // Represents the cToken exchange rate
 
     // --- Events ---
-    // Note: Events like NFTCollectionAdded, NFTCollectionRemoved, BetaUpdated, AuthorizedUpdaterChanged,
-    // RewardsClaimedForCollection, RewardsClaimedForAll, YieldTransferCapped, CollectionRewardShareUpdated,
-    // BalanceUpdatesProcessed, UserBalanceUpdatesProcessed are inherited from IRewardsController.
     event NFTBalanceUpdateProcessed(
         address indexed user, address indexed collection, uint256 blockNumber, int256 nftDelta, uint256 finalNFTBalance
     );
@@ -95,15 +86,10 @@ contract RewardsController is
     );
 
     // --- Errors ---
-    // Note: Errors like AddressZero, CollectionNotWhitelisted, CollectionAlreadyExists, InvalidSignature,
-    // InvalidNonce, ArrayLengthMismatch, InsufficientYieldFromLendingManager, NoRewardsToClaim,
-    // EmptyBatch, CollectionsArrayEmpty, InvalidRewardSharePercentage, InvalidEpochDuration,
-    // SimulationUpdateOutOfOrder, SimulationBalanceUpdateUnderflow, SimulationBlockInPast
-    // are inherited from IRewardsController.
     error BalanceUpdateUnderflow(uint256 currentValue, uint256 deltaMagnitude);
     error UpdateOutOfOrder(address user, address collection, uint256 updateBlock, uint256 lastProcessedBlock);
     error UserMismatch(address expectedUser, address actualUser);
-    error VaultMismatch(); // Define locally as it's not in the interface
+    error VaultMismatch();
 
     modifier onlyWhitelistedCollection(address collection) {
         if (!_whitelistedCollections.contains(collection)) {
@@ -129,7 +115,6 @@ contract RewardsController is
         lendingManager = ILendingManager(_lendingManagerAddress);
         vault = IERC4626(_vaultAddress);
 
-        // --- Assertions Start ---
         if (address(lendingManager) == address(0)) revert IRewardsController.AddressZero(); // Use inherited error
         if (address(vault) == address(0)) revert IRewardsController.AddressZero(); // Use inherited error
 
@@ -138,8 +123,7 @@ contract RewardsController is
 
         address _vaultAsset = vault.asset();
         if (_vaultAsset == address(0)) revert IRewardsController.AddressZero(); // Use inherited error
-        if (_vaultAsset != address(_rewardToken)) revert VaultMismatch(); // Use locally defined error
-        // --- Assertions End ---
+        if (_vaultAsset != address(_rewardToken)) revert VaultMismatch();
 
         rewardToken = _rewardToken;
         authorizedUpdater = _authorizedUpdater;
@@ -206,17 +190,13 @@ contract RewardsController is
         emit BetaUpdated(collection, oldBeta, newBeta);
     }
 
-    /**
-     * @notice Set the percentage of lending yield allocated to rewards for a specific collection.
-     * @inheritdoc IRewardsController
-     */
     function setCollectionRewardSharePercentage(address collection, uint256 newSharePercentage)
         external
         override
         onlyOwner
         onlyWhitelistedCollection(collection)
     {
-        if (newSharePercentage > MAX_REWARD_SHARE_PERCENTAGE) revert IRewardsController.InvalidRewardSharePercentage(); // Use inherited error
+        if (newSharePercentage > MAX_REWARD_SHARE_PERCENTAGE) revert IRewardsController.InvalidRewardSharePercentage();
         uint256 oldSharePercentage = collectionRewardSharePercentages[collection];
         collectionRewardSharePercentages[collection] = newSharePercentage;
         emit CollectionRewardShareUpdated(collection, oldSharePercentage, newSharePercentage);
@@ -615,19 +595,31 @@ contract RewardsController is
         address[] calldata nftCollections,
         BalanceUpdateData[] calldata simulatedUpdates
     ) external override returns (uint256 pendingReward) {
-        // Note: Not 'view' as _getRawPendingRewardsSingleCollection calls _calculateGlobalIndexAt which modifies state (accrueInterest)
         if (nftCollections.length == 0) {
             return 0;
         }
 
+        for (uint256 _i = 0; _i < simulatedUpdates.length; _i++) {
+            BalanceUpdateData memory _update = simulatedUpdates[_i];
+            uint256 _lastProcessed = userRewardState[user][_update.collection].lastUpdateBlock;
+            if (_update.blockNumber < _lastProcessed) {
+                revert SimulationUpdateOutOfOrder(_update.blockNumber, _lastProcessed);
+            }
+        }
+
         uint256 totalRawPendingReward = 0;
+
+        BalanceUpdateData[] memory memorySimulatedUpdates = new BalanceUpdateData[](simulatedUpdates.length);
+        for (uint256 j = 0; j < simulatedUpdates.length; j++) {
+            memorySimulatedUpdates[j] = simulatedUpdates[j];
+        }
+
         for (uint256 i = 0; i < nftCollections.length; i++) {
             address collection = nftCollections[i];
             if (!isCollectionWhitelisted(collection)) {
-                revert IRewardsController.CollectionNotWhitelisted(collection); // Use inherited error
+                revert IRewardsController.CollectionNotWhitelisted(collection);
             }
-            // Internal function calculates raw reward (which includes share percentage)
-            totalRawPendingReward += _getRawPendingRewardsSingleCollection(user, collection, simulatedUpdates);
+            totalRawPendingReward += _getRawPendingRewardsSingleCollection(user, collection, memorySimulatedUpdates);
         }
 
         pendingReward = totalRawPendingReward;
@@ -761,86 +753,137 @@ contract RewardsController is
         address nftCollection,
         BalanceUpdateData[] memory simulatedUpdates
     ) internal returns (uint256 totalRawReward) {
-        // Get the last saved state for the user/collection
         UserRewardState memory currentState = userRewardState[user][nftCollection];
         uint256 currentNFTBalance = currentState.lastNFTBalance;
         uint256 currentBalance = currentState.lastBalance;
-        uint256 lastProcessedBlock = currentState.lastUpdateBlock;
-        uint256 lastProcessedIndex = currentState.lastRewardIndex;
-        // Start with the previously accrued reward (should be 0)
+        uint256 periodStartBlock = currentState.lastUpdateBlock;
+        uint256 startingIndex = currentState.lastRewardIndex;
+
         totalRawReward = currentState.accruedReward;
         uint256 collectionSharePercentage = collectionRewardSharePercentages[nftCollection];
 
-        // --- Process Simulated Updates ---
+        uint256 currentIndex = _calculateGlobalIndexAt();
+        uint256 currentBlock = block.number;
+
+        if (currentBlock <= periodStartBlock) {
+            return totalRawReward;
+        }
+
+        uint256 totalIndexDelta = 0;
+        if (currentIndex < startingIndex) {
+            totalIndexDelta = 0;
+        } else {
+            totalIndexDelta = currentIndex - startingIndex;
+        }
+
+        if (totalIndexDelta == 0) {
+            for (uint256 simIdx = 0; simIdx < simulatedUpdates.length; simIdx++) {
+                BalanceUpdateData memory update = simulatedUpdates[simIdx];
+                if (update.collection == nftCollection && update.blockNumber < periodStartBlock) {
+                    revert SimulationUpdateOutOfOrder(update.blockNumber, periodStartBlock);
+                }
+            }
+            return totalRawReward;
+        }
+
+        // Total duration for apportionment
+        uint256 totalDuration = currentBlock - periodStartBlock;
+        if (totalDuration == 0) {
+            // Avoid division by zero if currentBlock == periodStartBlock (already handled above, but safe)
+            return totalRawReward;
+        }
+
         uint256 simIndex = 0;
         while (simIndex < simulatedUpdates.length) {
             BalanceUpdateData memory update = simulatedUpdates[simIndex];
 
-            // Skip updates for other collections or out-of-order updates
+            // Skip updates for other collections
             if (update.collection != nftCollection) {
                 simIndex++;
                 continue;
             }
-            if (update.blockNumber < lastProcessedBlock) {
-                revert SimulationUpdateOutOfOrder(update.blockNumber, lastProcessedBlock);
+
+            // --- Out of Order Check (Moved earlier) ---
+            // Check if the simulated update block is before the start of the current calculation period.
+            if (update.blockNumber < periodStartBlock) {
+                revert SimulationUpdateOutOfOrder(update.blockNumber, periodStartBlock);
             }
-            // Allow multiple updates in the same block
-            if (update.blockNumber == lastProcessedBlock && update.blockNumber != 0) {
-                // Apply deltas without calculating rewards for a zero-duration period
+
+            // Determine the end of the current calculation period
+            // It's the earlier of the simulation block or the current block
+            uint256 periodEndBlock = update.blockNumber < currentBlock ? update.blockNumber : currentBlock;
+
+            // --- Same Block Handling ---
+            // If the simulation happens at the start block, just apply deltas and move on
+            // Note: This check uses periodEndBlock which depends on update.blockNumber.
+            // The Out of Order check above ensures update.blockNumber >= periodStartBlock.
+            // Therefore, periodEndBlock = min(update.blockNumber, currentBlock) will also be >= periodStartBlock.
+            // This means periodEndBlock == periodStartBlock can only happen if update.blockNumber == periodStartBlock.
+            if (periodEndBlock == periodStartBlock) {
+                // Equivalent to checking if update.blockNumber == periodStartBlock
+                // Apply delta but don't calculate reward for zero duration
                 currentNFTBalance = _applyDeltaSimulated(currentNFTBalance, update.nftDelta);
                 currentBalance = _applyDeltaSimulated(currentBalance, update.balanceDelta);
+                // Don't advance periodStartBlock yet, handle next sim or final period
                 simIndex++;
                 continue;
             }
 
-            // Calculate rewards for the period ending *before* this simulated update
-            if (update.blockNumber > lastProcessedBlock) {
-                // Get index at the end of the period (start of the update block)
-                uint256 indexAtPeriodEnd = _calculateGlobalIndexAt();
-                uint256 indexDelta = 0;
-                if (indexAtPeriodEnd > lastProcessedIndex) {
-                    indexDelta = indexAtPeriodEnd - lastProcessedIndex;
-                }
-
-                uint256 rewardForPeriod = _calculateRewardsWithDelta(
+            // --- Calculate rewards for the period [periodStartBlock, periodEndBlock) ---
+            if (periodEndBlock > periodStartBlock) {
+                // Calculate the full potential reward using the balance *during* this period
+                uint256 fullRewardPotential = _calculateRewardsWithDelta(
                     nftCollection,
-                    indexDelta,
-                    lastProcessedIndex,
-                    currentNFTBalance, // Balance *during* the period
-                    currentBalance, // Balance *during* the period
+                    totalIndexDelta, // Use the total index delta
+                    startingIndex, // Use the initial index
+                    currentNFTBalance, // Balance *during* this period
+                    currentBalance, // Balance *during* this period
                     collectionSharePercentage
                 );
+
+                // Apportion the reward based on the duration of this period
+                uint256 periodDuration = periodEndBlock - periodStartBlock;
+                // Safe division: totalDuration is checked > 0 above
+                uint256 rewardForPeriod = (fullRewardPotential * periodDuration) / totalDuration;
                 totalRawReward += rewardForPeriod;
-                lastProcessedIndex = indexAtPeriodEnd; // Update index for the next period
-                lastProcessedBlock = update.blockNumber; // Update block for the next period
+
+                // Update the start block for the next period
+                periodStartBlock = periodEndBlock;
             }
 
-            // Apply the simulated deltas for the *next* period's calculation
+            // If this simulation block is at or beyond the current block, we've calculated all rewards up to currentBlock.
+            if (update.blockNumber >= currentBlock) {
+                // Apply the delta for state consistency if needed, but stop reward calculation loop.
+                currentNFTBalance = _applyDeltaSimulated(currentNFTBalance, update.nftDelta);
+                currentBalance = _applyDeltaSimulated(currentBalance, update.balanceDelta);
+                // periodStartBlock is now == currentBlock. The final period calculation below will have duration 0.
+                break; // Exit simulation loop
+            }
+
+            // Apply the simulated deltas *after* calculating reward for the preceding period
             currentNFTBalance = _applyDeltaSimulated(currentNFTBalance, update.nftDelta);
             currentBalance = _applyDeltaSimulated(currentBalance, update.balanceDelta);
 
             simIndex++;
         }
 
-        // --- Calculate Final Period (from last update/sim block to current block) ---
-        uint256 currentBlock = block.number;
-        if (currentBlock > lastProcessedBlock) {
-            // Get index at the current block (end of the final period)
-            uint256 indexAtPeriodEnd = _calculateGlobalIndexAt();
-            uint256 indexDelta = 0;
-            if (indexAtPeriodEnd > lastProcessedIndex) {
-                indexDelta = indexAtPeriodEnd - lastProcessedIndex;
-            }
-
-            uint256 rewardForPeriod = _calculateRewardsWithDelta(
+        // --- Calculate Final Period (from last processed block up to current block) ---
+        if (currentBlock > periodStartBlock) {
+            // Calculate the full potential reward using the balance *during* this final period
+            uint256 fullRewardPotential = _calculateRewardsWithDelta(
                 nftCollection,
-                indexDelta,
-                lastProcessedIndex,
+                totalIndexDelta, // Use the total index delta
+                startingIndex, // Use the initial index
                 currentNFTBalance, // Balance during the final period
                 currentBalance, // Balance during the final period
                 collectionSharePercentage
             );
-            totalRawReward += rewardForPeriod;
+
+            // Apportion the reward based on the duration of this final period
+            uint256 periodDuration = currentBlock - periodStartBlock;
+            // Safe division: totalDuration is checked > 0 above
+            uint256 rewardForFinalPeriod = (fullRewardPotential * periodDuration) / totalDuration;
+            totalRawReward += rewardForFinalPeriod;
         }
 
         // Return the total raw reward calculated across all periods
@@ -885,7 +928,7 @@ contract RewardsController is
         lastUpdateBlock = info.lastUpdateBlock;
     }
 
-    uint256 public epochDuration; // Add state variable for epoch duration
+    uint256 public epochDuration;
 
     /**
      * @notice Sets the duration of a reward epoch.
@@ -893,16 +936,10 @@ contract RewardsController is
      * @param newDuration The new epoch duration (e.g., in blocks or seconds).
      */
     function setEpochDuration(uint256 newDuration) external override onlyOwner {
-        // Add validation if necessary, e.g., newDuration > 0
         if (newDuration == 0) revert IRewardsController.InvalidEpochDuration();
-        // uint256 oldDuration = epochDuration;
         epochDuration = newDuration;
-        // Emit an event if needed
-        // emit EpochDurationUpdated(oldDuration, newDuration);
     }
 
     // --- Storage Gap --- //
-    // Gap ensures storage layout compatibility for future upgrades
-    // Adjust gap size if new state variables are added above
-    uint256[47] private __gap; // Reduced gap size by 1 due to adding epochDuration
+    uint256[47] private __gap;
 }
