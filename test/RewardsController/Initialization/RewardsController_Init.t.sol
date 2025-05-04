@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {MockERC20} from "../../mocks/MockERC20.sol";
-import {MockLendingManager} from "../../../src/mocks/MockLendingManager.sol";
+import {LendingManager} from "../../../src/LendingManager.sol";
 import {RewardsController} from "../../../src/RewardsController.sol";
 import {IRewardsController} from "../../../src/interfaces/IRewardsController.sol";
 import {RewardsController_Test_Base} from "../RewardsController_Test_Base.sol";
@@ -51,9 +51,24 @@ contract RewardsController_Init is RewardsController_Test_Base {
         MockERC20 mockAsset = new MockERC20("Mock Asset", "MOCK", 18);
         // Create a mock cToken for the mock asset
         MockCToken mockCT = new MockCToken(address(mockAsset));
-        // Pass contract instances directly, not addresses
-        MockLendingManager mockLM = new MockLendingManager(mockAsset, mockCT);
+        
+        // Create a real LendingManager with the mock asset
+        LendingManager mockLM = new LendingManager(
+            OWNER, // initialAdmin
+            address(1), // temporary vault address
+            address(2), // temporary rewards controller address
+            address(mockAsset), // asset address
+            address(mockCT) // cToken address
+        );
+        
+        // Create the vault using the lending manager
         ERC4626Vault mockVault = new ERC4626Vault(mockAsset, "Mock Vault", "mV", OWNER, address(mockLM));
+        
+        // Update the vault role in the lending manager
+        vm.prank(OWNER);
+        mockLM.revokeVaultRole(address(1));
+        vm.prank(OWNER);
+        mockLM.grantVaultRole(address(mockVault));
 
         RewardsController newImpl = new RewardsController();
         bytes memory initData = abi.encodeWithSelector(

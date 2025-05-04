@@ -106,8 +106,11 @@ contract RewardsController_FirstClaim_Test is RewardsController_Test_Base {
     // No _depositAndStake needed here as the setup is specific to the first claim test case.
 
     function _simulateYield() internal {
+        // Use the helper function from the base class to properly generate yield
+        _generateYieldInLendingManager(1 ether); // Generate a significant amount of yield
+        
+        // We still want to increment the exchange rate as well
         uint256 currentRate = mockCToken.exchangeRateStored();
-        mockCToken.setExchangeRate(currentRate + 1e16); // Use setExchangeRate
-            // lendingManager.accrueInterest(); // Optional
+        mockCToken.setExchangeRate(currentRate + 1e16);
     }
 }

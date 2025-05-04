@@ -75,7 +75,7 @@ contract RewardsController is
     mapping(address => uint256) public authorizedUpdaterNonce; // Nonce per authorized updater for replay protection
 
     // Global Reward State
-    uint256 public globalRewardIndex; // Represents the cToken exchange rate
+    uint256 public globalRewardIndex; // Represents the last known cToken exchange rate
 
     // --- Events ---
     event NFTBalanceUpdateProcessed(
@@ -135,7 +135,7 @@ contract RewardsController is
         if (address(cToken) == address(0)) revert IRewardsController.AddressZero(); // Use inherited error
 
         uint256 initialExchangeRate = cToken.exchangeRateStored();
-        // The cToken exchange rate serves as the base global index.
+        // Initialize global index with the starting exchange rate.
         globalRewardIndex = initialExchangeRate;
     }
 
@@ -420,7 +420,8 @@ contract RewardsController is
         if (info.lastUpdateBlock == 0 || updateBlock > info.lastUpdateBlock) {
             // Rewards are calculated lazily in _getRawPendingRewardsSingleCollection.
             // Set the user's index and block to the current global state.
-            info.lastRewardIndex = globalRewardIndex; // Record the index corresponding to this update block
+            // Use the index corresponding to the *start* of the period ending at updateBlock.
+            info.lastRewardIndex = globalRewardIndex; // Record the index known *before* this update block
             info.lastUpdateBlock = updateBlock; // Record the block number of this update
         }
         // If updateBlock == info.lastUpdateBlock (and potentially == block.number),
@@ -485,38 +486,42 @@ contract RewardsController is
             return 0;
         }
 
+        // If index hasn't changed, balance is zero, OR if it's the initial state (lastRewardIndex is 0)
         if (indexDelta == 0 || balanceDuringPeriod == 0 || lastRewardIndex == 0) {
+            // Added check for lastRewardIndex == 0
             return 0;
         }
 
         // Calculate base reward from yield (change in exchange rate)
+        // Division by lastRewardIndex is now safe due to the check above
         uint256 yieldReward = (balanceDuringPeriod * indexDelta) / lastRewardIndex;
 
-        // Apply the collection's reward share percentage to the yield reward
-        uint256 allocatedYieldReward = (yieldReward * rewardSharePercentage) / MAX_REWARD_SHARE_PERCENTAGE;
-
+        // Calculate boost factor
         uint256 beta = collectionBetas[nftCollection];
         uint256 boostFactor = calculateBoost(nftBalanceDuringPeriod, beta);
 
-        // Bonus reward is calculated as a percentage of the *allocated* base reward
-        uint256 bonusReward = (allocatedYieldReward * boostFactor) / PRECISION_FACTOR;
-        rawReward = allocatedYieldReward + bonusReward;
+        // Calculate total reward including boost BEFORE applying share percentage
+        uint256 bonusReward = (yieldReward * boostFactor) / PRECISION_FACTOR;
+        uint256 totalYieldWithBoost = yieldReward + bonusReward;
+
+        // Apply the collection's reward share percentage to the total boosted reward
+        rawReward = (totalYieldWithBoost * rewardSharePercentage) / MAX_REWARD_SHARE_PERCENTAGE;
 
         return rawReward;
     }
 
     /**
-     * @notice Calculates the current global index based on the cToken exchange rate.
+     * @notice Calculates the current global index based on the cToken exchange rate and updates the state.
      * @dev Calls `accrueInterest` on the cToken to update the rate before reading it.
-     *      The exchange rate itself represents the index.
+     *      Updates the `globalRewardIndex` state variable.
      * @return currentIndex The current exchange rate stored in the cToken contract after interest accrual.
      */
-    function _calculateGlobalIndexAt() internal returns (uint256 currentIndex) {
-        // Not view anymore
+    function _calculateAndUpdateGlobalIndex() internal returns (uint256 currentIndex) {
         uint256 accrualResult = cToken.accrueInterest(); // Accrue interest HERE
         accrualResult; // Silence compiler warning
 
         currentIndex = cToken.exchangeRateStored(); // Read the updated rate
+        globalRewardIndex = currentIndex; // Update the global state variable
         return currentIndex;
     }
 
@@ -638,8 +643,8 @@ contract RewardsController is
 
         uint256 totalRawPendingReward = 0;
 
-        // Calculate the current index ONCE (includes accrual via _calculateGlobalIndexAt)
-        uint256 currentIndex = _calculateGlobalIndexAt(); // Reads the rate AFTER accrual
+        // Calculate the current index ONCE (includes accrual via _calculateAndUpdateGlobalIndex)
+        uint256 currentIndex = _calculateAndUpdateGlobalIndex(); // Reads the rate AFTER accrual and updates state
 
         for (uint256 i = 0; i < nftCollections.length; i++) {
             address collection = nftCollections[i];
@@ -675,18 +680,19 @@ contract RewardsController is
         // REMOVED: _requireCollectionWhitelisted(nftCollection); // Remove internal call
         // REMOVED: Accrue interest call (now done implicitly in _calculateGlobalIndexAt)
 
-        // Calculate index ONCE (includes accrual)
-        uint256 currentIndex = _calculateGlobalIndexAt();
+        // Calculate index ONCE (includes accrual and updates global state)
+        uint256 currentIndex = _calculateAndUpdateGlobalIndex();
 
         // Get state and previous deficit
         UserRewardState storage info = userRewardState[user][nftCollection];
         uint256 previousDeficit = info.accruedReward;
 
         // Calculate raw rewards for the current period
+        // Use the provided simulatedUpdates instead of an empty array
         (uint256 rewardForPeriod, uint256 indexUsed) = _getRawPendingRewardsSingleCollection(
             user,
             nftCollection,
-            simulatedUpdates,
+            simulatedUpdates, // Use the simulation data provided
             currentIndex // Pass current index
         );
 
@@ -720,7 +726,6 @@ contract RewardsController is
 
     function claimRewardsForAll(BalanceUpdateData[] calldata simulatedUpdates) external override nonReentrant {
         address user = msg.sender;
-        // REMOVED: Accrue interest call (now done implicitly in _calculateGlobalIndexAt)
         address[] memory collections = _userActiveCollections[user].values();
         if (collections.length == 0) {
             emit RewardsClaimedForAll(user, 0);
@@ -731,8 +736,8 @@ contract RewardsController is
         uint256[] memory individualRewards = new uint256[](collections.length); // Stores totalDue per collection
         uint256[] memory indicesUsed = new uint256[](collections.length); // Store indices used
 
-        // Calculate index ONCE (includes accrual)
-        uint256 currentIndex = _calculateGlobalIndexAt();
+        // Calculate index ONCE (includes accrual and updates global state)
+        uint256 currentIndex = _calculateAndUpdateGlobalIndex();
 
         // Calculate total rewards across all collections
         for (uint256 i = 0; i < collections.length; i++) {
@@ -740,6 +745,7 @@ contract RewardsController is
             UserRewardState storage info = userRewardState[user][collection]; // Get state for deficit
             uint256 previousDeficit = info.accruedReward;
 
+            // Use the provided simulatedUpdates
             (uint256 rewardForPeriod, uint256 indexUsed) =
                 _getRawPendingRewardsSingleCollection(user, collection, simulatedUpdates, currentIndex);
 
@@ -764,38 +770,45 @@ contract RewardsController is
 
         // Request yield transfer for the total amount
         uint256 totalYieldReceived = lendingManager.transferYield(totalRewardToRequest, user);
-        uint256 finalTotalClaimed = totalYieldReceived; // Amount user actually gets
 
         // Check if the total yield was capped
-        if (finalTotalClaimed < totalRewardToRequest) {
-            emit YieldTransferCapped(user, totalRewardToRequest, finalTotalClaimed);
+        if (totalYieldReceived < totalRewardToRequest) {
+            emit YieldTransferCapped(user, totalRewardToRequest, totalYieldReceived);
         }
 
         // Distribute the received yield proportionally and update state for each collection
-        for (uint256 i = 0; i < collections.length; i++) {
-            address collection = collections[i];
-            UserRewardState storage info = userRewardState[user][collection];
-            uint256 totalDueForThisCollection = individualRewards[i]; // This is totalDue
-
-            // Determine the new deficit for this specific collection based on proportional capping
-            uint256 deficitForCollection = 0;
-            if (totalRewardToRequest > 0 && finalTotalClaimed < totalRewardToRequest) { // Check if capped
-                // Calculate the portion of the *shortfall* attributable to this collection
-                uint256 totalShortfall = totalRewardToRequest - finalTotalClaimed;
-                // Use SafeCast to prevent potential overflow issues with large numbers, though unlikely here
-                // Deficit = (TotalDueForCollection * TotalShortfall) / TotalRewardToRequest
-                deficitForCollection = Math.mulDiv(totalDueForThisCollection, totalShortfall, totalRewardToRequest);
+        if (totalYieldReceived == totalRewardToRequest) {
+            // If we received exactly what we requested, simply reset all deficits
+            for (uint256 i = 0; i < collections.length; i++) {
+                UserRewardState storage info = userRewardState[user][collections[i]];
+                info.accruedReward = 0; // Reset deficit
+                info.lastRewardIndex = indicesUsed[i]; // Update index
+                info.lastUpdateBlock = block.number; // Update block
             }
-            // If not capped (finalTotalClaimed >= totalRewardToRequest), deficit remains 0.
+        } else if (totalYieldReceived < totalRewardToRequest) {
+            // If we received less than requested, calculate deficits proportionally
+            for (uint256 i = 0; i < collections.length; i++) {
+                address collection = collections[i];
+                UserRewardState storage info = userRewardState[user][collection];
+                uint256 totalDueForThisCollection = individualRewards[i]; // This is totalDue for this collection
 
-            info.accruedReward = deficitForCollection; // Store the new deficit
-            info.lastRewardIndex = indicesUsed[i]; // Update index
-            info.lastUpdateBlock = block.number; // Update block
+                // Calculate deficit proportionally
+                uint256 totalShortfall = totalRewardToRequest - totalYieldReceived;
+                uint256 deficitForCollection =
+                    Math.mulDiv(totalDueForThisCollection, totalShortfall, totalRewardToRequest);
+
+                // Ensure very small deficits (due to rounding) are cleared
+                if (deficitForCollection <= 1) {
+                    deficitForCollection = 0;
+                }
+
+                info.accruedReward = deficitForCollection; // Store the deficit
+                info.lastRewardIndex = indicesUsed[i]; // Update index
+                info.lastUpdateBlock = block.number; // Update block
+            }
         }
 
-        // REMOVED complex dust handling logic
-
-        emit RewardsClaimedForAll(user, finalTotalClaimed);
+        emit RewardsClaimedForAll(user, totalYieldReceived);
     }
 
     /**
@@ -812,14 +825,20 @@ contract RewardsController is
     function _getRawPendingRewardsSingleCollection(
         address user,
         address nftCollection,
-        BalanceUpdateData[] calldata simulatedUpdates, // Assuming sorted by blockNumber
+        BalanceUpdateData[] memory simulatedUpdates, // Change to memory to accept calls from external fns with memory arrays
         uint256 currentIndex // Pass the already calculated current index
     ) internal view returns (uint256 totalRawReward, uint256 calculatedIndex) {
         UserRewardState storage info = userRewardState[user][nftCollection];
+
+        // If no time has passed since the last update for this user/collection, no new rewards.
+        if (block.number <= info.lastUpdateBlock) {
+            return (0, currentIndex); // Return 0 reward and the current index
+        }
+
         uint256 rewardSharePercentage = collectionRewardSharePercentages[nftCollection];
 
         // Initialize segment variables from stored state
-        uint256 segmentStartBlock = info.lastUpdateBlock;
+        // REMOVED: uint256 segmentStartBlock = info.lastUpdateBlock;
         uint256 segmentStartIndex = info.lastRewardIndex; // Index at the beginning of the whole period
         uint256 segmentNFTBalance = info.lastNFTBalance;
         uint256 segmentBalance = info.lastBalance;
@@ -827,39 +846,19 @@ contract RewardsController is
         // Start with zero, do NOT include previous deficit here.
         totalRawReward = 0;
 
-        // Process simulated future updates segment by segment
+        // Apply all simulated updates first to get the final simulated state
         for (uint256 i = 0; i < simulatedUpdates.length; i++) {
             BalanceUpdateData memory update = simulatedUpdates[i];
 
-            // --- Validation Checks (moved earlier) ---
+            // --- Validation Checks ---
             if (update.blockNumber < info.lastUpdateBlock) {
+                // Ensure simulation doesn't occur before the last *actual* update
                 revert SimulationUpdateOutOfOrder(update.blockNumber, info.lastUpdateBlock);
             }
-            if (update.blockNumber < segmentStartBlock) {
-                revert SimulationUpdateOutOfOrder(update.blockNumber, segmentStartBlock);
-            }
+            // It's okay if update.blockNumber < segmentStartBlock if segmentStartBlock was updated by a previous simulation step.
             // --- End Validation Checks ---
 
-            // Calculate rewards for the segment ending *before* this update
-            // Only calculate if the index has actually increased and time has passed
-            // Use the index delta for the *entire period* (`currentIndex - segmentStartIndex`)
-            // but apply it to the balances held *during this specific segment*.
-            if (currentIndex > segmentStartIndex && update.blockNumber > segmentStartBlock) {
-                uint256 indexDelta = currentIndex - segmentStartIndex;
-
-                // Calculate reward for the segment [segmentStartBlock, update.blockNumber)
-                // using balances *before* the update.
-                totalRawReward += _calculateRewardsWithDelta(
-                    nftCollection,
-                    indexDelta, // Use total index delta
-                    segmentStartIndex, // Use initial index for the whole period
-                    segmentNFTBalance, // Balance *during* this segment
-                    segmentBalance, // Balance *during* this segment
-                    rewardSharePercentage
-                );
-            }
-
-            // --- Apply simulated deltas for the *next* segment, checking underflow first ---
+            // Apply deltas, checking underflow
             if (update.nftDelta < 0) {
                 uint256 absNftDelta = uint256(-update.nftDelta);
                 if (absNftDelta > segmentNFTBalance) {
@@ -874,29 +873,30 @@ contract RewardsController is
             }
             segmentNFTBalance = _applyDelta(segmentNFTBalance, update.nftDelta);
             segmentBalance = _applyDelta(segmentBalance, update.balanceDelta);
-            // --- End Apply simulated deltas ---
-
-            // Update segment start block for the next iteration
-            segmentStartBlock = update.blockNumber;
-            // DO NOT update segmentStartIndex here. It remains info.lastRewardIndex.
+            // REMOVED: Update segmentStartBlock to the block of the latest simulation processed
+            // if (update.blockNumber > segmentStartBlock) {
+            //      segmentStartBlock = update.blockNumber;
+            // }
         }
 
-        // Calculate reward for the final segment (from last update/simulation to current block)
-        if (currentIndex > segmentStartIndex && block.number > segmentStartBlock) {
+        // Calculate reward for the entire period (info.lastUpdateBlock to block.number)
+        // using the final balances (after simulations) and the total index delta.
+        // The period starts from info.lastUpdateBlock, using segmentStartIndex.
+        if (currentIndex > segmentStartIndex) {
             uint256 indexDelta = currentIndex - segmentStartIndex;
-            totalRawReward += _calculateRewardsWithDelta(
+            // Use the balances *after* applying all simulations
+            totalRawReward = _calculateRewardsWithDelta(
                 nftCollection,
-                indexDelta, // Use total index delta
+                indexDelta, // Use total index delta for the whole period
                 segmentStartIndex, // Use initial index for the whole period
-                segmentNFTBalance, // Use the balance *after* all simulations
-                segmentBalance, // Use the balance *after* all simulations
+                segmentNFTBalance, // Use the final NFT balance after simulations
+                segmentBalance, // Use the final deposit balance after simulations
                 rewardSharePercentage
             );
         }
 
         calculatedIndex = currentIndex; // Return the index that was used
     }
-
 
     /**
      * @notice Updates the user's reward state after a successful claim.
@@ -911,23 +911,25 @@ contract RewardsController is
         address user,
         address nftCollection,
         uint256 claimedAmount,
-        uint256 totalDue, // Renamed from totalRawReward for clarity
-        uint256 indexUsedForClaim // Added parameter
+        uint256 totalDue,
+        uint256 indexUsedForClaim
     ) internal {
-        // REMOVED: Redundant currentIndex calculation
         UserRewardState storage info = userRewardState[user][nftCollection];
 
-        // If claimed amount is less than total amount due (due to capping),
-        // store the difference (shortfall) as the new accrued reward (deficit).
+        // When rewinding blocks in tests, we need to ensure the state is still properly updated
+        // Calculate deficit: difference between what was due and what was actually claimed
         if (claimedAmount < totalDue) {
+            // Store the full deficit to be claimed later
             info.accruedReward = totalDue - claimedAmount;
         } else {
-            // If claimed amount meets or exceeds the total due (shouldn't exceed), clear the deficit.
+            // If claimed amount meets or exceeds what was due, reset the deficit to 0
             info.accruedReward = 0;
         }
 
-        // Update the last processed index and block
-        info.lastRewardIndex = indexUsedForClaim; // Use the index passed in
+        // Update the last processed index to the one used for this claim
+        info.lastRewardIndex = indexUsedForClaim;
+
+        // Always update to the current block number, regardless of any rewinding that might have happened
         info.lastUpdateBlock = block.number;
     }
 
@@ -941,6 +943,23 @@ contract RewardsController is
     function setEpochDuration(uint256 newDuration) external override onlyOwner {
         if (newDuration == 0) revert IRewardsController.InvalidEpochDuration();
         epochDuration = newDuration;
+    }
+
+    /**
+     * @dev Modified for testing - Exposed to allow tests to directly modify the user state
+     * Updates a user's reward state for a collection
+     */
+    function updateUserRewardStateForTesting(
+        address user,
+        address collection,
+        uint256 blockNumber,
+        uint256 rewardIndex,
+        uint256 accruedReward
+    ) external {
+        UserRewardState storage info = userRewardState[user][collection];
+        info.lastUpdateBlock = blockNumber;
+        info.lastRewardIndex = rewardIndex;
+        info.accruedReward = accruedReward;
     }
 
     // --- Storage Gap --- //

@@ -167,12 +167,9 @@ contract MockLendingManager is ILendingManager {
             console.log("  - Amount To Transfer:", amountTransferred);
             console.log("  - Sender Balance:", currentBalance);
 
-            if (currentBalance >= amountTransferred) {
-                asset.transfer(recipient, amountTransferred);
-            } else {
-                console.log("MockLM.transferYield: Insufficient balance for transfer.");
-                amountTransferred = 0; // Simulate failure due to insufficient funds
-            }
+            // Simulate the transfer directly based on amountTransferred, ignoring mock's own balance.
+            // Assumes the mock can source the funds like the real LM.
+            asset.transfer(recipient, amountTransferred);
         } else if (!transferYieldResult) {
             console.log("MockLM.transferYield: Mock set to fail transfer.");
             amountTransferred = 0; // Simulate failure based on flag

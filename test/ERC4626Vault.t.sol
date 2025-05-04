@@ -5,9 +5,9 @@ import {Test, console2} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {ERC4626Vault} from "../src/ERC4626Vault.sol";
 import {ILendingManager} from "../src/interfaces/ILendingManager.sol";
+import {LendingManager} from "../src/LendingManager.sol";
 import {IERC20} from "@openzeppelin-contracts-5.3.0/token/ERC20/IERC20.sol";
 import {ERC4626} from "@openzeppelin-contracts-5.3.0/token/ERC20/extensions/ERC4626.sol";
-import {MockLendingManager} from "../src/mocks/MockLendingManager.sol";
 import {MockERC20} from "../src/mocks/MockERC20.sol";
 import {MockCToken} from "../src/mocks/MockCToken.sol"; // Add import
 
@@ -22,8 +22,8 @@ address constant TEST_COLLECTION_ADDRESS = address(0xC011EC7); // Placeholder co
 contract ERC4626VaultTest is Test {
     ERC4626Vault public vault;
     MockERC20 public assetToken;
-    MockLendingManager public lendingManager;
-    MockCToken public mockCToken; // Add mock cToken state variable
+    LendingManager public lendingManager;
+    MockCToken public mockCToken; // Mock cToken for test
 
     function setUp() public {
         // Deploy Mock Asset
@@ -32,14 +32,28 @@ contract ERC4626VaultTest is Test {
         // Deploy Mock cToken
         mockCToken = new MockCToken(address(assetToken)); // Create mock cToken
 
-        // Deploy Mock Lending Manager (needs asset address and cToken address)
-        lendingManager = new MockLendingManager(assetToken, mockCToken); // Pass both arguments
+        address VAULT_ADDRESS = address(1); // Temporary address, will be updated later
+        address REWARDS_CONTROLLER_ADDRESS = address(2);
+
+        // Deploy real Lending Manager with proper constructor parameters
+        lendingManager = new LendingManager(
+            OWNER, // initialAdmin
+            VAULT_ADDRESS, // vaultAddress (temporary)
+            REWARDS_CONTROLLER_ADDRESS, // rewardsControllerAddress
+            address(assetToken), // _assetAddress
+            address(mockCToken) // _cTokenAddress
+        );
 
         // Deploy Vault
         vm.prank(OWNER);
         vault = new ERC4626Vault(IERC20(address(assetToken)), "Vault Shares", "VS", OWNER, address(lendingManager));
 
-        // Mint initial assets to users
+        // Now that we have the vault address, update the vault role in LendingManager
+        vm.prank(OWNER);
+        lendingManager.revokeVaultRole(VAULT_ADDRESS); // Remove temporary address
+        
+        vm.prank(OWNER);
+        lendingManager.grantVaultRole(address(vault)); // Grant role to actual vault address
         assetToken.mint(USER_ALICE, USER_INITIAL_ASSET);
         assetToken.mint(USER_BOB, USER_INITIAL_ASSET);
 
@@ -59,7 +73,10 @@ contract ERC4626VaultTest is Test {
 
     function test_Deposit_Success() public {
         uint256 depositAmount = 100 ether;
-        lendingManager.setDepositResult(true);
+        // No need to setDepositResult - the real LendingManager should succeed
+        // Just make sure the asset token is approved for the lending manager from the vault
+        vm.prank(address(vault));
+        assetToken.approve(address(lendingManager), depositAmount);
 
         vm.startPrank(USER_ALICE);
         vm.recordLogs(); // Start recording logs
@@ -101,7 +118,10 @@ contract ERC4626VaultTest is Test {
 
     function test_Withdraw_Success() public {
         uint256 depositAmount = 500 ether;
-        lendingManager.setDepositResult(true);
+        // Ensure vault can approve assets to lending manager
+        vm.prank(address(vault));
+        assetToken.approve(address(lendingManager), depositAmount);
+        
         vm.prank(USER_ALICE);
         uint256 sharesAlice = vault.depositForCollection(depositAmount, USER_ALICE, TEST_COLLECTION_ADDRESS);
         vm.stopPrank(); // Stop prank after deposit
@@ -110,10 +130,16 @@ contract ERC4626VaultTest is Test {
         uint256 vaultTotalAssetsBeforeWithdraw = vault.totalAssets();
 
         // --- Simulate asset transfer FROM LM in _hookWithdraw --- //
-        vm.expectCall(
-            address(assetToken), abi.encodeWithSelector(IERC20.transfer.selector, address(vault), withdrawAmount)
+        // Mock the cToken redeem operation to succeed
+        bytes memory redeemReturnValue = abi.encode(uint256(0)); // Success return code
+        vm.mockCall(
+            address(mockCToken),
+            abi.encodeWithSelector(mockCToken.redeem.selector, withdrawAmount),
+            redeemReturnValue
         );
-        lendingManager.setWithdrawResult(true);
+        
+        // Mint tokens to lending manager to simulate withdrawal from Compound
+        assetToken.mint(address(lendingManager), withdrawAmount);
 
         vm.startPrank(USER_ALICE);
         vm.recordLogs(); // Start recording logs
@@ -163,14 +189,17 @@ contract ERC4626VaultTest is Test {
 
     function test_Mint_Success() public {
         uint256 mintShares = 50 ether;
-        lendingManager.setDepositResult(true);
-
+        
         // Calculate expected assets based on current vault state (empty)
         uint256 expectedAssets = vault.previewMint(mintShares);
 
         // Mint assets required for the vault mint operation *before* pranking
         assetToken.approve(address(vault), expectedAssets); // Approve as owner (test contract)
         assetToken.mint(USER_BOB, expectedAssets); // Mint as owner (test contract)
+        
+        // Ensure vault can approve assets to lending manager
+        vm.prank(address(vault));
+        assetToken.approve(address(lendingManager), expectedAssets);
 
         vm.startPrank(USER_BOB); // Start prank for vault interaction
         vm.recordLogs(); // Start recording logs
@@ -210,13 +239,17 @@ contract ERC4626VaultTest is Test {
 
     function test_Redeem_Success() public {
         uint256 mintShares = 500 ether;
-        lendingManager.setDepositResult(true);
-
+        
         // Simulate initial mint
         uint256 requiredAssets = vault.previewMint(mintShares);
+        
         // Mint required assets *before* pranking as USER_BOB
         assetToken.approve(address(vault), requiredAssets); // Approve as owner (test contract)
         assetToken.mint(USER_BOB, requiredAssets); // Mint as owner (test contract)
+        
+        // Ensure vault can approve assets to lending manager
+        vm.prank(address(vault));
+        assetToken.approve(address(lendingManager), requiredAssets);
 
         vm.startPrank(USER_BOB); // Start prank for vault interaction
         // Use mintForCollection for setup
@@ -228,11 +261,16 @@ contract ERC4626VaultTest is Test {
         uint256 expectedAssetsFromRedeem = vault.previewRedeem(redeemSharesAmount);
 
         // --- Simulate asset transfer FROM LM --- //
-        vm.expectCall(
-            address(assetToken),
-            abi.encodeWithSelector(IERC20.transfer.selector, address(vault), expectedAssetsFromRedeem)
+        // Mock the cToken redeem operation to succeed
+        bytes memory redeemReturnValue = abi.encode(uint256(0)); // Success return code
+        vm.mockCall(
+            address(mockCToken),
+            abi.encodeWithSelector(mockCToken.redeem.selector, expectedAssetsFromRedeem),
+            redeemReturnValue
         );
-        lendingManager.setWithdrawResult(true);
+        
+        // Mint tokens to lending manager to simulate withdrawal from Compound
+        assetToken.mint(address(lendingManager), expectedAssetsFromRedeem);
 
         vm.startPrank(USER_BOB);
         vm.recordLogs(); // Start recording logs
@@ -284,24 +322,28 @@ contract ERC4626VaultTest is Test {
     }
 
     function test_RevertIf_Deposit_LMFails() public {
-        // This test needs adjustment. If the LM transfer fails, safeTransfer reverts.
-        // If a separate LM call fails *after* transfer, how to model that?
-        // Assuming for now failure means LM transfer itself fails.
-        // We can simulate this by making the LM mock *not* have approval or funds.
-        // However, _hookDeposit uses safeTransfer which should revert directly.
-        // Let's test the LendingManagerWithdrawFailed case from _hookWithdraw instead.
-
-        // Let's adapt this test to check _hookWithdraw failure path
+        // This test is repurposed to test withdraw failure from the real LendingManager
+        
         uint256 depositAmount = 100 ether;
-        lendingManager.setDepositResult(true); // Allow deposit
-        vm.prank(USER_ALICE);
-        // Use depositForCollection for setup
-        vault.depositForCollection(depositAmount, USER_ALICE, TEST_COLLECTION_ADDRESS);
+        
+        // Approve tokens for vault from user and from vault to LM
+        vm.prank(address(vault));
+        assetToken.approve(address(lendingManager), depositAmount);
+        
+        // First make a deposit
+        vm.startPrank(USER_ALICE);
+        assetToken.approve(address(vault), depositAmount);
+        uint256 sharesAlice = vault.depositForCollection(depositAmount, USER_ALICE, TEST_COLLECTION_ADDRESS);
         vm.stopPrank();
 
-        // Now attempt to withdraw, but configure LM to fail the withdrawal
+        // Now attempt to withdraw, but configure the mock cToken to fail on redeem
         uint256 withdrawAmount = 50 ether;
-        lendingManager.setWithdrawResult(false); // Configure mock to fail the withdraw call
+        bytes memory redeemFailReturnValue = abi.encode(uint256(1)); // Error return code
+        vm.mockCall(
+            address(mockCToken),
+            abi.encodeWithSelector(mockCToken.redeem.selector, withdrawAmount),
+            redeemFailReturnValue
+        );
 
         vm.startPrank(USER_ALICE);
         vm.expectRevert(ERC4626Vault.LendingManagerWithdrawFailed.selector);
@@ -311,37 +353,39 @@ contract ERC4626VaultTest is Test {
     }
 
     function test_RevertIf_Withdraw_LMFails() public {
-        // This test case is now effectively covered by test_RevertIf_Deposit_LMFails
-        // which was repurposed to test the withdraw failure.
-        // We can keep this structure or remove it.
-        // Let's re-purpose this one to test insufficient balance *after* LM failure.
-
+        // Re-purpose this test to check withdrawal when LM has insufficient balance
+        
         uint256 depositAmount = 100 ether;
-        lendingManager.setDepositResult(true);
-        vm.prank(USER_ALICE);
-        // Use depositForCollection for setup
-        vault.depositForCollection(depositAmount, USER_ALICE, TEST_COLLECTION_ADDRESS);
+        
+        // Approve tokens for vault from user and from vault to LM
+        vm.prank(address(vault));
+        assetToken.approve(address(lendingManager), depositAmount);
+        
+        // First make a deposit
+        vm.startPrank(USER_ALICE);
+        assetToken.approve(address(vault), depositAmount);
+        uint256 sharesAlice = vault.depositForCollection(depositAmount, USER_ALICE, TEST_COLLECTION_ADDRESS);
         vm.stopPrank();
 
         // Attempt to withdraw MORE than available
         uint256 withdrawAmount = depositAmount + 1 ether;
         uint256 currentVaultAssets = vault.totalAssets(); // Get assets before the failing call
 
-        // LM mock withdraw will likely succeed for amount <= balance, but then vault require fails.
-        // If we withdraw more than LM holds, `withdrawFromLendingProtocol` in mock should fail.
-        // Let's test the case where LM has *some* funds but not enough.
-        lendingManager.setWithdrawResult(true); // LM itself doesn't fail the call
+        // Mock the cToken redeem operation to succeed but with insufficient balance
+        // This emulates a scenario where the cToken redeems successfully but not for the full amount
+        bytes memory redeemReturnValue = abi.encode(uint256(0)); // Success return code
+        vm.mockCall(
+            address(mockCToken),
+            abi.encodeWithSelector(mockCToken.redeem.selector, withdrawAmount),
+            redeemReturnValue
+        );
+        
+        // Only mint a partial amount to the lending manager (insufficient for full withdrawal)
+        assetToken.mint(address(lendingManager), depositAmount / 2);
 
-        // Expect LM to transfer its *entire* balance (depositAmount) because that's < withdrawAmount
-        // vm.expectCall( // REMOVED - Hook returns early, no LM withdraw call happens
-        //     address(assetToken), abi.encodeWithSelector(IERC20.transfer.selector, address(vault), depositAmount)
-        // );
-
+        // Even though cToken succeeds, there are insufficient funds to withdraw
         vm.startPrank(USER_ALICE);
-        // The hook will detect insufficient LM funds and return early.
-        // super.withdraw will then revert because assets > maxWithdraw (which uses totalAssets).
-        // vm.expectRevert(ERC4626.ERC4626ExceededMaxWithdraw.selector); // Might not match full error data
-        // Expect CollectionInsufficientBalance because the check happens before the base ERC4626 checks
+        // Expect error when trying to withdraw more than available
         vm.expectRevert(
             abi.encodeWithSelector(
                 ERC4626Vault.CollectionInsufficientBalance.selector,
@@ -357,9 +401,22 @@ contract ERC4626VaultTest is Test {
 
     function test_RevertIf_Constructor_LMMismatch() public {
         MockERC20 wrongAsset = new MockERC20("Wrong Asset", "WST", 18);
-        // Need a cToken for the LM constructor, even if it's temporary
+        
+        // Create mock cToken for the correct asset
         MockCToken tempCToken = new MockCToken(address(assetToken));
-        MockLendingManager tempLM = new MockLendingManager(assetToken, tempCToken); // LM uses correct asset and a cToken
+        
+        // Setup temporary addresses for LendingManager
+        address VAULT_ADDRESS = address(1);
+        address REWARDS_CONTROLLER_ADDRESS = address(2);
+        
+        // Create LendingManager with correct asset
+        LendingManager tempLM = new LendingManager(
+            OWNER,
+            VAULT_ADDRESS,
+            REWARDS_CONTROLLER_ADDRESS,
+            address(assetToken),
+            address(tempCToken)
+        );
 
         vm.prank(OWNER);
         // Vault uses wrong asset
