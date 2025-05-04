@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {ILendingManager} from "../interfaces/ILendingManager.sol";
-import {IERC20} from "@openzeppelin-contracts-5.3.0/token/ERC20/IERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "forge-std/console.sol";
 
 /**
@@ -147,7 +147,8 @@ contract MockLendingManager is ILendingManager {
     }
 
     // --- Added to satisfy ILendingManager interface ---
-    function getAvailableYield() external view returns (uint256) { // Removed override
+    function getAvailableYield() external view returns (uint256) {
+        // Removed override
         return _mockAvailableYield;
     }
     // --- End Added ---
