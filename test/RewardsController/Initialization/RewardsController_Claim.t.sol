@@ -23,7 +23,7 @@ contract RewardsController_Claim_Test is RewardsController_Test_Base {
         // 2. Accrue rewards
         uint256 claimBlock = block.number + 100;
         vm.roll(claimBlock);
-        cToken.accrueInterest();
+        mockCToken.accrueInterest();
 
         // 3. Preview rewards just before claim
         address[] memory collectionsToPreview = new address[](1);
@@ -68,7 +68,7 @@ contract RewardsController_Claim_Test is RewardsController_Test_Base {
         // 2. Accrue rewards
         uint256 claimBlock = block.number + 100;
         vm.roll(claimBlock);
-        cToken.accrueInterest();
+        mockCToken.accrueInterest();
 
         // 3. Preview rewards
         address[] memory collections = new address[](1);
@@ -182,7 +182,7 @@ contract RewardsController_Claim_Test is RewardsController_Test_Base {
         uint256 timePassed = 1 days; // Advance 1 day
         vm.warp(block.timestamp + timePassed); // Use warp for predictable time passage
         vm.roll(block.number + (timePassed / 12)); // Roll blocks roughly corresponding to time (assuming ~12s block time)
-        cToken.accrueInterest(); // Trigger interest accrual on cToken
+        mockCToken.accrueInterest(); // Trigger interest accrual on cToken
 
         // 3. Preview rewards (optional but good practice)
         address[] memory collectionsToPreview = new address[](1);
@@ -246,7 +246,7 @@ contract RewardsController_Claim_Test is RewardsController_Test_Base {
         // 2. Accrue rewards
         uint256 claimBlock = block.number + 100;
         vm.roll(claimBlock);
-        cToken.accrueInterest();
+        mockCToken.accrueInterest();
 
         // 3. Preview rewards for both
         address[] memory cols1 = new address[](1);
@@ -320,7 +320,7 @@ contract RewardsController_Claim_Test is RewardsController_Test_Base {
         // 2. Accrue rewards
         uint256 claimBlock = block.number + 100;
         vm.roll(claimBlock);
-        cToken.accrueInterest();
+        mockCToken.accrueInterest();
 
         // 3. Preview total rewards
         address[] memory allCols = rewardsController.getUserNFTCollections(USER_A);

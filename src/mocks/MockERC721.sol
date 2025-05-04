@@ -28,6 +28,27 @@ contract MockERC721 is ERC721, Ownable {
         return tokenId;
     }
 
+    /**
+     * @notice Mints a specific token ID to an address. For testing only.
+     * @param to The address to mint to.
+     * @param tokenId The specific token ID to mint.
+     */
+    function mintSpecific(address to, uint256 tokenId) public {
+        // Check if token exists using ownerOf within a try/catch block
+        bool exists = true;
+        try this.ownerOf(tokenId) {
+            // If ownerOf succeeds, the token exists
+        } catch {
+            // If ownerOf reverts, the token does not exist
+            exists = false;
+        }
+        require(!exists, "MockERC721: Token already minted");
+
+        _safeMint(to, tokenId);
+        // Note: This doesn't update the internal counter, which might be desired
+        // depending on how the auto-incrementing mint is used elsewhere.
+    }
+
     // Expose internal function for testing purposes if needed
     function _balanceOf(address owner) internal view returns (uint256) {
         return super.balanceOf(owner);

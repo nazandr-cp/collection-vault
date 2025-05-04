@@ -14,6 +14,8 @@ contract MockLendingManager is ILendingManager {
     address public rewardsControllerAddress; // Address of the authorized RewardsController
     address public mockCTokenAddress; // <-- Add mock cToken address
 
+    uint256 private _mockAvailableYield = type(uint256).max; // Default to max, effectively no cap
+
     /**
      * @notice Get the underlying ERC20 asset managed by the lending manager.
      * @return ERC20 asset address.
@@ -42,9 +44,9 @@ contract MockLendingManager is ILendingManager {
     uint256 public depositCalledCount;
     uint256 public withdrawCalledCount;
     uint256 public transferYieldCalledCount;
-    uint256 public expectedTransferAmount;
-    address public expectedTransferRecipient;
-    bool private transferYieldExpectationSet = false;
+    // Remove expectedTransferAmount, transferYieldExpectationSet
+    address public expectedTransferRecipient; // Keep recipient check if needed, or remove if not used
+    bool private recipientExpectationSet = false; // Flag for recipient check
 
     event MockDepositCalled(uint256 amount);
     event MockWithdrawCalled(uint256 amount);
@@ -85,11 +87,16 @@ contract MockLendingManager is ILendingManager {
         shouldTransferYieldRevert = _revert;
     }
 
-    function setExpectedTransferYield(uint256 _amount, address _recipient, bool _result) external {
-        expectedTransferAmount = _amount;
+    // Remove setExpectedTransferYield
+
+    function setMockAvailableYield(uint256 _yield) external {
+        _mockAvailableYield = _yield;
+    }
+
+    // Optional: Keep a way to set expected recipient if needed for specific tests
+    function setExpectedRecipient(address _recipient) external {
         expectedTransferRecipient = _recipient;
-        transferYieldResult = _result;
-        transferYieldExpectationSet = true;
+        recipientExpectationSet = true;
     }
 
     // --- ILendingManager Implementation ---
@@ -139,6 +146,12 @@ contract MockLendingManager is ILendingManager {
         return mockBaseRewardPerBlock;
     }
 
+    // --- Added to satisfy ILendingManager interface ---
+    function getAvailableYield() external view returns (uint256) { // Removed override
+        return _mockAvailableYield;
+    }
+    // --- End Added ---
+
     function transferYield(uint256 amount, address recipient) external override returns (uint256 amountTransferred) {
         transferYieldCalledCount++;
         emit MockTransferYieldCalled(amount, recipient);
@@ -146,48 +159,45 @@ contract MockLendingManager is ILendingManager {
         // Check if the caller is the authorized RewardsController
         require(msg.sender == rewardsControllerAddress, "MockLM: Caller is not the RewardsController");
 
+        // Check recipient if expectation was set
+        if (recipientExpectationSet) {
+            require(recipient == expectedTransferRecipient, "MockLM: Transfer recipient mismatch");
+            recipientExpectationSet = false; // Reset expectation
+        }
+
         if (shouldTransferYieldRevert) {
             revert("MockLM: transferYield forced revert");
         }
 
-        // Simulate capping logic similar to real LM if needed for specific tests
-        // For simplicity, default mock assumes transfer succeeds if funds are available
-        amountTransferred = amount; // Assume full amount initially
+        // Determine actual amount to transfer based on mock available yield and requested amount
+        uint256 available = this.getAvailableYield(); // Call external function using 'this'
+        amountTransferred = amount > available ? available : amount;
 
-        // Check specific expectations if set
-        if (transferYieldExpectationSet) {
-            require(amount == expectedTransferAmount, "MockLM: Transfer amount mismatch");
-            require(recipient == expectedTransferRecipient, "MockLM: Transfer recipient mismatch");
-            // Use the expectation result to determine if transfer *should* succeed
-            if (!transferYieldResult) {
-                amountTransferred = 0; // Simulate failure by returning 0
-            }
-            transferYieldExpectationSet = false; // Reset expectation
-        } else {
-            // Default behavior if no specific expectation is set
-            if (!transferYieldResult) {
-                // Use the general flag
-                amountTransferred = 0;
-            }
-        }
-
-        // Simulate transfer if successful so far
-        if (amountTransferred > 0) {
+        // Simulate transfer if amount > 0 and mock is set to succeed
+        if (amountTransferred > 0 && transferYieldResult) {
             uint256 currentBalance = _asset.balanceOf(address(this));
             console.log("MockLM.transferYield: Attempting transfer...");
             console.log("  - Sender (MockLM):", address(this));
             console.log("  - Recipient:", recipient);
-            console.log("  - Amount:", amountTransferred);
+            console.log("  - Requested Amount:", amount);
+            console.log("  - Available Yield:", available);
+            console.log("  - Amount To Transfer:", amountTransferred);
             console.log("  - Sender Balance:", currentBalance);
 
             if (currentBalance >= amountTransferred) {
-                // Balance check
-                _asset.transfer(recipient, amountTransferred); // <<< THE TRANSFER
+                _asset.transfer(recipient, amountTransferred);
             } else {
-                // Fail if mock doesn't have enough funds, even if expectation was true
+                console.log("MockLM.transferYield: Insufficient balance for transfer.");
                 amountTransferred = 0; // Simulate failure due to insufficient funds
             }
+        } else if (!transferYieldResult) {
+            console.log("MockLM.transferYield: Mock set to fail transfer.");
+            amountTransferred = 0; // Simulate failure based on flag
+        } else {
+            console.log("MockLM.transferYield: Calculated transfer amount is zero.");
+            amountTransferred = 0; // No transfer needed
         }
+
         return amountTransferred;
     }
 

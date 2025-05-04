@@ -32,7 +32,7 @@ contract RewardsController_Rewards is RewardsController_Test_Base {
         _processSingleUserUpdate(USER_A, NFT_COLLECTION_1, updateBlock, 0, 1000 ether); // 0 NFTs, some balance
 
         vm.roll(block.number + 100); // Accrue time
-        cToken.accrueInterest(); // Accrue interest
+        mockCToken.accrueInterest(); // Accrue interest
 
         address[] memory collections = new address[](1);
         collections[0] = NFT_COLLECTION_1;
@@ -48,7 +48,7 @@ contract RewardsController_Rewards is RewardsController_Test_Base {
         _processSingleUserUpdate(USER_A, NFT_COLLECTION_1, updateBlock, 5, 0); // 5 NFTs, 0 balance
 
         vm.roll(block.number + 100); // Accrue time
-        cToken.accrueInterest(); // Accrue interest
+        mockCToken.accrueInterest(); // Accrue interest
 
         address[] memory collections = new address[](1);
         collections[0] = NFT_COLLECTION_1;
@@ -82,8 +82,8 @@ contract RewardsController_Rewards is RewardsController_Test_Base {
         (uint256 startIndex,,,,) = rewardsController.userNFTData(USER_A, NFT_COLLECTION_1);
 
         vm.roll(block.number + 100); // Accrue time
-        cToken.accrueInterest(); // Accrue interest
-        uint256 endIndex = cToken.exchangeRateStored(); // Get index after accrual
+        mockCToken.accrueInterest(); // Accrue interest
+        uint256 endIndex = mockCToken.exchangeRateStored(); // Get index after accrual
 
         address[] memory collections = new address[](1);
         collections[0] = NFT_COLLECTION_1;
@@ -116,7 +116,7 @@ contract RewardsController_Rewards is RewardsController_Test_Base {
         uint256 block2 = block.number + 50; // Simulate update happening later
         uint256 block3 = block.number + 100; // Preview time
         vm.roll(block3);
-        cToken.accrueInterest();
+        mockCToken.accrueInterest();
 
         IRewardsController.BalanceUpdateData[] memory simUpdates = new IRewardsController.BalanceUpdateData[](1);
         simUpdates[0] = IRewardsController.BalanceUpdateData({
@@ -149,7 +149,7 @@ contract RewardsController_Rewards is RewardsController_Test_Base {
         uint256 block2 = block.number + 50; // Simulate update happening later
         uint256 block3 = block.number + 100; // Preview time
         vm.roll(block3);
-        cToken.accrueInterest();
+        mockCToken.accrueInterest();
 
         IRewardsController.BalanceUpdateData[] memory simUpdates = new IRewardsController.BalanceUpdateData[](1);
         simUpdates[0] = IRewardsController.BalanceUpdateData({

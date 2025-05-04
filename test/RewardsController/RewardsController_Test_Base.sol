@@ -20,7 +20,9 @@ import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/crypt
 import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {ProxyAdmin} from "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
+import {MockERC721} from "../../src/mocks/MockERC721.sol"; // Import MockERC721
 import {MockLendingManager} from "../../src/mocks/MockLendingManager.sol"; // Import MockLendingManager
+import {MockCToken} from "../../src/mocks/MockCToken.sol"; // Import MockCToken
 
 contract RewardsController_Test_Base is Test {
     using Strings for uint256;
@@ -60,10 +62,13 @@ contract RewardsController_Test_Base is Test {
 
     RewardsController internal rewardsController;
     RewardsController internal rewardsControllerImpl;
-    LendingManager internal lendingManager;
+    MockLendingManager internal lendingManager; // Changed to MockLendingManager
     ERC4626Vault internal tokenVault;
-    IERC20 internal rewardToken;
-    CTokenInterface internal cToken;
+    IERC20 internal rewardToken; // Actual reward token (DAI)
+    MockERC20 internal mockERC20; // Generic mock ERC20 for testing transfers etc.
+    MockERC721 internal mockERC721; // Mock NFT Collection 1
+    MockERC721 internal mockERC721_2; // Mock NFT Collection 2
+    MockCToken internal mockCToken; // Mock cToken for yield simulation
     ProxyAdmin public proxyAdmin;
 
     function setUp() public virtual {
@@ -71,13 +76,22 @@ contract RewardsController_Test_Base is Test {
         vm.selectFork(forkId);
 
         rewardToken = IERC20(DAI_ADDRESS);
-        cToken = CTokenInterface(CDAI_ADDRESS);
-        require(CErc20Interface(CDAI_ADDRESS).underlying() == DAI_ADDRESS, "cToken underlying mismatch");
+        // Removed assignment to non-existent cToken and related require check
+        // cToken = CTokenInterface(CDAI_ADDRESS);
+        // require(CErc20Interface(CDAI_ADDRESS).underlying() == DAI_ADDRESS, "cToken underlying mismatch");
 
         vm.startPrank(OWNER);
 
         rewardsControllerImpl = new RewardsController();
-        lendingManager = new LendingManager(OWNER, address(1), address(1), DAI_ADDRESS, CDAI_ADDRESS);
+        // Deploy Mocks
+        mockERC20 = new MockERC20("Mock Token", "MOCK", 18);
+        mockERC721 = new MockERC721("Mock NFT 1", "MNFT1");
+        mockERC721_2 = new MockERC721("Mock NFT 2", "MNFT2");
+        mockCToken = new MockCToken(address(rewardToken)); // Mock cToken using DAI as underlying
+        // Constructor takes only the asset address (rewardToken = DAI)
+        lendingManager = new MockLendingManager(address(rewardToken)); // Deploy MockLendingManager
+
+        // Initialize TokenVault with MockLendingManager
         tokenVault = new ERC4626Vault(rewardToken, "Vaulted DAI Test", "vDAIt", OWNER, address(lendingManager));
 
         vm.stopPrank();
@@ -86,6 +100,16 @@ contract RewardsController_Test_Base is Test {
         vm.stopPrank();
 
         vm.startPrank(OWNER);
+        // Proxy deployment and initialization moved down after setting cToken on LM
+
+        // Assertions moved down after rewardsController is initialized
+
+        // Set the mock cToken address *before* initializing RewardsController
+        lendingManager.setMockCTokenAddress(address(mockCToken));
+
+        // Now initialize RewardsController, which will call lendingManager.cToken()
+        vm.stopPrank(); // Stop OWNER prank before proxy creation/init if needed? Check if init needs OWNER
+        vm.startPrank(OWNER); // Ensure OWNER calls initialize via proxy
         bytes memory initData = abi.encodeWithSelector(
             RewardsController.initialize.selector,
             OWNER,
@@ -97,21 +121,24 @@ contract RewardsController_Test_Base is Test {
             new TransparentUpgradeableProxy(address(rewardsControllerImpl), address(proxyAdmin), initData);
         rewardsController = RewardsController(address(proxy));
 
+        // --- Assertions moved here ---
         address actualUpdater = rewardsController.authorizedUpdater();
         address derivedSignerAddress = vm.addr(UPDATER_PRIVATE_KEY);
         assertEq(actualUpdater, AUTHORIZED_UPDATER, "Authorized updater mismatch after init");
         assertEq(
             derivedSignerAddress, AUTHORIZED_UPDATER, "Mismatch between constant address and derived address from PK"
         );
+        // --- End assertions ---
 
-        lendingManager.grantVaultRole(address(tokenVault));
-        lendingManager.grantRewardsControllerRole(address(rewardsController));
+        // Set the rewards controller address *after* it's initialized
+        lendingManager.setRewardsController(address(rewardsController));
 
+        // Whitelist the actual mock contract addresses
         rewardsController.addNFTCollection(
-            NFT_COLLECTION_1, BETA_1, IRewardsController.RewardBasis.BORROW, VALID_REWARD_SHARE_PERCENTAGE
+            address(mockERC721), BETA_1, IRewardsController.RewardBasis.BORROW, VALID_REWARD_SHARE_PERCENTAGE
         );
         rewardsController.addNFTCollection(
-            NFT_COLLECTION_2, BETA_2, IRewardsController.RewardBasis.DEPOSIT, VALID_REWARD_SHARE_PERCENTAGE
+            address(mockERC721_2), BETA_2, IRewardsController.RewardBasis.DEPOSIT, VALID_REWARD_SHARE_PERCENTAGE
         );
 
         vm.stopPrank();
@@ -119,6 +146,7 @@ contract RewardsController_Test_Base is Test {
         uint256 initialFunding = 1_000_000 ether;
         uint256 userFunding = 10_000 ether;
         deal(DAI_ADDRESS, DAI_WHALE, initialFunding * 2);
+        deal(address(rewardToken), address(lendingManager), initialFunding); // Fund Mock LM
 
         vm.startPrank(DAI_WHALE);
         rewardToken.transfer(USER_A, userFunding);
@@ -137,9 +165,10 @@ contract RewardsController_Test_Base is Test {
         vm.label(address(lendingManager), "LendingManager");
         vm.label(address(tokenVault), "TokenVault");
         vm.label(address(proxyAdmin), "ProxyAdmin");
-        vm.label(NFT_COLLECTION_1, "NFT_COLLECTION_1");
-        vm.label(NFT_COLLECTION_2, "NFT_COLLECTION_2");
-        vm.label(NFT_COLLECTION_3, "NFT_COLLECTION_3 (Non-WL)");
+        // Update labels to reflect actual mock addresses being whitelisted
+        vm.label(address(mockERC721), "NFT_COLLECTION_1 (Mock)");
+        vm.label(address(mockERC721_2), "NFT_COLLECTION_2 (Mock)");
+        vm.label(NFT_COLLECTION_3, "NFT_COLLECTION_3 (Constant, Non-WL)"); // Keep this label distinct if needed
     }
 
     // --- Helper Functions ---
