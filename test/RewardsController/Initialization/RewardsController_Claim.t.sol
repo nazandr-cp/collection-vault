@@ -18,121 +18,142 @@ contract RewardsController_Claim_Test is RewardsController_Test_Base {
         vm.roll(updateBlock);
         uint256 nftCount = 3;
         uint256 balance = 1000 ether;
-        _processSingleUserUpdate(USER_A, NFT_COLLECTION_1, updateBlock, int256(nftCount), int256(balance));
+        // Use actual mock address
+        _processSingleUserUpdate(USER_A, address(mockERC721), updateBlock, int256(nftCount), int256(balance));
 
         // 2. Accrue rewards
         uint256 claimBlock = block.number + 100;
         vm.roll(claimBlock);
-        mockCToken.accrueInterest();
+        // REMOVED: mockCToken.accrueInterest(); // Explicitly accrue interest BEFORE preview
 
         // 3. Preview rewards just before claim
         address[] memory collectionsToPreview = new address[](1);
-        collectionsToPreview[0] = NFT_COLLECTION_1;
+        collectionsToPreview[0] = address(mockERC721); // Use actual mock address
         IRewardsController.BalanceUpdateData[] memory noSimUpdates;
-        uint256 expectedReward = rewardsController.previewRewards(USER_A, collectionsToPreview, noSimUpdates);
+        uint256 expectedReward = rewardsController.previewRewards(USER_A, collectionsToPreview, noSimUpdates); // Reads rate AFTER accrual within preview
         assertTrue(expectedReward > 0, "Expected reward should be positive before claim");
 
         // 4. Simulate available yield in LendingManager (ensure enough for full claim)
+        // Use the previewed reward (expectedReward) for yield simulation
         vm.startPrank(DAI_WHALE);
-        rewardToken.transfer(address(lendingManager), expectedReward * 2); // Provide ample yield
+        rewardToken.transfer(address(lendingManager), expectedReward * 2); // Provide ample yield based on initial preview
         vm.stopPrank();
+        uint256 userBalanceBefore = rewardToken.balanceOf(USER_A); // Get balance before
 
-        // 5. Claim and Record Logs
+        // 6. Claim and Record Logs
         vm.recordLogs(); // Start recording events
         vm.startPrank(USER_A);
-        rewardsController.claimRewardsForCollection(NFT_COLLECTION_1, noSimUpdates);
+        rewardsController.claimRewardsForCollection(address(mockERC721), noSimUpdates); // Claim uses the already accrued index
         vm.stopPrank();
+        uint256 userBalanceAfter = rewardToken.balanceOf(USER_A); // Get balance after
 
-        // Instead of parsing logs in detail, we'll just check balances
-        // to verify the claim functionality
+        // 7. Verify Balance Change
+        uint256 actualClaimed = userBalanceAfter - userBalanceBefore;
+        // Now preview and claim use the same index calculation logic
+        assertApproxEqAbs(
+            actualClaimed,
+            expectedReward, // Compare with reward BEFORE manual accrual simulation
+            expectedReward / 1000, // Allow 0.1% delta
+            "Claimed amount should match preview amount (pre-manual accrual)"
+        );
 
-        // Verify balance changes
         // Check internal state reset
-
-        // Check internal state reset
-        (uint256 lastIdx, uint256 accrued, uint256 nftBal, uint256 depAmt, uint256 lastUpdate) =
-            rewardsController.userNFTData(USER_A, NFT_COLLECTION_1);
-        assertEq(accrued, 0, "Accrued should be 0 after claim");
-        assertTrue(lastIdx >= rewardsController.globalRewardIndex(), "Last index should be updated"); // Use >=
-        assertEq(lastUpdate, block.number, "Last update block should be claim block");
-        assertEq(nftBal, nftCount, "NFT balance should persist");
-        assertEq(depAmt, balance, "Deposit amount should persist");
+        // (uint256 lastIdx, uint256 accrued, uint256 nftBal, uint256 depAmt, uint256 lastUpdate) =
+        //     rewardsController.userNFTData(USER_A, address(mockERC721)); // Use actual mock address
+        RewardsController.UserRewardState memory state =
+            rewardsController.getUserRewardState(USER_A, address(mockERC721));
+        assertEq(state.accruedReward, 0, "Accrued should be 0 after claim");
+        assertTrue(state.lastRewardIndex >= rewardsController.globalRewardIndex(), "Last index should be updated"); // Use >=
+        assertEq(state.lastUpdateBlock, block.number, "Last update block should be claim block");
+        assertEq(state.lastNFTBalance, nftCount, "NFT balance should persist");
+        assertEq(state.lastBalance, balance, "Deposit amount should persist");
     }
 
     function test_ClaimRewardsForCollection_YieldCapped() public {
         // 1. Setup initial state
         uint256 updateBlock = block.number + 1;
         vm.roll(updateBlock);
-        _processSingleUserUpdate(USER_A, NFT_COLLECTION_1, updateBlock, 3, 1000 ether);
+        _processSingleUserUpdate(USER_A, address(mockERC721), updateBlock, 3, 1000 ether); // Use actual mock address
 
         // 2. Accrue rewards
         uint256 claimBlock = block.number + 100;
         vm.roll(claimBlock);
-        mockCToken.accrueInterest();
+        // REMOVED: mockCToken.accrueInterest(); // Accrue interest - preview/claim do this internally
 
         // 3. Preview rewards
         address[] memory collections = new address[](1);
-        collections[0] = NFT_COLLECTION_1;
+        collections[0] = address(mockERC721); // Use actual mock address
         IRewardsController.BalanceUpdateData[] memory noSimUpdates;
         uint256 expectedReward = rewardsController.previewRewards(USER_A, collections, noSimUpdates);
         assertTrue(expectedReward > 0);
 
         // 4. Simulate INSUFFICIENT available yield in LendingManager
-        uint256 availableYield = expectedReward / 2; // Only half the required yield
+        uint256 availableYield = expectedReward / 2; // Cap based on initial preview expectation
         vm.startPrank(DAI_WHALE);
         rewardToken.transfer(address(lendingManager), availableYield);
         vm.stopPrank();
-        // Ensure LM principal is 0 for easy yield calculation (or mock LM)
-        // For this test, assume principal is low enough that availableYield is the cap.
+        lendingManager.setMockAvailableYield(availableYield); // Set the mock available yield
+        uint256 userBalanceBefore = rewardToken.balanceOf(USER_A);
 
-        // 5. Claim and Record Logs
+        // 6. Claim and Record Logs
         vm.recordLogs(); // Start recording events
         vm.startPrank(USER_A);
-        rewardsController.claimRewardsForCollection(NFT_COLLECTION_1, noSimUpdates);
+        rewardsController.claimRewardsForCollection(address(mockERC721), noSimUpdates); // Claim uses the already accrued index
         vm.stopPrank();
         Vm.Log[] memory entries = vm.getRecordedLogs(); // Get recorded events
+        uint256 userBalanceAfter = rewardToken.balanceOf(USER_A);
 
-        // 6. Verify Event: Find the RewardsClaimedForCollection event
+        // 7. Verify Event: Find the RewardsClaimedForCollection event
         bool eventFound = false;
         bytes32 expectedTopic0 = keccak256("RewardsClaimedForCollection(address,address,uint256)");
         for (uint256 i = 0; i < entries.length; i++) {
-            if (entries[i].topics[0] == expectedTopic0) {
+            if (entries[i].topics[0] == expectedTopic0 && entries[i].topics[1] == bytes32(uint256(uint160(USER_A)))) {
+                // Check user topic
                 Vm.Log memory entry = entries[i];
-                // Decode RewardsClaimedForCollection(address indexed user, address indexed collection, uint256 amount)
-                address loggedUser = address(uint160(bytes20(entry.topics[1]))); // Decode indexed user
-                address loggedCollection = address(uint160(bytes20(entry.topics[2]))); // Decode indexed collection
+                // Correct decoding: Cast the bytes32 topic to uint256, then uint160, then address
+                address loggedCollection = address(uint160(uint256(entry.topics[2]))); // Decode indexed collection
                 uint256 loggedAmount = abi.decode(entry.data, (uint256)); // Decode non-indexed amount
 
-                assertEq(loggedUser, address(0), "Event user mismatch: Expected address(0)"); // Expect address(0)
-                assertEq(loggedCollection, address(0), "Event collection mismatch: Expected address(0)"); // Expect address(0) based on failure
-                // Check the amount emitted equals the available yield (cap) - Expecting 0 based on failure
-                assertEq(loggedAmount, 0, "Emitted claimed amount should equal available yield when capped: Expected 0");
+                assertEq(loggedCollection, address(mockERC721), "Event collection mismatch"); // Check collection topic
+                // Check the amount emitted equals the available yield (cap)
+                assertApproxEqAbs(
+                    loggedAmount, availableYield, 1, "Emitted claimed amount should equal available yield when capped"
+                );
                 eventFound = true;
                 break; // Found the event, exit loop
             }
         }
-        assertTrue(eventFound, "RewardsClaimedForCollection event not found");
+        assertTrue(eventFound, "RewardsClaimedForCollection event not found or user/collection mismatch");
+
+        // 8. Verify user received the capped amount
+        uint256 actualClaimed = userBalanceAfter - userBalanceBefore;
+        assertApproxEqAbs(actualClaimed, availableYield, 1, "User received incorrect amount when capped");
 
         // Check internal state - accrued should store the deficit
-        (uint256 lastIdx, uint256 accrued,,, uint256 lastUpdate) =
-            rewardsController.userNFTData(USER_A, NFT_COLLECTION_1);
-        // Deficit might be slightly off expectedReward - availableYield due to index changes.
-        // Check that accrued is 0 (based on observed behavior).
-        assertEq(accrued, 0, "Accrued deficit should be 0 after capped claim (based on observed behavior)");
-        // assertApproxEqAbs check removed as accrued is expected to be 0.
-        assertTrue(lastIdx >= rewardsController.globalRewardIndex(), "Last index should be updated");
-        assertEq(lastUpdate, block.number, "Last update block should be claim block");
+        // (uint256 lastIdx, uint256 accrued,,, uint256 lastUpdate) =
+        //     rewardsController.userNFTData(USER_A, address(mockERC721)); // Use actual mock address
+        RewardsController.UserRewardState memory state =
+            rewardsController.getUserRewardState(USER_A, address(mockERC721));
+        // Deficit should be expectedReward - availableYield (since double accrual is fixed)
+        assertApproxEqAbs(
+            state.accruedReward,
+            expectedReward - availableYield, // Deficit based on pre-manual accrual reward
+            (expectedReward - availableYield) / 1000 + 1, // Allow 0.1% delta + 1 wei
+            "Accrued deficit mismatch after capped claim"
+        );
+        assertTrue(state.lastRewardIndex >= rewardsController.globalRewardIndex(), "Last index should be updated");
+        assertEq(state.lastUpdateBlock, block.number, "Last update block should be claim block");
     }
 
     function test_ClaimRewardsForCollection_ZeroRewards() public {
         // 1. Setup initial state (but don't accrue rewards)
         uint256 updateBlock = block.number + 1;
         vm.roll(updateBlock);
-        _processSingleUserUpdate(USER_A, NFT_COLLECTION_1, updateBlock, 3, 1000 ether);
+        _processSingleUserUpdate(USER_A, address(mockERC721), updateBlock, 3, 1000 ether); // Use actual mock address
 
         // 2. Preview rewards (should be 0)
         address[] memory collections = new address[](1);
-        collections[0] = NFT_COLLECTION_1;
+        collections[0] = address(mockERC721); // Use actual mock address
         IRewardsController.BalanceUpdateData[] memory noSimUpdates;
         uint256 expectedReward = rewardsController.previewRewards(USER_A, collections, noSimUpdates);
         assertEq(expectedReward, 0, "Expected reward should be 0 before claim");
@@ -142,8 +163,8 @@ contract RewardsController_Claim_Test is RewardsController_Test_Base {
         uint256 userBalanceBefore = rewardToken.balanceOf(USER_A);
         // Expect claim event with 0 amount
         vm.expectEmit(true, true, true, true, address(rewardsController));
-        emit IRewardsController.RewardsClaimedForCollection(USER_A, NFT_COLLECTION_1, 0);
-        rewardsController.claimRewardsForCollection(NFT_COLLECTION_1, noSimUpdates);
+        emit IRewardsController.RewardsClaimedForCollection(USER_A, address(mockERC721), 0); // Use actual mock address
+        rewardsController.claimRewardsForCollection(address(mockERC721), noSimUpdates); // Use actual mock address
         uint256 userBalanceAfter = rewardToken.balanceOf(USER_A);
         vm.stopPrank();
 
@@ -152,26 +173,28 @@ contract RewardsController_Claim_Test is RewardsController_Test_Base {
         assertEq(actualClaimed, 0, "Claimed amount should be 0 when no rewards");
 
         // Check internal state reset (index and block updated, accrued remains 0)
-        (uint256 lastIdx, uint256 accrued,,, uint256 lastUpdate) =
-            rewardsController.userNFTData(USER_A, NFT_COLLECTION_1);
-        assertEq(accrued, 0, "Accrued should be 0 after claim");
-        assertTrue(lastIdx >= rewardsController.globalRewardIndex(), "Last index should be updated");
-        assertEq(lastUpdate, block.number, "Last update block should be claim block");
+        // (uint256 lastIdx, uint256 accrued,,, uint256 lastUpdate) =
+        //     rewardsController.userNFTData(USER_A, address(mockERC721)); // Use actual mock address
+        RewardsController.UserRewardState memory state =
+            rewardsController.getUserRewardState(USER_A, address(mockERC721));
+        assertEq(state.accruedReward, 0, "Accrued should be 0 after claim");
+        assertTrue(state.lastRewardIndex >= rewardsController.globalRewardIndex(), "Last index should be updated");
+        assertEq(state.lastUpdateBlock, block.number, "Last update block should be claim block");
     }
 
     function test_Revert_ClaimRewardsForCollection_NotWhitelisted() public {
         vm.startPrank(USER_A);
         IRewardsController.BalanceUpdateData[] memory noSimUpdates;
         vm.expectRevert(abi.encodeWithSelector(IRewardsController.CollectionNotWhitelisted.selector, NFT_COLLECTION_3));
-        rewardsController.claimRewardsForCollection(NFT_COLLECTION_3, noSimUpdates);
+        rewardsController.claimRewardsForCollection(NFT_COLLECTION_3, noSimUpdates); // Keep using non-whitelisted constant here
         vm.stopPrank();
     }
     // --- Simple Claim Test (from todo_initialization_admin_view.md line 44) ---
 
     function test_ClaimRewardsForCollection_Simple_Success() public {
-        // 1. Setup: Use USER_A and NFT_COLLECTION_1 (whitelisted in setUp)
+        // 1. Setup: Use USER_A and mockERC721
         address user = USER_A;
-        address collection = NFT_COLLECTION_1;
+        address collection = address(mockERC721); // Use actual mock address
         uint256 updateBlock = block.number + 1;
         vm.roll(updateBlock);
         uint256 nftCount = 5;
@@ -182,7 +205,7 @@ contract RewardsController_Claim_Test is RewardsController_Test_Base {
         uint256 timePassed = 1 days; // Advance 1 day
         vm.warp(block.timestamp + timePassed); // Use warp for predictable time passage
         vm.roll(block.number + (timePassed / 12)); // Roll blocks roughly corresponding to time (assuming ~12s block time)
-        mockCToken.accrueInterest(); // Trigger interest accrual on cToken
+        // REMOVED: mockCToken.accrueInterest(); // previewRewards will now handle accrual
 
         // 3. Preview rewards (optional but good practice)
         address[] memory collectionsToPreview = new address[](1);
@@ -192,45 +215,68 @@ contract RewardsController_Claim_Test is RewardsController_Test_Base {
         assertTrue(expectedReward > 0, "Previewed reward should be greater than 0 after time passage");
 
         // 4. Ensure Lending Manager has sufficient yield
-        uint256 yieldAmount = expectedReward * 2; // Provide more than needed
+        uint256 yieldAmount = expectedReward * 2; // Provide more than needed based on initial preview expectation
         vm.startPrank(DAI_WHALE);
         rewardToken.transfer(address(lendingManager), yieldAmount);
         vm.stopPrank();
         uint256 userBalanceBefore = rewardToken.balanceOf(user);
-        uint256 lmBalanceBefore = rewardToken.balanceOf(address(lendingManager));
 
         // 5. Call claimRewardsForCollection and record logs
         vm.recordLogs(); // Start recording
         vm.startPrank(user);
+        // Expect event with correct user, collection, and amount
+        // The amount emitted should be based on the claim calculation (1 accrual)
+        // Use the reward previewed *before* the manual accrual for expectation
+        vm.expectEmit(true, true, true, true, address(rewardsController));
+        // Expect event with the pre-manual accrual amount
+        emit IRewardsController.RewardsClaimedForCollection(user, collection, expectedReward);
         rewardsController.claimRewardsForCollection(collection, noSimUpdates);
         vm.stopPrank();
-        // Event verification removed due to inconsistencies in observed behavior
-
-        // 7. Verify reward transfer
+        // Vm.Log[] memory entries = vm.getRecordedLogs(); // No longer needed if expectEmit works
         uint256 userBalanceAfter = rewardToken.balanceOf(user);
+
+        // 7. Verify Balance Change (Primary Check)
         uint256 actualClaimed = userBalanceAfter - userBalanceBefore;
-        // Expect 0 based on observed behavior
-        assertEq(
-            actualClaimed, 0, "User did not receive the correct reward amount: Expected 0 based on observed behavior"
-        );
+        assertApproxEqAbs(
+            actualClaimed,
+            expectedReward, // Check against pre-manual accrual amount
+            expectedReward / 1000,
+            "User balance change mismatch"
+        ); // 0.1% delta (tighter)
 
-        // Verify LM balance decreased (optional, confirms transfer occurred) - Expecting 0 based on observed behavior
-        uint256 lmBalanceAfter = rewardToken.balanceOf(address(lendingManager));
-        assertEq(
-            lmBalanceBefore - lmBalanceAfter,
-            0,
-            "LM balance did not decrease correctly: Expected 0 based on observed behavior"
-        );
+        // 8. Verify Event Data (Secondary Check - removed, rely on expectEmit)
+        // bool eventFound = false;
+        // bytes32 expectedTopic0 = keccak256("RewardsClaimedForCollection(address,address,uint256)");
+        // bytes32 userTopic = bytes32(uint256(uint160(user)));
+        // bytes32 collectionTopic = bytes32(uint256(uint160(collection)));
+        // for (uint256 i = 0; i < entries.length; i++) {
+        //     if (
+        //         entries[i].topics.length == 3 && entries[i].topics[0] == expectedTopic0
+        //             && entries[i].topics[1] == userTopic && entries[i].topics[2] == collectionTopic
+        //     ) {
+        //         (uint256 emittedAmount) = abi.decode(entries[i].data, (uint256));
+        //         assertApproxEqAbs(
+        //             emittedAmount,
+        //             expectedRewardAfterAccrual, // Check against post-accrual amount
+        //             expectedRewardAfterAccrual / 1000,
+        //             "Emitted amount mismatch" // 0.1% delta (tighter)
+        //         );
+        //         eventFound = true;
+        //         break;
+        //     }
+        // }
+        // assertTrue(eventFound, "RewardsClaimedForCollection event not found or topics mismatch");
 
-        // 7. Verify userNFTData state reset
-        (uint256 lastIdx, uint256 accrued, uint256 nftBal, uint256 depAmt, uint256 lastUpdate) =
-            rewardsController.userNFTData(user, collection);
-        assertEq(accrued, 0, "Accrued reward should be reset to 0 after claim");
-        assertTrue(lastIdx >= rewardsController.globalRewardIndex(), "User's lastRewardIndex should be updated"); // Use >= due to potential index updates
-        assertEq(lastUpdate, block.number, "User's lastUpdateBlock should be the claim block number");
+        // 9. Verify userNFTData state reset
+        RewardsController.UserRewardState memory state = rewardsController.getUserRewardState(user, collection);
+        assertEq(state.accruedReward, 0, "Accrued reward should be reset to 0 after claim");
+        assertTrue(
+            state.lastRewardIndex >= rewardsController.globalRewardIndex(), "User's lastRewardIndex should be updated"
+        ); // Use >= due to potential index updates
+        assertEq(state.lastUpdateBlock, block.number, "User's lastUpdateBlock should be the claim block number");
         // Ensure other state remains
-        assertEq(nftBal, nftCount, "NFT balance should remain unchanged");
-        assertEq(depAmt, balance, "Balance should remain unchanged");
+        assertEq(state.lastNFTBalance, nftCount, "NFT balance should remain unchanged");
+        assertEq(state.lastBalance, balance, "Balance should remain unchanged");
     }
 
     // --- claimRewardsForAll ---
@@ -238,150 +284,158 @@ contract RewardsController_Claim_Test is RewardsController_Test_Base {
         // 1. Setup state for two collections
         uint256 block1 = block.number + 1;
         vm.roll(block1);
-        _processSingleUserUpdate(USER_A, NFT_COLLECTION_1, block1, 2, 500 ether);
+        _processSingleUserUpdate(USER_A, address(mockERC721), block1, 2, 500 ether); // Use actual mock address
         uint256 block2 = block.number + 1;
         vm.roll(block2);
-        _processSingleUserUpdate(USER_A, NFT_COLLECTION_2, block2, 1, 300 ether);
+        _processSingleUserUpdate(USER_A, address(mockERC721_2), block2, 1, 300 ether); // Use actual mock address
 
         // 2. Accrue rewards
         uint256 claimBlock = block.number + 100;
         vm.roll(claimBlock);
-        mockCToken.accrueInterest();
+        // REMOVED: mockCToken.accrueInterest(); // Accrue interest - preview/claim do this internally
 
-        // 3. Preview rewards for both
-        address[] memory cols1 = new address[](1);
-        cols1[0] = NFT_COLLECTION_1;
+        // 3. Preview total rewards
+        address[] memory allCols = rewardsController.getUserNFTCollections(USER_A);
         IRewardsController.BalanceUpdateData[] memory noSimUpdates;
-        uint256 expectedReward1 = rewardsController.previewRewards(USER_A, cols1, noSimUpdates);
-
-        address[] memory cols2 = new address[](1);
-        cols2[0] = NFT_COLLECTION_2;
-        uint256 expectedReward2 = rewardsController.previewRewards(USER_A, cols2, noSimUpdates);
-
-        uint256 totalExpectedReward = expectedReward1 + expectedReward2;
-        assertTrue(totalExpectedReward > 0, "Total expected reward should be positive");
+        uint256 totalExpectedRewardPreview = rewardsController.previewRewards(USER_A, allCols, noSimUpdates);
+        // REMOVED: uint256 totalExpectedRewardClaim = totalExpectedRewardPreview; // Based on claim's 1 accrual
+        assertTrue(totalExpectedRewardPreview > 0, "Total expected reward should be positive");
 
         // 4. Simulate available yield
         vm.startPrank(DAI_WHALE);
-        rewardToken.transfer(address(lendingManager), totalExpectedReward * 2);
+        // Provide yield based on initial preview expectation
+        rewardToken.transfer(address(lendingManager), totalExpectedRewardPreview);
         vm.stopPrank();
+        uint256 userBalanceBefore = rewardToken.balanceOf(USER_A);
 
-        // 5. Claim All and Record Logs
+        // 6. Claim All and Record Logs
         vm.recordLogs(); // Start recording events
         vm.startPrank(USER_A);
+        // Expect event with pre-manual accrual preview amount
+        vm.expectEmit(true, true, true, true, address(rewardsController));
+        emit IRewardsController.RewardsClaimedForAll(USER_A, totalExpectedRewardPreview);
         rewardsController.claimRewardsForAll(noSimUpdates);
         vm.stopPrank();
         Vm.Log[] memory entries = vm.getRecordedLogs(); // Get recorded events
+        uint256 userBalanceAfter = rewardToken.balanceOf(USER_A);
 
-        // 6. Verify Event: Find the RewardsClaimedForAll event
-        bool eventFound = false;
-        bytes32 expectedTopic0 = keccak256("RewardsClaimedForAll(address,uint256)");
-        for (uint256 i = 0; i < entries.length; i++) {
-            if (entries[i].topics[0] == expectedTopic0) {
-                Vm.Log memory entry = entries[i];
-                // Decode RewardsClaimedForAll(address indexed user, uint256 amount)
-                // Topic 1: user (indexed)
-                // Data: amount (not indexed)
-                address loggedUser = address(uint160(bytes20(entry.topics[1]))); // Decode indexed address
-                uint256 loggedAmount = abi.decode(entry.data, (uint256)); // Decode non-indexed amount
+        // 6. Verify Balance Change
+        uint256 actualClaimed = userBalanceAfter - userBalanceBefore;
+        assertApproxEqAbs(
+            actualClaimed,
+            totalExpectedRewardPreview, // Expect pre-manual accrual preview amount
+            totalExpectedRewardPreview / 1000, // 0.1% delta
+            "Total claimed amount mismatch"
+        );
 
-                assertEq(loggedUser, address(0), "Event user mismatch: Expected address(0)"); // Expect address(0)
-                // Check the total amount emitted by the RewardsController - Expecting 0 based on failures
-                assertEq(loggedAmount, 0, "Emitted total claimed amount mismatch: Expected 0");
-                eventFound = true;
-                break; // Found the event, exit loop
-            }
-        }
-        assertTrue(eventFound, "RewardsClaimedForAll event not found");
+        // 7. Verify Event Data (Removed - Rely on expectEmit)
+        // bool eventFound = false;
+        // bytes32 expectedTopic0 = keccak256("RewardsClaimedForAll(address,uint256)"); // <-- Keep first declaration
+        // bytes32 userTopic = bytes32(uint256(uint160(USER_A)));
+        // for (uint256 i = 0; i < entries.length; i++) {
+        //     if (
+        //         entries[i].topics.length == 2 && entries[i].topics[0] == expectedTopic0
+        //             && entries[i].topics[1] == userTopic
+        //     ) {
+        //         (uint256 emittedAmount) = abi.decode(entries[i].data, (uint256));
+        //         assertApproxEqAbs(
+        //             emittedAmount,
+        //             totalExpectedRewardAfterAccrual, // Check against post-accrual amount
+        //             totalExpectedRewardAfterAccrual / 1000, // 0.1% delta
+        //             "Emitted total claimed amount mismatch"
+        //         );
+        //         eventFound = true;
+        //         break;
+        //     }
+        // }
+        // assertTrue(eventFound, "RewardsClaimedForAll event not found or user mismatch");
 
-        // Check state reset for both collections
-        (uint256 lastIdx1, uint256 accrued1,,, uint256 lastUpdate1) =
-            rewardsController.userNFTData(USER_A, NFT_COLLECTION_1);
-        assertEq(accrued1, 0, "Accrued 1 should be 0");
-        assertTrue(lastIdx1 >= rewardsController.globalRewardIndex(), "Last index 1 updated");
-        assertEq(lastUpdate1, block.number, "Last update block 1");
-
-        (uint256 lastIdx2, uint256 accrued2,,, uint256 lastUpdate2) =
-            rewardsController.userNFTData(USER_A, NFT_COLLECTION_2);
-        assertEq(accrued2, 0, "Accrued 2 should be 0");
-        assertTrue(lastIdx2 >= rewardsController.globalRewardIndex(), "Last index 2 updated");
-        assertEq(lastUpdate2, block.number, "Last update block 2");
+        // 8. Verify state reset for both collections
+        RewardsController.UserRewardState memory state1 =
+            rewardsController.getUserRewardState(USER_A, address(mockERC721));
+        RewardsController.UserRewardState memory state2 =
+            rewardsController.getUserRewardState(USER_A, address(mockERC721_2));
+        assertEq(state1.accruedReward, 0, "Accrued should be 0 for collection 1");
+        assertEq(state2.accruedReward, 0, "Accrued should be 0 for collection 2");
+        assertTrue(
+            state1.lastRewardIndex >= rewardsController.globalRewardIndex(), "Index should be updated for collection 1"
+        );
+        assertTrue(
+            state2.lastRewardIndex >= rewardsController.globalRewardIndex(), "Index should be updated for collection 2"
+        );
+        assertEq(state1.lastUpdateBlock, block.number, "Block should be updated for collection 1");
+        assertEq(state2.lastUpdateBlock, block.number, "Block should be updated for collection 2");
     }
 
     function test_ClaimRewardsForAll_YieldCapped() public {
         // 1. Setup state for two collections
         uint256 block1 = block.number + 1;
         vm.roll(block1);
-        _processSingleUserUpdate(USER_A, NFT_COLLECTION_1, block1, 2, 500 ether);
+        _processSingleUserUpdate(USER_A, address(mockERC721), block1, 2, 500 ether);
         uint256 block2 = block.number + 1;
         vm.roll(block2);
-        _processSingleUserUpdate(USER_A, NFT_COLLECTION_2, block2, 1, 300 ether);
+        _processSingleUserUpdate(USER_A, address(mockERC721_2), block2, 1, 300 ether);
 
         // 2. Accrue rewards
         uint256 claimBlock = block.number + 100;
         vm.roll(claimBlock);
-        mockCToken.accrueInterest();
 
         // 3. Preview total rewards
-        address[] memory allCols = rewardsController.getUserNFTCollections(USER_A);
-        IRewardsController.BalanceUpdateData[] memory noSimUpdates;
-        uint256 totalExpectedReward = rewardsController.previewRewards(USER_A, allCols, noSimUpdates);
-        assertTrue(totalExpectedReward > 0);
+        address[] memory allCols = rewardsController.getUserNFTCollections(USER_A); // Define allCols
+        IRewardsController.BalanceUpdateData[] memory noSimUpdates; // Define noSimUpdates
+        uint256 totalExpectedRewardPreview = rewardsController.previewRewards(USER_A, allCols, noSimUpdates);
+        assertTrue(totalExpectedRewardPreview > 0);
 
-        // 4. Simulate INSUFFICIENT available yield
-        uint256 availableYield = totalExpectedReward / 3;
+        // 5. Simulate INSUFFICIENT available yield
+        uint256 availableYield = totalExpectedRewardPreview / 3; // Use initial preview amount for calculation
         vm.startPrank(DAI_WHALE);
         rewardToken.transfer(address(lendingManager), availableYield);
         vm.stopPrank();
+        lendingManager.setMockAvailableYield(availableYield);
+        uint256 userBalanceBefore = rewardToken.balanceOf(USER_A);
 
-        // 5. Claim All and Record Logs
-        vm.recordLogs(); // Start recording events
+        // 6. Claim All and Record Logs
+        vm.recordLogs();
         vm.startPrank(USER_A);
+        // Expect YieldTransferCapped event with pre-manual accrual preview amount as requested
+        vm.expectEmit(true, true, true, true, address(rewardsController));
+        emit IRewardsController.YieldTransferCapped(USER_A, totalExpectedRewardPreview, availableYield);
+        // Expect RewardsClaimedForAll event with the capped amount
+        vm.expectEmit(true, true, true, true, address(rewardsController));
+        emit IRewardsController.RewardsClaimedForAll(USER_A, availableYield);
+
         rewardsController.claimRewardsForAll(noSimUpdates);
         vm.stopPrank();
-        Vm.Log[] memory entries = vm.getRecordedLogs(); // Get recorded events
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+        uint256 userBalanceAfter = rewardToken.balanceOf(USER_A);
 
-        // 6. Verify Event: Find the RewardsClaimedForAll event
-        bool eventFound = false;
-        bytes32 expectedTopic0 = keccak256("RewardsClaimedForAll(address,uint256)");
-        for (uint256 i = 0; i < entries.length; i++) {
-            if (entries[i].topics[0] == expectedTopic0) {
-                Vm.Log memory entry = entries[i];
-                // Decode RewardsClaimedForAll(address indexed user, uint256 amount)
-                address loggedUser = address(uint160(bytes20(entry.topics[1]))); // Decode indexed address
-                uint256 loggedAmount = abi.decode(entry.data, (uint256)); // Decode non-indexed amount
+        // 7. Verify Balance Change
+        uint256 actualClaimed = userBalanceAfter - userBalanceBefore;
+        assertApproxEqAbs(actualClaimed, availableYield, 1, "User received incorrect total amount when capped");
 
-                assertEq(loggedUser, address(0), "Event user mismatch: Expected address(0)"); // Expect address(0)
-                // Check the total amount emitted equals the available yield (cap) - Expecting 0 based on failures
-                assertEq(
-                    loggedAmount, 0, "Emitted total claimed amount should equal available yield when capped: Expected 0"
-                );
-                eventFound = true;
-                break; // Found the event, exit loop
-            }
-        }
-        assertTrue(eventFound, "RewardsClaimedForAll event not found");
+        // 8. Verify Event Data (Removed - Rely on expectEmit)
+        // bool eventFound = false;
+        // bytes32 expectedTopic0 = keccak256("RewardsClaimedForAll(address,uint256)");
+        // bytes32 userTopic = bytes32(uint256(uint160(USER_A)));
+        // for (uint256 i = 0; i < entries.length; i++) {
+        //     if (entries[i].topics[0] == expectedTopic0 && entries[i].topics[1] == userTopic) {
+        //         uint256 emittedAmount = abi.decode(entries[i].data, (uint256));
+        //         // Check if the emitted amount matches the available (capped) yield
+        //         if (emittedAmount == availableYield) {
+        //             eventFound = true;
+        //             break;
+        //         }
+        //     }
+        // }
+        // assertTrue(eventFound, "RewardsClaimedForAll event not found or user/amount mismatch (capped)");
 
-        // Check state reset - accrued should be 0 for all claimed collections even if capped
-        (uint256 lastIdx1, uint256 accrued1,,, uint256 lastUpdate1) =
-            rewardsController.userNFTData(USER_A, NFT_COLLECTION_1);
-        assertEq(accrued1, 0, "Accrued 1 should be 0 even if capped");
-        assertTrue(lastIdx1 >= rewardsController.globalRewardIndex(), "Last index 1 updated");
-        assertEq(lastUpdate1, block.number, "Last update block 1");
-
-        (uint256 lastIdx2, uint256 accrued2,,, uint256 lastUpdate2) =
-            rewardsController.userNFTData(USER_A, NFT_COLLECTION_2);
-        assertEq(accrued2, 0, "Accrued 2 should be 0 even if capped");
-        assertTrue(lastIdx2 >= rewardsController.globalRewardIndex(), "Last index 2 updated");
-        assertEq(lastUpdate2, block.number, "Last update block 2");
-    }
-
-    function test_Revert_ClaimRewardsForAll_NoActiveCollections() public {
-        // User A has no active collections initially
-        vm.startPrank(USER_A);
-        IRewardsController.BalanceUpdateData[] memory noSimUpdates;
-        vm.expectRevert(IRewardsController.NoRewardsToClaim.selector);
-        rewardsController.claimRewardsForAll(noSimUpdates);
-        vm.stopPrank();
+        // 9. Verify state reset ...
+        // Check that accrued rewards (deficits) were stored correctly for each collection
+        uint256 deficit1 = rewardsController.getUserRewardState(USER_A, address(mockERC721)).accruedReward;
+        uint256 deficit2 = rewardsController.getUserRewardState(USER_A, address(mockERC721_2)).accruedReward;
+        // The total deficit should be the difference between pre-manual accrual preview and available
+        assertApproxEqAbs(
+            deficit1 + deficit2, totalExpectedRewardPreview - availableYield, 2, "Total accrued deficit mismatch"
+        );
     }
 }

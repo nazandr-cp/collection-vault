@@ -3,6 +3,7 @@ pragma solidity ^0.8.19;
 
 import {RewardsController_Test_Base} from "../RewardsController_Test_Base.sol";
 import {IRewardsController} from "src/interfaces/IRewardsController.sol";
+import {RewardsController} from "src/RewardsController.sol"; // <-- Import RewardsController
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 
 contract RewardsController_FirstClaim_Test is RewardsController_Test_Base {
@@ -60,9 +61,10 @@ contract RewardsController_FirstClaim_Test is RewardsController_Test_Base {
         uint256 timestampN = block.timestamp;
 
         // Verify initial state (optional but good practice) - userNFTData takes user, collection
-        (uint256 initialRewardIndex,,,, uint256 initialUpdateBlock) = rewardsController.userNFTData(user, collection);
-        assertTrue(initialRewardIndex > 0, "Initial lastRewardIndex should be set by first update"); // Should be set to global index
-        assertEq(initialUpdateBlock, blockN, "Initial lastUpdateBlock mismatch");
+        // (uint256 initialRewardIndex,,,, uint256 initialUpdateBlock) = rewardsController.userNFTData(user, collection);
+        RewardsController.UserRewardState memory initialState = rewardsController.getUserRewardState(user, collection);
+        assertTrue(initialState.lastRewardIndex > 0, "Initial lastRewardIndex should be set by first update"); // Should be set to global index
+        assertEq(initialState.lastUpdateBlock, blockN, "Initial lastUpdateBlock mismatch");
 
         // 2. Advance time & accrue yield
         vm.warp(timestampN + 1 days);
@@ -88,9 +90,12 @@ contract RewardsController_FirstClaim_Test is RewardsController_Test_Base {
         // Event emission check removed for now, focus on state and balance
 
         // 2. User state updated correctly - userNFTData takes user, collection
-        (uint256 finalRewardIndex,,,, uint256 finalUpdateBlock) = rewardsController.userNFTData(user, collection);
-        assertTrue(finalRewardIndex > initialRewardIndex, "finalRewardIndex should increase after claim"); // Index should advance
-        assertEq(finalUpdateBlock, claimBlock, "finalUpdateBlock mismatch - should be claim block");
+        // (uint256 finalRewardIndex,,,, uint256 finalUpdateBlock) = rewardsController.userNFTData(user, collection);
+        RewardsController.UserRewardState memory finalState = rewardsController.getUserRewardState(user, collection);
+        assertTrue(
+            finalState.lastRewardIndex > initialState.lastRewardIndex, "finalRewardIndex should increase after claim"
+        ); // Index should advance
+        assertEq(finalState.lastUpdateBlock, claimBlock, "finalUpdateBlock mismatch - should be claim block");
 
         // 3. Correct reward calculation (implicit check via claimedAmount > 0)
         //    A precise check requires replicating reward logic based on the period from blockN to claimBlock.

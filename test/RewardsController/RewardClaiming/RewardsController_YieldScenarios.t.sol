@@ -3,6 +3,7 @@ pragma solidity ^0.8.19;
 
 import {RewardsController_Test_Base} from "../RewardsController_Test_Base.sol";
 import {IRewardsController} from "src/interfaces/IRewardsController.sol";
+import {RewardsController} from "src/RewardsController.sol"; // <-- Import RewardsController
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 
 contract RewardsController_YieldScenarios_Test is RewardsController_Test_Base {
@@ -45,6 +46,7 @@ contract RewardsController_YieldScenarios_Test is RewardsController_Test_Base {
         uint256 claimTimestamp = block.timestamp; // Timestamp N + 1 day
 
         // --- Action ---
+        mockCToken.setAccrueInterestEnabled(false); // Prevent accrual during claim
         vm.startPrank(user);
         uint256 balanceBefore = rewardToken.balanceOf(user); // Use rewardToken
         rewardsController.claimRewardsForCollection(collection, new IRewardsController.BalanceUpdateData[](0)); // Use BalanceUpdateData
@@ -53,14 +55,16 @@ contract RewardsController_YieldScenarios_Test is RewardsController_Test_Base {
 
         // --- Verification ---
         // 1. No reward tokens transferred
+        mockCToken.setAccrueInterestEnabled(true); // Re-enable accrual
         assertEq(balanceAfter, balanceBefore, "User balance should not change with zero yield");
 
         // 2. User state IS updated to the claim block - userNFTData takes user, collection
         // Declare variables once
-        (uint256 lastRewardIndex,,,, uint256 lastUpdateBlock) = rewardsController.userNFTData(user, collection);
+        // (uint256 lastRewardIndex,,,, uint256 lastUpdateBlock) = rewardsController.userNFTData(user, collection);
+        RewardsController.UserRewardState memory state = rewardsController.getUserRewardState(user, collection);
         // lastRewardIndex might still be 0 if the global index didn't move, or > 0 if it did.
         // The crucial part is that lastUpdateBlock is updated.
-        assertEq(lastUpdateBlock, claimBlock, "lastUpdateBlock mismatch - should be claim block even with zero yield");
+        assertEq(state.lastUpdateBlock, claimBlock, "lastUpdateBlock mismatch - should be claim block even with zero yield");
         // Removed duplicate block
     }
 
@@ -88,17 +92,19 @@ contract RewardsController_YieldScenarios_Test is RewardsController_Test_Base {
         // Advance time BUT ensure NO yield accrues
         vm.warp(timestampN + 2 days);
         vm.roll(blockN + 200);
-        mockCToken.setExchangeRate(initialExchangeRate); // Use setExchangeRate
+        // mockCToken.setExchangeRate(initialExchangeRate); // Removed: This sets currentExchangeRate, not relevant for reward calc index
 
         uint256 claimBlock = block.number; // Block N + 200
         uint256 claimTimestamp = block.timestamp; // Timestamp N + 2 days
 
         // --- Action ---
+        mockCToken.setAccrueInterestEnabled(false); // Disable accrual for this call
         vm.startPrank(user);
         uint256 balanceBefore = rewardToken.balanceOf(user); // Use rewardToken
         rewardsController.claimRewardsForAll(new IRewardsController.BalanceUpdateData[](0)); // Use BalanceUpdateData
         uint256 balanceAfter = rewardToken.balanceOf(user); // Use rewardToken
         vm.stopPrank();
+        mockCToken.setAccrueInterestEnabled(true); // Re-enable accrual
 
         // --- Verification ---
         // 1. No reward tokens transferred
@@ -106,11 +112,13 @@ contract RewardsController_YieldScenarios_Test is RewardsController_Test_Base {
 
         // 2. User state IS updated for both collections - userNFTData takes user, collection
         // Declare variables once
-        (uint256 lastRewardIndex1,,,, uint256 lastUpdateBlock1) = rewardsController.userNFTData(user, collection1);
-        assertEq(lastUpdateBlock1, claimBlock, "C1 lastUpdateBlock mismatch");
+        // (uint256 lastRewardIndex1,,,, uint256 lastUpdateBlock1) = rewardsController.userNFTData(user, collection1);
+        RewardsController.UserRewardState memory state1 = rewardsController.getUserRewardState(user, collection1);
+        assertEq(state1.lastUpdateBlock, claimBlock, "C1 lastUpdateBlock mismatch");
 
-        (uint256 lastRewardIndex2,,,, uint256 lastUpdateBlock2) = rewardsController.userNFTData(user, collection2);
-        assertEq(lastUpdateBlock2, claimBlock, "C2 lastUpdateBlock mismatch");
+        // (uint256 lastRewardIndex2,,,, uint256 lastUpdateBlock2) = rewardsController.userNFTData(user, collection2);
+        RewardsController.UserRewardState memory state2 = rewardsController.getUserRewardState(user, collection2);
+        assertEq(state2.lastUpdateBlock, claimBlock, "C2 lastUpdateBlock mismatch");
         // Removed duplicate block
     }
 

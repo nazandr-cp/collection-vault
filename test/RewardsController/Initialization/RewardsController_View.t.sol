@@ -15,14 +15,14 @@ contract RewardsController_View is RewardsController_Test_Base {
     function test_GetUserCollectionTracking() public {
         uint256 block1 = block.number + 1;
         vm.roll(block1);
-        _processSingleUserUpdate(USER_A, NFT_COLLECTION_1, block1, 2, 100 ether);
+        _processSingleUserUpdate(USER_A, address(mockERC721), block1, 2, 100 ether); // Use mock address
         uint256 block2 = block.number + 1;
         vm.roll(block2);
-        _processSingleUserUpdate(USER_A, NFT_COLLECTION_2, block2, 1, 50 ether);
+        _processSingleUserUpdate(USER_A, address(mockERC721_2), block2, 1, 50 ether); // Use mock address
 
         address[] memory collections = new address[](2);
-        collections[0] = NFT_COLLECTION_1;
-        collections[1] = NFT_COLLECTION_2;
+        collections[0] = address(mockERC721); // Use mock address
+        collections[1] = address(mockERC721_2); // Use mock address
 
         IRewardsController.UserCollectionTracking[] memory tracking =
             rewardsController.getUserCollectionTracking(USER_A, collections);
@@ -47,28 +47,29 @@ contract RewardsController_View is RewardsController_Test_Base {
     }
 
     function test_GetCollectionBeta() public view {
-        assertEq(rewardsController.getCollectionBeta(NFT_COLLECTION_1), BETA_1);
+        assertEq(rewardsController.getCollectionBeta(address(mockERC721)), BETA_1); // Use mock address
+        assertEq(rewardsController.getCollectionBeta(address(mockERC721_2)), BETA_2); // Use mock address
     }
 
     function test_Revert_GetCollectionBeta() public {
         vm.expectRevert(abi.encodeWithSelector(IRewardsController.CollectionNotWhitelisted.selector, NFT_COLLECTION_3));
-        rewardsController.getCollectionBeta(NFT_COLLECTION_3);
+        rewardsController.getCollectionBeta(NFT_COLLECTION_3); // Keep non-whitelisted constant
     }
 
     function test_GetCollectionRewardBasis() public view {
         assertEq(
-            uint256(rewardsController.getCollectionRewardBasis(NFT_COLLECTION_1)),
+            uint256(rewardsController.getCollectionRewardBasis(address(mockERC721))), // Use mock address
             uint256(IRewardsController.RewardBasis.BORROW)
         );
         assertEq(
-            uint256(rewardsController.getCollectionRewardBasis(NFT_COLLECTION_2)),
+            uint256(rewardsController.getCollectionRewardBasis(address(mockERC721_2))), // Use mock address
             uint256(IRewardsController.RewardBasis.DEPOSIT)
         );
     }
 
     function test_Revert_GetCollectionRewardBasis_NotWhitelisted() public {
         vm.expectRevert(abi.encodeWithSelector(IRewardsController.CollectionNotWhitelisted.selector, NFT_COLLECTION_3));
-        rewardsController.getCollectionRewardBasis(NFT_COLLECTION_3);
+        rewardsController.getCollectionRewardBasis(NFT_COLLECTION_3); // Keep non-whitelisted constant
     }
 
     function test_GetUserNFTCollections() public {
@@ -79,41 +80,42 @@ contract RewardsController_View is RewardsController_Test_Base {
         // Add one collection
         uint256 block1 = block.number + 1;
         vm.roll(block1);
-        _processSingleUserUpdate(USER_A, NFT_COLLECTION_1, block1, 1, 10 ether);
+        _processSingleUserUpdate(USER_A, address(mockERC721), block1, 1, 10 ether); // Use mock address
         address[] memory active1 = rewardsController.getUserNFTCollections(USER_A);
         assertEq(active1.length, 1);
-        assertEq(active1[0], NFT_COLLECTION_1);
+        assertEq(active1[0], address(mockERC721)); // Use mock address
 
         // Add another collection
         uint256 block2 = block.number + 1;
         vm.roll(block2);
-        _processSingleUserUpdate(USER_A, NFT_COLLECTION_2, block2, 1, 10 ether);
+        _processSingleUserUpdate(USER_A, address(mockERC721_2), block2, 1, 10 ether); // Use mock address
         address[] memory active2 = rewardsController.getUserNFTCollections(USER_A);
         assertEq(active2.length, 2);
         // Order might not be guaranteed, check for presence
-        assertTrue(active2[0] == NFT_COLLECTION_1 || active2[1] == NFT_COLLECTION_1);
-        assertTrue(active2[0] == NFT_COLLECTION_2 || active2[1] == NFT_COLLECTION_2);
+        assertTrue(active2[0] == address(mockERC721) || active2[1] == address(mockERC721)); // Use mock address
+        assertTrue(active2[0] == address(mockERC721_2) || active2[1] == address(mockERC721_2)); // Use mock address
 
         // Remove one collection by zeroing balance/nft
         uint256 block3 = block.number + 1;
         vm.roll(block3);
-        _processSingleUserUpdate(USER_A, NFT_COLLECTION_1, block3, -1, -10 ether);
+        _processSingleUserUpdate(USER_A, address(mockERC721), block3, -1, -10 ether); // Use mock address
         address[] memory active3 = rewardsController.getUserNFTCollections(USER_A);
         assertEq(active3.length, 1);
-        assertEq(active3[0], NFT_COLLECTION_2);
+        assertEq(active3[0], address(mockERC721_2)); // Use mock address
     }
 
     function test_IsCollectionWhitelisted() public view {
-        assertTrue(rewardsController.isCollectionWhitelisted(NFT_COLLECTION_1));
-        assertFalse(rewardsController.isCollectionWhitelisted(NFT_COLLECTION_3));
+        assertTrue(rewardsController.isCollectionWhitelisted(address(mockERC721))); // Use mock address
+        assertTrue(rewardsController.isCollectionWhitelisted(address(mockERC721_2))); // Use mock address
+        assertFalse(rewardsController.isCollectionWhitelisted(NFT_COLLECTION_3)); // Keep non-whitelisted constant
     }
 
     function test_GetWhitelistedCollections() public {
         address[] memory whitelisted = rewardsController.getWhitelistedCollections();
         assertEq(whitelisted.length, 2); // Initially added 2
         // Order might not be guaranteed
-        assertTrue(whitelisted[0] == NFT_COLLECTION_1 || whitelisted[1] == NFT_COLLECTION_1);
-        assertTrue(whitelisted[0] == NFT_COLLECTION_2 || whitelisted[1] == NFT_COLLECTION_2);
+        assertTrue(whitelisted[0] == address(mockERC721) || whitelisted[1] == address(mockERC721)); // Use mock address
+        assertTrue(whitelisted[0] == address(mockERC721_2) || whitelisted[1] == address(mockERC721_2)); // Use mock address
 
         // Add another
         vm.startPrank(OWNER);
@@ -123,38 +125,49 @@ contract RewardsController_View is RewardsController_Test_Base {
         vm.stopPrank();
         whitelisted = rewardsController.getWhitelistedCollections();
         assertEq(whitelisted.length, 3);
+        // Check for all three now
+        bool found1 = false;
+        bool found2 = false;
+        bool found3 = false;
+        for (uint256 i = 0; i < whitelisted.length; i++) {
+            if (whitelisted[i] == address(mockERC721)) found1 = true;
+            if (whitelisted[i] == address(mockERC721_2)) found2 = true;
+            if (whitelisted[i] == NFT_COLLECTION_3) found3 = true;
+        }
+        assertTrue(found1 && found2 && found3, "Did not find all whitelisted collections");
     }
 
     function test_UserNFTData() public {
         uint256 block1 = block.number + 1;
         vm.roll(block1);
-        _processSingleUserUpdate(USER_A, NFT_COLLECTION_1, block1, 2, 100 ether);
+        _processSingleUserUpdate(USER_A, address(mockERC721), block1, 2, 100 ether); // Use mock address
 
-        (
-            uint256 lastRewardIndex,
-            uint256 accruedReward,
-            uint256 lastNFTBalance,
-            uint256 lastBalance,
-            uint256 lastUpdateBlock
-        ) = rewardsController.userNFTData(USER_A, NFT_COLLECTION_1);
+        // (
+        //     uint256 lastRewardIndex,
+        //     uint256 accruedReward,
+        //     uint256 lastNFTBalance,
+        //     uint256 lastBalance,
+        //     uint256 lastUpdateBlock
+        // ) = rewardsController.userNFTData(USER_A, address(mockERC721)); // Use mock address
+        RewardsController.UserRewardState memory state = rewardsController.getUserRewardState(USER_A, address(mockERC721));
 
-        assertTrue(lastRewardIndex > 0);
-        assertEq(accruedReward, 0);
-        assertEq(lastNFTBalance, 2);
-        assertEq(lastBalance, 100 ether);
-        assertEq(lastUpdateBlock, block1);
+        assertTrue(state.lastRewardIndex > 0);
+        assertEq(state.accruedReward, 0);
+        assertEq(state.lastNFTBalance, 2);
+        assertEq(state.lastBalance, 100 ether);
+        assertEq(state.lastUpdateBlock, block1);
     }
 
     function test_CollectionRewardSharePercentages_Success() public view {
         // Collection 1 added in setUp with VALID_REWARD_SHARE_PERCENTAGE
         assertEq(
-            rewardsController.collectionRewardSharePercentages(NFT_COLLECTION_1),
+            rewardsController.collectionRewardSharePercentages(address(mockERC721)), // Use mock address
             VALID_REWARD_SHARE_PERCENTAGE,
             "Share percentage mismatch for collection 1"
         );
         // Collection 2 added in setUp with VALID_REWARD_SHARE_PERCENTAGE
         assertEq(
-            rewardsController.collectionRewardSharePercentages(NFT_COLLECTION_2),
+            rewardsController.collectionRewardSharePercentages(address(mockERC721_2)), // Use mock address
             VALID_REWARD_SHARE_PERCENTAGE,
             "Share percentage mismatch for collection 2"
         );
@@ -168,29 +181,31 @@ contract RewardsController_View is RewardsController_Test_Base {
 
     function test_UserNFTData_Initial() public view {
         // Check data for a user and collection that have had no interactions
-        (
-            uint256 lastRewardIndex,
-            uint256 accruedReward,
-            uint256 lastNFTBalance,
-            uint256 lastBalance,
-            uint256 lastUpdateBlock
-        ) = rewardsController.userNFTData(USER_C, NFT_COLLECTION_1); // USER_C has no activity
+        // (
+        //     uint256 lastRewardIndex,
+        //     uint256 accruedReward,
+        //     uint256 lastNFTBalance,
+        //     uint256 lastBalance,
+        //     uint256 lastUpdateBlock
+        // ) = rewardsController.userNFTData(USER_C, address(mockERC721)); // USER_C has no activity, use mock address
+        RewardsController.UserRewardState memory state1 = rewardsController.getUserRewardState(USER_C, address(mockERC721));
 
-        assertEq(lastRewardIndex, 0, "Initial lastRewardIndex should be 0");
-        assertEq(accruedReward, 0, "Initial accruedReward should be 0");
-        assertEq(lastNFTBalance, 0, "Initial lastNFTBalance should be 0");
-        assertEq(lastBalance, 0, "Initial lastBalance should be 0");
-        assertEq(lastUpdateBlock, 0, "Initial lastUpdateBlock should be 0");
+        assertEq(state1.lastRewardIndex, 0, "Initial lastRewardIndex should be 0");
+        assertEq(state1.accruedReward, 0, "Initial accruedReward should be 0");
+        assertEq(state1.lastNFTBalance, 0, "Initial lastNFTBalance should be 0");
+        assertEq(state1.lastBalance, 0, "Initial lastBalance should be 0");
+        assertEq(state1.lastUpdateBlock, 0, "Initial lastUpdateBlock should be 0");
 
         // Also check for a whitelisted collection the user hasn't interacted with
-        (lastRewardIndex, accruedReward, lastNFTBalance, lastBalance, lastUpdateBlock) =
-            rewardsController.userNFTData(USER_A, NFT_COLLECTION_2); // Assume USER_A hasn't interacted with C2 yet
+        // (lastRewardIndex, accruedReward, lastNFTBalance, lastBalance, lastUpdateBlock) =
+        //     rewardsController.userNFTData(USER_A, address(mockERC721_2)); // USER_A hasn't interacted with C2 yet, use mock address
+        RewardsController.UserRewardState memory state2 = rewardsController.getUserRewardState(USER_A, address(mockERC721_2));
 
-        assertEq(lastRewardIndex, 0, "Initial lastRewardIndex for C2 should be 0");
-        assertEq(accruedReward, 0, "Initial accruedReward for C2 should be 0");
-        assertEq(lastNFTBalance, 0, "Initial lastNFTBalance for C2 should be 0");
-        assertEq(lastBalance, 0, "Initial lastBalance for C2 should be 0");
-        assertEq(lastUpdateBlock, 0, "Initial lastUpdateBlock for C2 should be 0");
+        assertEq(state2.lastRewardIndex, 0, "Initial lastRewardIndex for C2 should be 0");
+        assertEq(state2.accruedReward, 0, "Initial accruedReward for C2 should be 0");
+        assertEq(state2.lastNFTBalance, 0, "Initial lastNFTBalance for C2 should be 0");
+        assertEq(state2.lastBalance, 0, "Initial lastBalance for C2 should be 0");
+        assertEq(state2.lastUpdateBlock, 0, "Initial lastUpdateBlock for C2 should be 0");
     }
 }
 

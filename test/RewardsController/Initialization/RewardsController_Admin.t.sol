@@ -44,9 +44,10 @@ contract RewardsController_Admin is RewardsController_Test_Base {
 
     function test_Revert_AddNFTCollection_AlreadyExists() public {
         vm.startPrank(OWNER);
-        vm.expectRevert(abi.encodeWithSelector(IRewardsController.CollectionAlreadyExists.selector, NFT_COLLECTION_1));
+        // Use the actual whitelisted mock address
+        vm.expectRevert(abi.encodeWithSelector(IRewardsController.CollectionAlreadyExists.selector, address(mockERC721)));
         rewardsController.addNFTCollection(
-            NFT_COLLECTION_1, BETA_1, IRewardsController.RewardBasis.BORROW, VALID_REWARD_SHARE_PERCENTAGE
+            address(mockERC721), BETA_1, IRewardsController.RewardBasis.BORROW, VALID_REWARD_SHARE_PERCENTAGE
         );
         vm.stopPrank();
     }
@@ -64,7 +65,8 @@ contract RewardsController_Admin is RewardsController_Test_Base {
     function test_Revert_RemoveNFTCollection_NotOwner() public {
         vm.startPrank(OTHER_ADDRESS);
         vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, OTHER_ADDRESS));
-        rewardsController.removeNFTCollection(NFT_COLLECTION_1);
+        // Use the actual whitelisted mock address
+        rewardsController.removeNFTCollection(address(mockERC721));
         vm.stopPrank();
     }
 
@@ -79,7 +81,8 @@ contract RewardsController_Admin is RewardsController_Test_Base {
     function test_Revert_UpdateBeta_NotOwner() public {
         vm.startPrank(OTHER_ADDRESS);
         vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, OTHER_ADDRESS));
-        rewardsController.updateBeta(NFT_COLLECTION_1, 0.15 ether);
+        // Use the actual whitelisted mock address
+        rewardsController.updateBeta(address(mockERC721), 0.15 ether);
         vm.stopPrank();
     }
 
@@ -95,7 +98,8 @@ contract RewardsController_Admin is RewardsController_Test_Base {
     function test_Revert_SetCollectionRewardSharePercentage_NotOwner() public {
         vm.startPrank(OTHER_ADDRESS);
         vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, OTHER_ADDRESS));
-        rewardsController.setCollectionRewardSharePercentage(NFT_COLLECTION_1, 7500);
+        // Use the actual whitelisted mock address
+        rewardsController.setCollectionRewardSharePercentage(address(mockERC721), 7500);
         vm.stopPrank();
     }
 
@@ -109,7 +113,8 @@ contract RewardsController_Admin is RewardsController_Test_Base {
     function test_Revert_SetCollectionRewardSharePercentage_InvalidPercentage() public {
         vm.startPrank(OWNER);
         vm.expectRevert(IRewardsController.InvalidRewardSharePercentage.selector);
-        rewardsController.setCollectionRewardSharePercentage(NFT_COLLECTION_1, INVALID_REWARD_SHARE_PERCENTAGE);
+        // Use the actual whitelisted mock address
+        rewardsController.setCollectionRewardSharePercentage(address(mockERC721), INVALID_REWARD_SHARE_PERCENTAGE);
         vm.stopPrank();
     }
 
@@ -162,38 +167,43 @@ contract RewardsController_Admin is RewardsController_Test_Base {
 
     function test_RemoveNFTCollection_Success() public {
         vm.startPrank(OWNER);
-        // Ensure the collection exists before removing (it's added in setUp)
-        assertTrue(rewardsController.isCollectionWhitelisted(NFT_COLLECTION_1));
+        // Use the actual whitelisted mock address
+        address collectionToRemove = address(mockERC721);
+        assertTrue(rewardsController.isCollectionWhitelisted(collectionToRemove));
         vm.expectEmit(true, true, false, false, address(rewardsController)); // Only collection is indexed
-        emit IRewardsController.NFTCollectionRemoved(NFT_COLLECTION_1);
-        rewardsController.removeNFTCollection(NFT_COLLECTION_1);
-        assertFalse(rewardsController.isCollectionWhitelisted(NFT_COLLECTION_1));
+        emit IRewardsController.NFTCollectionRemoved(collectionToRemove);
+        rewardsController.removeNFTCollection(collectionToRemove);
+        assertFalse(rewardsController.isCollectionWhitelisted(collectionToRemove));
         // Check associated state is deleted (should revert or return 0)
-        vm.expectRevert(abi.encodeWithSelector(IRewardsController.CollectionNotWhitelisted.selector, NFT_COLLECTION_1));
-        rewardsController.getCollectionBeta(NFT_COLLECTION_1);
-        assertEq(rewardsController.collectionRewardSharePercentages(NFT_COLLECTION_1), 0);
+        vm.expectRevert(abi.encodeWithSelector(IRewardsController.CollectionNotWhitelisted.selector, collectionToRemove));
+        rewardsController.getCollectionBeta(collectionToRemove);
+        assertEq(rewardsController.collectionRewardSharePercentages(collectionToRemove), 0);
         vm.stopPrank();
     }
 
     function test_UpdateBeta_Success() public {
         vm.startPrank(OWNER);
-        uint256 oldBeta = rewardsController.getCollectionBeta(NFT_COLLECTION_1);
+        // Use the actual whitelisted mock address
+        address collectionToUpdate = address(mockERC721);
+        uint256 oldBeta = rewardsController.getCollectionBeta(collectionToUpdate);
         uint256 newBeta = 0.15 ether; // 15%
         vm.expectEmit(true, true, true, true, address(rewardsController));
-        emit IRewardsController.BetaUpdated(NFT_COLLECTION_1, oldBeta, newBeta);
-        rewardsController.updateBeta(NFT_COLLECTION_1, newBeta);
-        assertEq(rewardsController.getCollectionBeta(NFT_COLLECTION_1), newBeta);
+        emit IRewardsController.BetaUpdated(collectionToUpdate, oldBeta, newBeta);
+        rewardsController.updateBeta(collectionToUpdate, newBeta);
+        assertEq(rewardsController.getCollectionBeta(collectionToUpdate), newBeta);
         vm.stopPrank();
     }
 
     function test_SetCollectionRewardSharePercentage_Success() public {
         vm.startPrank(OWNER);
-        uint256 oldShare = rewardsController.collectionRewardSharePercentages(NFT_COLLECTION_1);
+        // Use the actual whitelisted mock address
+        address collectionToUpdate = address(mockERC721);
+        uint256 oldShare = rewardsController.collectionRewardSharePercentages(collectionToUpdate);
         uint256 newShare = 7500; // 75%
         vm.expectEmit(true, true, true, true, address(rewardsController));
-        emit IRewardsController.CollectionRewardShareUpdated(NFT_COLLECTION_1, oldShare, newShare);
-        rewardsController.setCollectionRewardSharePercentage(NFT_COLLECTION_1, newShare);
-        assertEq(rewardsController.collectionRewardSharePercentages(NFT_COLLECTION_1), newShare);
+        emit IRewardsController.CollectionRewardShareUpdated(collectionToUpdate, oldShare, newShare);
+        rewardsController.setCollectionRewardSharePercentage(collectionToUpdate, newShare);
+        assertEq(rewardsController.collectionRewardSharePercentages(collectionToUpdate), newShare);
         vm.stopPrank();
     }
 

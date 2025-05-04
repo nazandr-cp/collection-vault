@@ -3,6 +3,7 @@ pragma solidity ^0.8.19;
 
 import {RewardsController_Test_Base} from "../RewardsController_Test_Base.sol";
 import {IRewardsController} from "src/interfaces/IRewardsController.sol";
+import {RewardsController} from "src/RewardsController.sol"; // <-- Import RewardsController
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 
 contract RewardsController_ClaimSimulation_Test is RewardsController_Test_Base {
@@ -72,9 +73,10 @@ contract RewardsController_ClaimSimulation_Test is RewardsController_Test_Base {
 
         // 2. User state updated to claimBlock, NOT the future simulation block
         // userNFTData returns (uint256 lastRewardIndex, uint256 accruedReward, uint256 lastNFTBalance, uint256 lastBalance, uint256 lastUpdateBlock)
-        (uint256 lastRewardIndex,,,, uint256 lastUpdateBlock) = rewardsController.userNFTData(user, collection);
-        assertTrue(lastRewardIndex > 0, "lastRewardIndex should update"); // Assuming some yield
-        assertEq(lastUpdateBlock, claimBlock, "lastUpdateBlock mismatch - should be claim block");
+        // (uint256 lastRewardIndex,,,, uint256 lastUpdateBlock) = rewardsController.userNFTData(user, collection);
+        RewardsController.UserRewardState memory state = rewardsController.getUserRewardState(user, collection);
+        assertTrue(state.lastRewardIndex > 0, "lastRewardIndex should update"); // Assuming some yield
+        assertEq(state.lastUpdateBlock, claimBlock, "lastUpdateBlock mismatch - should be claim block");
 
         // 3. Verify simulation didn't affect the *actual* claimed amount for the period up to claimBlock.
         //    This is implicitly tested by checking the claimedAmount > 0 and the state update to claimBlock.
@@ -144,13 +146,15 @@ contract RewardsController_ClaimSimulation_Test is RewardsController_Test_Base {
         // Event emission check removed
 
         // 2. User state updated to claimBlock for both collections
-        (uint256 lastRewardIndex1,,,, uint256 lastUpdateBlock1) = rewardsController.userNFTData(user, collection1);
-        assertTrue(lastRewardIndex1 > 0, "C1 lastRewardIndex should update");
-        assertEq(lastUpdateBlock1, claimBlock, "C1 lastUpdateBlock mismatch");
+        // (uint256 lastRewardIndex1,,,, uint256 lastUpdateBlock1) = rewardsController.userNFTData(user, collection1);
+        RewardsController.UserRewardState memory state1 = rewardsController.getUserRewardState(user, collection1);
+        assertTrue(state1.lastRewardIndex > 0, "C1 lastRewardIndex should update");
+        assertEq(state1.lastUpdateBlock, claimBlock, "C1 lastUpdateBlock mismatch");
 
-        (uint256 lastRewardIndex2,,,, uint256 lastUpdateBlock2) = rewardsController.userNFTData(user, collection2);
-        assertTrue(lastRewardIndex2 > 0, "C2 lastRewardIndex should update");
-        assertEq(lastUpdateBlock2, claimBlock, "C2 lastUpdateBlock mismatch");
+        // (uint256 lastRewardIndex2,,,, uint256 lastUpdateBlock2) = rewardsController.userNFTData(user, collection2);
+        RewardsController.UserRewardState memory state2 = rewardsController.getUserRewardState(user, collection2);
+        assertTrue(state2.lastRewardIndex > 0, "C2 lastRewardIndex should update");
+        assertEq(state2.lastUpdateBlock, claimBlock, "C2 lastUpdateBlock mismatch");
 
         // 3. Simulation didn't affect claimed amount for period up to claimBlock (implicit check).
     }

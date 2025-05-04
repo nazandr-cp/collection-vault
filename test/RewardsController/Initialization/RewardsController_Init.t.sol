@@ -9,6 +9,7 @@ import {RewardsController} from "../../../src/RewardsController.sol";
 import {IRewardsController} from "../../../src/interfaces/IRewardsController.sol";
 import {RewardsController_Test_Base} from "../RewardsController_Test_Base.sol";
 import {ERC4626Vault} from "../../../src/ERC4626Vault.sol";
+import {MockCToken} from "../../../src/mocks/MockCToken.sol"; // Add import
 
 contract RewardsController_Init is RewardsController_Test_Base {
     function test_Initialize_CorrectState() public view {
@@ -17,7 +18,8 @@ contract RewardsController_Init is RewardsController_Test_Base {
         assertEq(address(rewardsController.vault()), address(tokenVault));
         assertEq(rewardsController.authorizedUpdater(), AUTHORIZED_UPDATER);
         assertEq(address(rewardsController.rewardToken()), DAI_ADDRESS);
-        assertEq(address(rewardsController.lendingManager().cToken()), CDAI_ADDRESS);
+        // Use the mock cToken address from the base setup
+        assertEq(address(rewardsController.lendingManager().cToken()), address(mockCToken), "cToken address mismatch");
         assertTrue(rewardsController.globalRewardIndex() > 0, "Initial global index should be > 0");
         assertEq(rewardsController.epochDuration(), 0, "Initial epoch duration should be 0");
     }
@@ -47,7 +49,10 @@ contract RewardsController_Init is RewardsController_Test_Base {
 
     function test_Revert_Initialize_VaultAssetMismatch() public {
         MockERC20 mockAsset = new MockERC20("Mock Asset", "MOCK", 18);
-        MockLendingManager mockLM = new MockLendingManager(address(mockAsset));
+        // Create a mock cToken for the mock asset
+        MockCToken mockCT = new MockCToken(address(mockAsset));
+        // Pass contract instances directly, not addresses
+        MockLendingManager mockLM = new MockLendingManager(mockAsset, mockCT);
         ERC4626Vault mockVault = new ERC4626Vault(mockAsset, "Mock Vault", "mV", OWNER, address(mockLM));
 
         RewardsController newImpl = new RewardsController();

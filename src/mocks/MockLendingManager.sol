@@ -1,37 +1,27 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {ILendingManager} from "../interfaces/ILendingManager.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "forge-std/console.sol";
+import {CTokenInterface, CErc20Interface} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol";
+import {ILendingManager} from "../interfaces/ILendingManager.sol";
+import {MockCToken} from "./MockCToken.sol";
+import {console} from "forge-std/console.sol"; // Import console
 
 /**
  * @title MockLendingManager
  * @notice Mock contract for testing ERC4626Vault interactions.
  */
 contract MockLendingManager is ILendingManager {
-    IERC20 private immutable _asset;
-    address public rewardsControllerAddress; // Address of the authorized RewardsController
-    address public mockCTokenAddress; // <-- Add mock cToken address
+    IERC20 public asset;
+    CTokenInterface private _cToken; // Changed to private
+    uint256 public totalPrincipalDeposited;
+    mapping(address => uint256) public principalDeposited;
 
     uint256 private _mockAvailableYield = type(uint256).max; // Default to max, effectively no cap
 
-    /**
-     * @notice Get the underlying ERC20 asset managed by the lending manager.
-     * @return ERC20 asset address.
-     */
-    function asset() external view override returns (IERC20) {
-        return _asset;
-    }
-
-    /**
-     * @notice Get the mock cToken address.
-     * @return Mock cToken address.
-     */
-    function cToken() external view override returns (address) {
-        // <-- Implement interface function
-        return mockCTokenAddress;
-    }
+    // Declare missing state variables
+    address public rewardsControllerAddress;
+    address public mockCTokenAddress;
 
     uint256 internal mockBaseRewardPerBlock;
     uint256 internal mockTotalAssets;
@@ -44,26 +34,30 @@ contract MockLendingManager is ILendingManager {
     uint256 public depositCalledCount;
     uint256 public withdrawCalledCount;
     uint256 public transferYieldCalledCount;
-    // Remove expectedTransferAmount, transferYieldExpectationSet
-    address public expectedTransferRecipient; // Keep recipient check if needed, or remove if not used
-    bool private recipientExpectationSet = false; // Flag for recipient check
+    address public expectedTransferRecipient; // Removed 'internal' modifier
+    bool private recipientExpectationSet = false;
 
     event MockDepositCalled(uint256 amount);
     event MockWithdrawCalled(uint256 amount);
     event MockTransferYieldCalled(uint256 amount, address recipient);
 
-    constructor(address _assetAddress) {
-        _asset = IERC20(_assetAddress);
+    constructor(IERC20 _asset, CTokenInterface __cToken) {
+        // Renamed internal variable
+        asset = _asset;
+        _cToken = __cToken; // Store the provided cToken instance privately
+    }
+
+    // Add public getter to match interface
+    function cToken() external view override returns (address) {
+        return address(_cToken);
     }
 
     // --- Mock Control Functions ---
     function setRewardsController(address _controller) external {
-        // In a real scenario, this would likely be restricted (e.g., Ownable)
         rewardsControllerAddress = _controller;
     }
 
     function setMockCTokenAddress(address _cToken) external {
-        // <-- Add setter for mock cToken
         mockCTokenAddress = _cToken;
     }
 
@@ -87,20 +81,16 @@ contract MockLendingManager is ILendingManager {
         shouldTransferYieldRevert = _revert;
     }
 
-    // Remove setExpectedTransferYield
-
     function setMockAvailableYield(uint256 _yield) external {
         _mockAvailableYield = _yield;
     }
 
-    // Optional: Keep a way to set expected recipient if needed for specific tests
     function setExpectedRecipient(address _recipient) external {
         expectedTransferRecipient = _recipient;
         recipientExpectationSet = true;
     }
 
     // --- ILendingManager Implementation ---
-    // Corrected signature to match ILendingManager interface
     function depositToLendingProtocol(uint256 amount) external override returns (bool success) {
         depositCalledCount++;
         emit MockDepositCalled(amount);
@@ -108,7 +98,7 @@ contract MockLendingManager is ILendingManager {
         if (success && amount > 0) {
             // Simulate LM pulling assets from the Vault (msg.sender)
             // Requires Vault to have approved the LM
-            _asset.transferFrom(msg.sender, address(this), amount);
+            asset.transferFrom(msg.sender, address(this), amount);
         }
         return success;
     }
@@ -119,9 +109,9 @@ contract MockLendingManager is ILendingManager {
         success = withdrawResult;
         if (success) {
             // Check actual balance before transfer
-            if (_asset.balanceOf(address(this)) >= amount) {
+            if (asset.balanceOf(address(this)) >= amount) {
                 // Simulate asset transfer FROM mock TO vault
-                _asset.transfer(msg.sender, amount);
+                asset.transfer(msg.sender, amount);
             } else {
                 // If mock doesn't have the funds, withdraw fails
                 success = false;
@@ -132,26 +122,18 @@ contract MockLendingManager is ILendingManager {
 
     function totalAssets() external view override returns (uint256) {
         // Return mock value if set, otherwise fallback (e.g., balance)
-        return mockTotalAssets > 0 ? mockTotalAssets : _asset.balanceOf(address(this));
+        return mockTotalAssets > 0 ? mockTotalAssets : asset.balanceOf(address(this));
     }
-
-    // --- Added to satisfy ILendingManager interface ---
-    function totalPrincipalDeposited() external view override returns (uint256) {
-        return 0; // Simple mock implementation, returns 0
-    }
-    // --- End Added ---
 
     function getBaseRewardPerBlock() external view override returns (uint256) {
         // Return mock value
         return mockBaseRewardPerBlock;
     }
 
-    // --- Added to satisfy ILendingManager interface ---
     function getAvailableYield() external view returns (uint256) {
         // Removed override
         return _mockAvailableYield;
     }
-    // --- End Added ---
 
     function transferYield(uint256 amount, address recipient) external override returns (uint256 amountTransferred) {
         transferYieldCalledCount++;
@@ -176,7 +158,7 @@ contract MockLendingManager is ILendingManager {
 
         // Simulate transfer if amount > 0 and mock is set to succeed
         if (amountTransferred > 0 && transferYieldResult) {
-            uint256 currentBalance = _asset.balanceOf(address(this));
+            uint256 currentBalance = asset.balanceOf(address(this));
             console.log("MockLM.transferYield: Attempting transfer...");
             console.log("  - Sender (MockLM):", address(this));
             console.log("  - Recipient:", recipient);
@@ -186,7 +168,7 @@ contract MockLendingManager is ILendingManager {
             console.log("  - Sender Balance:", currentBalance);
 
             if (currentBalance >= amountTransferred) {
-                _asset.transfer(recipient, amountTransferred);
+                asset.transfer(recipient, amountTransferred);
             } else {
                 console.log("MockLM.transferYield: Insufficient balance for transfer.");
                 amountTransferred = 0; // Simulate failure due to insufficient funds

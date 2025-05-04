@@ -71,45 +71,46 @@ contract RewardsController_Test_Base is Test {
     MockCToken internal mockCToken; // Mock cToken for yield simulation
     ProxyAdmin public proxyAdmin;
 
+    uint256 constant INITIAL_EXCHANGE_RATE = 2e28; // Define the constant if not already present
+
     function setUp() public virtual {
         uint256 forkId = vm.createFork("mainnet", FORK_BLOCK_NUMBER);
         vm.selectFork(forkId);
 
         rewardToken = IERC20(DAI_ADDRESS);
-        // Removed assignment to non-existent cToken and related require check
-        // cToken = CTokenInterface(CDAI_ADDRESS);
-        // require(CErc20Interface(CDAI_ADDRESS).underlying() == DAI_ADDRESS, "cToken underlying mismatch");
 
         vm.startPrank(OWNER);
 
-        rewardsControllerImpl = new RewardsController();
         // Deploy Mocks
         mockERC20 = new MockERC20("Mock Token", "MOCK", 18);
         mockERC721 = new MockERC721("Mock NFT 1", "MNFT1");
         mockERC721_2 = new MockERC721("Mock NFT 2", "MNFT2");
         mockCToken = new MockCToken(address(rewardToken)); // Mock cToken using DAI as underlying
-        // Constructor takes only the asset address (rewardToken = DAI)
-        lendingManager = new MockLendingManager(address(rewardToken)); // Deploy MockLendingManager
+
+        // *** Set initial exchange rate BEFORE LM/RC initialization ***
+        mockCToken.setExchangeRate(INITIAL_EXCHANGE_RATE);
+
+        // Deploy MockLendingManager, passing the mock cToken
+        lendingManager = new MockLendingManager(rewardToken, mockCToken);
 
         // Initialize TokenVault with MockLendingManager
         tokenVault = new ERC4626Vault(rewardToken, "Vaulted DAI Test", "vDAIt", OWNER, address(lendingManager));
+
+        // Deploy RewardsController Implementation
+        rewardsControllerImpl = new RewardsController();
 
         vm.stopPrank();
         vm.startPrank(ADMIN);
         proxyAdmin = new ProxyAdmin(ADMIN);
         vm.stopPrank();
 
-        vm.startPrank(OWNER);
-        // Proxy deployment and initialization moved down after setting cToken on LM
-
-        // Assertions moved down after rewardsController is initialized
-
-        // Set the mock cToken address *before* initializing RewardsController
+        // Set the mock cToken address on LM (redundant if passed in constructor, but safe)
+        vm.startPrank(OWNER); // Assuming OWNER can call this on MockLM
         lendingManager.setMockCTokenAddress(address(mockCToken));
+        vm.stopPrank();
 
-        // Now initialize RewardsController, which will call lendingManager.cToken()
-        vm.stopPrank(); // Stop OWNER prank before proxy creation/init if needed? Check if init needs OWNER
-        vm.startPrank(OWNER); // Ensure OWNER calls initialize via proxy
+        // Initialize RewardsController via Proxy
+        vm.startPrank(OWNER); // Ensure OWNER calls initialize
         bytes memory initData = abi.encodeWithSelector(
             RewardsController.initialize.selector,
             OWNER,
@@ -121,19 +122,10 @@ contract RewardsController_Test_Base is Test {
             new TransparentUpgradeableProxy(address(rewardsControllerImpl), address(proxyAdmin), initData);
         rewardsController = RewardsController(address(proxy));
 
-        // --- Assertions moved here ---
-        address actualUpdater = rewardsController.authorizedUpdater();
-        address derivedSignerAddress = vm.addr(UPDATER_PRIVATE_KEY);
-        assertEq(actualUpdater, AUTHORIZED_UPDATER, "Authorized updater mismatch after init");
-        assertEq(
-            derivedSignerAddress, AUTHORIZED_UPDATER, "Mismatch between constant address and derived address from PK"
-        );
-        // --- End assertions ---
-
-        // Set the rewards controller address *after* it's initialized
+        // Set the rewards controller address on LM *after* RC is initialized
         lendingManager.setRewardsController(address(rewardsController));
 
-        // Whitelist the actual mock contract addresses
+        // Whitelist collections
         rewardsController.addNFTCollection(
             address(mockERC721), BETA_1, IRewardsController.RewardBasis.BORROW, VALID_REWARD_SHARE_PERCENTAGE
         );

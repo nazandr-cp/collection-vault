@@ -3,6 +3,7 @@ pragma solidity ^0.8.19;
 
 import {RewardsController_Test_Base} from "../RewardsController_Test_Base.sol";
 import {IRewardsController} from "src/interfaces/IRewardsController.sol";
+import {RewardsController} from "src/RewardsController.sol"; // <-- Import RewardsController
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 
 contract RewardsController_ClaimTiming_Test is RewardsController_Test_Base {
@@ -89,13 +90,14 @@ contract RewardsController_ClaimTiming_Test is RewardsController_Test_Base {
 
         // Event emission check removed for now
 
-        (uint256 lastRewardIndex,,,, uint256 lastUpdateBlock) = rewardsController.userNFTData(user, collection); // Check original token state
+        // (uint256 lastRewardIndex,,,, uint256 lastUpdateBlock) = rewardsController.userNFTData(user, collection); // Check original token state
+        RewardsController.UserRewardState memory state = rewardsController.getUserRewardState(user, collection);
         // We don't have a separate state per token ID, just per user/collection
 
         // State for the *original* token should be updated
-        assertTrue(lastRewardIndex > 0, "Original token lastRewardIndex should update"); // Assuming some yield
+        assertTrue(state.lastRewardIndex > 0, "Original token lastRewardIndex should update"); // Assuming some yield
         // The claim happened in claimBlock, so the state should reflect that
-        assertEq(lastUpdateBlock, claimBlock, "Original token lastUpdateBlock mismatch");
+        assertEq(state.lastUpdateBlock, claimBlock, "Original token lastUpdateBlock mismatch");
 
         // The state reflects the user/collection pair, not individual tokens.
         // The update and claim happened in the same block, so the state reflects that.
@@ -206,14 +208,16 @@ contract RewardsController_ClaimTiming_Test is RewardsController_Test_Base {
         // Event emission check removed for now
 
         // Check state for original tokens
-        (uint256 lastRewardIndex1,,,, uint256 lastUpdateBlock1) = rewardsController.userNFTData(user, collection1);
-        (uint256 lastRewardIndex2,,,, uint256 lastUpdateBlock2) = rewardsController.userNFTData(user, collection2);
-        assertTrue(lastRewardIndex1 > 0, "C1 Original token lastRewardIndex should update");
+        // (uint256 lastRewardIndex1,,,, uint256 lastUpdateBlock1) = rewardsController.userNFTData(user, collection1);
+        // (uint256 lastRewardIndex2,,,, uint256 lastUpdateBlock2) = rewardsController.userNFTData(user, collection2);
+        RewardsController.UserRewardState memory state1 = rewardsController.getUserRewardState(user, collection1);
+        RewardsController.UserRewardState memory state2 = rewardsController.getUserRewardState(user, collection2);
+        assertTrue(state1.lastRewardIndex > 0, "C1 Original token lastRewardIndex should update");
         // The claim happened in claimBlock
-        assertEq(lastUpdateBlock1, claimBlock, "C1 Original token lastUpdateBlock mismatch");
-        assertTrue(lastRewardIndex2 > 0, "C2 Original token lastRewardIndex should update");
+        assertEq(state1.lastUpdateBlock, claimBlock, "C1 Original token lastUpdateBlock mismatch");
+        assertTrue(state2.lastRewardIndex > 0, "C2 Original token lastRewardIndex should update");
         // The claim happened in claimBlock
-        assertEq(lastUpdateBlock2, claimBlock, "C2 Original token lastUpdateBlock mismatch");
+        assertEq(state2.lastUpdateBlock, claimBlock, "C2 Original token lastUpdateBlock mismatch");
 
         // State is per user/collection, not per token ID. Checks above cover the state update.
 

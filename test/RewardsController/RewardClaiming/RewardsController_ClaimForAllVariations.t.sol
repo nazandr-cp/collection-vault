@@ -3,6 +3,7 @@ pragma solidity ^0.8.19;
 
 import {RewardsController_Test_Base} from "../RewardsController_Test_Base.sol";
 import {IRewardsController} from "src/interfaces/IRewardsController.sol";
+import {RewardsController} from "src/RewardsController.sol"; // <-- Import RewardsController
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {MockLendingManager} from "src/mocks/MockLendingManager.sol"; // Assuming mock allows setting yield
 
@@ -47,12 +48,11 @@ contract RewardsController_ClaimForAllVariations_Test is RewardsController_Test_
         vm.roll(block.number + 100);
 
         // --- Action ---
-        // Use previewRewards for collection A to get the expected amount
-        // address[] memory collectionsToPreview = new address[](1);
-        // collectionsToPreview[0] = collectionA;
-        // uint256 expectedRewardPreview = rewardsController.previewRewards(user, collectionsToPreview, new IRewardsController.BalanceUpdateData[](0));
-        // NOTE: Preview for one collection != total claim for all. Use actual value from trace.
-        uint256 expectedTotalReward = 40625000000000000000; // From trace
+        // Use previewRewards for all active collections to get the expected amount
+        address[] memory collectionsToPreview = rewardsController.getUserNFTCollections(user);
+        uint256 expectedTotalReward =
+            rewardsController.previewRewards(user, collectionsToPreview, new IRewardsController.BalanceUpdateData[](0));
+        // uint256 expectedTotalReward = 40625000000000000000; // From trace - REMOVED HARDCODED VALUE
 
         // Move expectEmit before the action
         vm.expectEmit(true, false, false, true, address(rewardsController));
@@ -72,13 +72,15 @@ contract RewardsController_ClaimForAllVariations_Test is RewardsController_Test_
 
         // 3. User state updated for BOTH collections
         uint256 claimBlock = block.number; // Capture block *after* claim
-        (uint256 lastRewardIndex1,,,, uint256 lastUpdateBlock1) = rewardsController.userNFTData(user, collectionA);
-        assertTrue(lastRewardIndex1 > 0, "C1 lastRewardIndex should update");
-        assertEq(lastUpdateBlock1, claimBlock, "C1 lastUpdateBlock mismatch");
+        // (uint256 lastRewardIndex1,,,, uint256 lastUpdateBlock1) = rewardsController.userNFTData(user, collectionA);
+        RewardsController.UserRewardState memory stateA = rewardsController.getUserRewardState(user, collectionA);
+        assertTrue(stateA.lastRewardIndex > 0, "C1 lastRewardIndex should update");
+        assertEq(stateA.lastUpdateBlock, claimBlock, "C1 lastUpdateBlock mismatch");
 
-        (uint256 lastRewardIndex2,,,, uint256 lastUpdateBlock2) = rewardsController.userNFTData(user, collectionB);
+        // (uint256 lastRewardIndex2,,,, uint256 lastUpdateBlock2) = rewardsController.userNFTData(user, collectionB);
+        RewardsController.UserRewardState memory stateB = rewardsController.getUserRewardState(user, collectionB);
         // Index might be 0 if global index didn't move, but block should update
-        assertEq(lastUpdateBlock2, claimBlock, "C2 lastUpdateBlock mismatch");
+        assertEq(stateB.lastUpdateBlock, claimBlock, "C2 lastUpdateBlock mismatch");
     }
 
     /**
@@ -116,9 +118,14 @@ contract RewardsController_ClaimForAllVariations_Test is RewardsController_Test_
         lendingManager.setExpectedRecipient(address(rewardsController)); // Ensure LM expects RC
 
         // --- Action ---
+        // Calculate expected total reward before capping
+        address[] memory collectionsToPreview = rewardsController.getUserNFTCollections(user);
+        uint256 expectedCalculatedReward =
+            rewardsController.previewRewards(user, collectionsToPreview, new IRewardsController.BalanceUpdateData[](0));
+        // uint256 expectedCalculatedReward = 97000000000000000000; // From trace - REMOVED HARDCODED VALUE
+
         // Expect the capping event FIRST
         vm.expectEmit(true, false, false, true, address(rewardsController));
-        uint256 expectedCalculatedReward = 97000000000000000000; // From trace
         emit IRewardsController.YieldTransferCapped(user, expectedCalculatedReward, availableYieldCapY); // Check user, calculated, and transferredAmount
 
         // Expect RewardsClaimedForAll SECOND
@@ -139,13 +146,15 @@ contract RewardsController_ClaimForAllVariations_Test is RewardsController_Test_
 
         // 3. User state updated for BOTH collections
         uint256 claimBlock = block.number; // Capture block *after* claim
-        (uint256 lastRewardIndexA,,,, uint256 lastUpdateBlockA) = rewardsController.userNFTData(user, collectionA);
-        assertTrue(lastRewardIndexA > 0, "A lastRewardIndex should update");
-        assertEq(lastUpdateBlockA, claimBlock, "A lastUpdateBlock mismatch");
+        // (uint256 lastRewardIndexA,,,, uint256 lastUpdateBlockA) = rewardsController.userNFTData(user, collectionA);
+        RewardsController.UserRewardState memory stateA = rewardsController.getUserRewardState(user, collectionA);
+        assertTrue(stateA.lastRewardIndex > 0, "A lastRewardIndex should update");
+        assertEq(stateA.lastUpdateBlock, claimBlock, "A lastUpdateBlock mismatch");
 
-        (uint256 lastRewardIndexB,,,, uint256 lastUpdateBlockB) = rewardsController.userNFTData(user, collectionB);
-        assertTrue(lastRewardIndexB > 0, "B lastRewardIndex should update");
-        assertEq(lastUpdateBlockB, claimBlock, "B lastUpdateBlock mismatch");
+        // (uint256 lastRewardIndexB,,,, uint256 lastUpdateBlockB) = rewardsController.userNFTData(user, collectionB);
+        RewardsController.UserRewardState memory stateB = rewardsController.getUserRewardState(user, collectionB);
+        assertTrue(stateB.lastRewardIndex > 0, "B lastRewardIndex should update");
+        assertEq(stateB.lastUpdateBlock, claimBlock, "B lastUpdateBlock mismatch");
     }
 
     // --- Helper Functions (Copied for consistency) ---

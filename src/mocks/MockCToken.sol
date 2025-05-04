@@ -16,6 +16,13 @@ contract MockCToken is
     CTokenInterface,
     CErc20Interface // <-- Added inheritance
 {
+    // Moved inside the contract body
+    bool public accrueInterestEnabled = true; // Flag to control accrual
+
+    function setAccrueInterestEnabled(bool _enabled) external {
+        accrueInterestEnabled = _enabled;
+    }
+
     uint8 public constant UNDERLYING_DECIMALS = 18; // Assuming underlying is DAI
     // Use 1e18 scale to match observed mainnet behavior, not theoretical formula
     uint256 private constant EXCHANGE_RATE_SCALE = 1e18;
@@ -27,11 +34,16 @@ contract MockCToken is
     uint256 public mintResult = 0;
     uint256 public redeemResult = 0;
 
+    uint256 public exchangeRateMantissa; // Example: 2 * 10^(18 + underlyingDecimals - 8)
+    uint256 public constant accrualIncrement = 1e24; // Increased increment
+
     constructor(address _underlying) {
         underlying = _underlying; // Initialize inherited state variable
         name = "Mock cToken"; // Initialize inherited state variable
         symbol = "mcTOK"; // Initialize inherited state variable
         decimals = 8; // Initialize inherited state variable
+        initialExchangeRateMantissa = 2e28; // Set the default value for the inherited variable
+        exchangeRateMantissa = initialExchangeRateMantissa; // Initialize current rate
     }
 
     // --- Mock Control Functions ---
@@ -108,9 +120,12 @@ contract MockCToken is
 
     // --- ADDED: Mock Implementation for accrueInterest --- //
     function accrueInterest() external override returns (uint256) {
-        // Simple mock: return success (0) by default
-        // Could add logic to simulate interest accrual if needed
-        return 0;
+        // Simulate interest accrual by slightly increasing the exchange rate
+        if (accrueInterestEnabled) {
+            exchangeRateMantissa += accrualIncrement; // Use increased increment
+        }
+        emit AccrueInterest(0, 0, exchangeRateMantissa, 0); // Emit event with new rate
+        return 0; // Return value often ignored, 0 is fine for mock
     }
 
     // Correctly calculate underlying based on cTokens and scaled rate
@@ -124,7 +139,7 @@ contract MockCToken is
     }
 
     function exchangeRateStored() external view override returns (uint256) {
-        return currentExchangeRate;
+        return exchangeRateMantissa;
     }
 
     function balanceOf(address owner) external view override returns (uint256) {

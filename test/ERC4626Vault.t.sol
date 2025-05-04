@@ -9,6 +9,7 @@ import {IERC20} from "@openzeppelin-contracts-5.3.0/token/ERC20/IERC20.sol";
 import {ERC4626} from "@openzeppelin-contracts-5.3.0/token/ERC20/extensions/ERC4626.sol";
 import {MockLendingManager} from "../src/mocks/MockLendingManager.sol";
 import {MockERC20} from "../src/mocks/MockERC20.sol";
+import {MockCToken} from "../src/mocks/MockCToken.sol"; // Add import
 
 // --- Constants ---
 address constant OWNER = address(0x1337); // Deployer/Owner
@@ -22,13 +23,17 @@ contract ERC4626VaultTest is Test {
     ERC4626Vault public vault;
     MockERC20 public assetToken;
     MockLendingManager public lendingManager;
+    MockCToken public mockCToken; // Add mock cToken state variable
 
     function setUp() public {
         // Deploy Mock Asset
         assetToken = new MockERC20("Mock Asset", "MAT", 18);
 
-        // Deploy Mock Lending Manager (needs asset address)
-        lendingManager = new MockLendingManager(address(assetToken));
+        // Deploy Mock cToken
+        mockCToken = new MockCToken(address(assetToken)); // Create mock cToken
+
+        // Deploy Mock Lending Manager (needs asset address and cToken address)
+        lendingManager = new MockLendingManager(assetToken, mockCToken); // Pass both arguments
 
         // Deploy Vault
         vm.prank(OWNER);
@@ -352,7 +357,9 @@ contract ERC4626VaultTest is Test {
 
     function test_RevertIf_Constructor_LMMismatch() public {
         MockERC20 wrongAsset = new MockERC20("Wrong Asset", "WST", 18);
-        MockLendingManager tempLM = new MockLendingManager(address(assetToken)); // LM uses correct asset
+        // Need a cToken for the LM constructor, even if it's temporary
+        MockCToken tempCToken = new MockCToken(address(assetToken));
+        MockLendingManager tempLM = new MockLendingManager(assetToken, tempCToken); // LM uses correct asset and a cToken
 
         vm.prank(OWNER);
         // Vault uses wrong asset
