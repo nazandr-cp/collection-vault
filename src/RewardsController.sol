@@ -42,6 +42,12 @@ contract RewardsController is
         uint16 rewardSharePercentage;
     }
 
+    struct ClaimData {
+        address collectionAddress;
+        uint256 individualReward;
+        uint256 indexUsed;
+    }
+
     // Multi-User Batch Update
     bytes32 public constant BALANCE_UPDATES_ARRAYS_TYPEHASH = keccak256(
         "BalanceUpdates(address[] users,address[] collections,uint256[] blockNumbers,int256[] nftDeltas,int256[] balanceDeltas,uint256 nonce)"
@@ -735,35 +741,31 @@ contract RewardsController is
     function claimRewardsForAll(BalanceUpdateData[] calldata simulatedUpdates) external override nonReentrant {
         address user = msg.sender;
         BitMaps.BitMap storage mask = userActiveMasks[user];
+        uint8 localNextBitIndex = nextBitIndex;
 
-        // Count active collections from mask to size arrays
-        uint256 activeCollectionCount = 0;
-        for (uint8 i = 0; i < nextBitIndex; ++i) {
-            if (mask.get(i) && bitIndexToCollection[i] != address(0)) {
-                activeCollectionCount++;
-            }
-        }
-
-        if (activeCollectionCount == 0) {
+        if (localNextBitIndex == 0) { // If no collections are registered globally, or user has no mask bits set up to this point.
             emit RewardsClaimedForAll(user, 0);
             return;
         }
 
-        address[] memory activeCollections = new address[](activeCollectionCount);
-        uint256[] memory individualRewards = new uint256[](activeCollectionCount);
-        uint256[] memory indicesUsed = new uint256[](activeCollectionCount);
-        uint256 currentCollectionIdx = 0;
-
+        // Allocate claims array for the maximum possible number of user's active collections.
+        // localNextBitIndex is uint8, so max 255.
+        ClaimData[] memory claims = new ClaimData[](localNextBitIndex);
+        uint256 actualActiveCollectionCount = 0; // Counter for actual collections processed
         uint256 totalRewardToRequest = 0;
+        uint32 bn = uint32(block.number); // Cache block.number
 
         uint256 currentIndex = _calculateAndUpdateGlobalIndex();
 
-        for (uint8 i = 0; i < nextBitIndex; ++i) {
+        // Single pass to find active collections, calculate rewards, and populate claims
+        for (uint8 i = 0; i < localNextBitIndex;) {
             if (mask.get(i)) {
                 address collection = bitIndexToCollection[i];
-                if (collection == address(0)) continue;
-
-                activeCollections[currentCollectionIdx] = collection;
+                // Ensure the collection mapped by bitIndex is still valid (not removed)
+                if (collection == address(0)) {
+                    unchecked { ++i; }
+                    continue; 
+                }
 
                 UserRewardState storage info = userRewardState[user][collection];
                 uint256 previousDeficit = info.accruedReward;
@@ -772,75 +774,79 @@ contract RewardsController is
                     _getRawPendingRewardsSingleCollection(user, collection, simulatedUpdates, currentIndex);
 
                 uint256 totalDueForCollection = rewardForPeriod + previousDeficit;
-                individualRewards[currentCollectionIdx] = totalDueForCollection;
-                indicesUsed[currentCollectionIdx] = indexUsedForCalc;
+
+                claims[actualActiveCollectionCount] = ClaimData({
+                    collectionAddress: collection,
+                    individualReward: totalDueForCollection,
+                    indexUsed: indexUsedForCalc
+                });
                 totalRewardToRequest += totalDueForCollection;
-                currentCollectionIdx++;
+                actualActiveCollectionCount++; // Increment count of processed active collections
             }
-            if (currentCollectionIdx == activeCollectionCount) break;
+            unchecked { ++i; }
         }
 
-        // Ensure we processed the expected number of collections
-        // This should ideally not happen if activeCollectionCount was accurate
-        if (currentCollectionIdx != activeCollectionCount) {
-            // Potentially revert or handle error, for now, proceed with found collections
-            // This might occur if a collection was removed between counting and processing
+        // If no collections were found to be active for the user or yielded rewards
+        if (actualActiveCollectionCount == 0) {
+            emit RewardsClaimedForAll(user, 0);
+            return;
         }
+
+        // The check `if (currentCollectionIdx != activeCollectionCount)` is no longer needed
+        // as `actualActiveCollectionCount` is the definitive count of processed collections.
 
         if (totalRewardToRequest == 0) {
-            for (uint256 i = 0; i < activeCollectionCount; ++i) {
-                address collection = activeCollections[i];
-                UserRewardState storage info = userRewardState[user][collection];
+            for (uint256 i = 0; i < actualActiveCollectionCount;) { // Use actualActiveCollectionCount
+                UserRewardState storage info = userRewardState[user][claims[i].collectionAddress];
                 info.accruedReward = 0;
-                info.lastRewardIndex = indicesUsed[i];
-                if (block.number > type(uint32).max) revert("RewardsController: block.number overflows uint32");
-                info.lastUpdateBlock = uint32(block.number);
+                info.lastRewardIndex = claims[i].indexUsed;
+                info.lastUpdateBlock = bn;
+                unchecked { ++i; }
             }
             emit RewardsClaimedForAll(user, 0);
             return;
         }
 
-        // Request yield transfer for the total amount using the new batch function
-        // The `individualRewards` array now contains totalDuePerCollection, which matches `amounts` for transferYieldBatch
-        uint256 totalYieldReceived =
-            lendingManager.transferYieldBatch(activeCollections, individualRewards, totalRewardToRequest, user);
+        // Prepare arrays for batch transfer, sized by actualActiveCollectionCount
+        address[] memory collectionsToTransfer = new address[](actualActiveCollectionCount);
+        uint256[] memory amountsToTransfer = new uint256[](actualActiveCollectionCount);
+        for(uint256 i = 0; i < actualActiveCollectionCount;) { // Use actualActiveCollectionCount
+            collectionsToTransfer[i] = claims[i].collectionAddress;
+            amountsToTransfer[i] = claims[i].individualReward;
+            unchecked { ++i; }
+        }
 
-        // Check if the total yield was capped
+        uint256 totalYieldReceived =
+            lendingManager.transferYieldBatch(collectionsToTransfer, amountsToTransfer, totalRewardToRequest, user);
+
         if (totalYieldReceived < totalRewardToRequest) {
             emit YieldTransferCapped(user, totalRewardToRequest, totalYieldReceived);
         }
 
-        // Distribute the received yield proportionally and update state for each collection
         if (totalYieldReceived == totalRewardToRequest) {
-            // If we received exactly what we requested, simply reset all deficits
-            for (uint256 i = 0; i < activeCollectionCount; ++i) {
-                address collection = activeCollections[i];
-                UserRewardState storage info = userRewardState[user][collection];
+            for (uint256 i = 0; i < actualActiveCollectionCount;) { // Use actualActiveCollectionCount
+                UserRewardState storage info = userRewardState[user][claims[i].collectionAddress];
                 info.accruedReward = 0;
-                info.lastRewardIndex = indicesUsed[i];
-                if (block.number > type(uint32).max) revert("RewardsController: block.number overflows uint32");
-                info.lastUpdateBlock = uint32(block.number);
+                info.lastRewardIndex = claims[i].indexUsed;
+                info.lastUpdateBlock = bn;
+                unchecked { ++i; }
             }
         } else if (totalYieldReceived < totalRewardToRequest && totalRewardToRequest > 0) {
-            for (uint256 i = 0; i < activeCollectionCount; ++i) {
-                address collection = activeCollections[i];
-                UserRewardState storage info = userRewardState[user][collection];
-                uint256 totalDueForThisCollection = individualRewards[i];
+            for (uint256 i = 0; i < actualActiveCollectionCount;) { // Use actualActiveCollectionCount
+                UserRewardState storage info = userRewardState[user][claims[i].collectionAddress];
+                uint256 totalDueForThisCollection = claims[i].individualReward;
 
                 uint256 totalShortfall = totalRewardToRequest - totalYieldReceived;
                 uint256 deficitForCollection =
                     Math.mulDiv(totalDueForThisCollection, totalShortfall, totalRewardToRequest);
 
-                if (deficitForCollection <= 1) {
+                if (deficitForCollection <= 1) { 
                     deficitForCollection = 0;
                 }
-                if (deficitForCollection > type(uint128).max) {
-                    revert("RewardsController: deficitForCollection overflows uint128");
-                }
-                info.accruedReward = uint128(deficitForCollection);
-                info.lastRewardIndex = indicesUsed[i];
-                if (block.number > type(uint32).max) revert("RewardsController: block.number overflows uint32");
-                info.lastUpdateBlock = uint32(block.number);
+                info.accruedReward = uint128(deficitForCollection); 
+                info.lastRewardIndex = claims[i].indexUsed;
+                info.lastUpdateBlock = bn;
+                unchecked { ++i; }
             }
         }
         emit RewardsClaimedForAll(user, totalYieldReceived);
@@ -920,7 +926,7 @@ contract RewardsController is
 
         if (claimedAmount < totalDue) {
             uint256 newAccruedReward = totalDue - claimedAmount;
-            if (newAccruedReward > type(uint128).max) revert("RewardsController: newAccruedReward overflows uint128");
+            // if (newAccruedReward > type(uint128).max) revert("RewardsController: newAccruedReward overflows uint128"); // Removed, compiler checks
             info.accruedReward = uint128(newAccruedReward);
         } else {
             info.accruedReward = 0;
@@ -928,7 +934,7 @@ contract RewardsController is
 
         info.lastRewardIndex = indexUsedForClaim;
 
-        if (block.number > type(uint32).max) revert("RewardsController: block.number overflows uint32");
+        // if (block.number > type(uint32).max) revert("RewardsController: block.number overflows uint32"); // Removed, compiler checks
         info.lastUpdateBlock = uint32(block.number);
     }
 
