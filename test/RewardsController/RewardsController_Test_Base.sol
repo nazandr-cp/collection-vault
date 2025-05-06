@@ -19,7 +19,7 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
 import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {ProxyAdmin} from "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
-import {MockERC20} from "../mocks/MockERC20.sol";
+import {MockERC20} from "../../src/mocks/MockERC20.sol"; // Updated import path
 import {MockERC721} from "../../src/mocks/MockERC721.sol"; // Import MockERC721
 import {LendingManager} from "../../src/LendingManager.sol"; // Import real LendingManager
 import {MockCToken} from "../../src/mocks/MockCToken.sol"; // Import MockCToken
@@ -357,11 +357,11 @@ contract RewardsController_Test_Base is Test {
         }
         assertTrue(found, "YieldTransferCapped log not found or user mismatch");
     }
-    
+
     // Helper function to generate yield in the real LendingManager
     function _generateYieldInLendingManager(uint256 targetYield) internal {
         console.log("Generating yield: %d wei", targetYield);
-        
+
         // 1. First we need to make sure we have principal deposited
         uint256 currentPrincipal = lendingManager.totalPrincipalDeposited();
         if (currentPrincipal == 0) {
@@ -370,17 +370,17 @@ contract RewardsController_Test_Base is Test {
             vm.startPrank(DAI_WHALE);
             rewardToken.transfer(address(tokenVault), principalAmount);
             vm.stopPrank();
-            
+
             // Have the vault deposit to the lending manager
             vm.startPrank(address(tokenVault));
             rewardToken.approve(address(lendingManager), principalAmount);
             lendingManager.depositToLendingProtocol(principalAmount);
             vm.stopPrank();
-            
+
             currentPrincipal = lendingManager.totalPrincipalDeposited();
             console.log("Deposited principal: %d wei", currentPrincipal);
         }
-        
+
         // 2. Calculate exchange rate to achieve target yield
         uint256 cTokenBalance = mockCToken.balanceOf(address(lendingManager));
         if (cTokenBalance > 0) {
@@ -388,46 +388,46 @@ contract RewardsController_Test_Base is Test {
             // The target assets should be principal + significantly more than the requested yield
             uint256 targetAssets = currentPrincipal + targetYield * 10; // Multiply by 10 for safety margin
             uint256 newExchangeRate = (targetAssets * 1e18) / cTokenBalance;
-            
+
             console.log("Setting exchange rate to: %d", newExchangeRate);
-            
+
             // Update both exchange rate variables in the mock (they should match)
-            mockCToken.setExchangeRate(newExchangeRate); 
-            
+            mockCToken.setExchangeRate(newExchangeRate);
+
             // Directly set the mantissa used by exchangeRateStored
             vm.store(address(mockCToken), bytes32(uint256(16)), bytes32(newExchangeRate));
         }
-        
+
         // 3. Roll blocks to trigger interest accrual
         vm.roll(block.number + 100);
-        
+
         // 4. Call accrueInterest to update interest
         mockCToken.accrueInterest();
-        
+
         // 5. Make sure we have enough physical tokens for transfers
         vm.startPrank(DAI_WHALE);
         // Transfer a multiple of the target yield to ensure we have enough
         rewardToken.transfer(address(lendingManager), targetYield * 5);
         vm.stopPrank();
-        
+
         // 6. Verify we have the yield available
         uint256 totalAssets = lendingManager.totalAssets();
         uint256 availableYield = totalAssets > currentPrincipal ? totalAssets - currentPrincipal : 0;
         console.log("Generated yield: %d / %d requested", availableYield, targetYield);
-        
+
         // 7. If we're still short on yield, directly simulate an expected transferYield amount
         // This is a bit hackish but necessary for tests to pass with real LendingManager
         // We'll use vm.mockCall to make transferYield behave as expected
         if (availableYield < targetYield) {
             console.log("Using mockCall to ensure expected yield transfer");
-            
+
             // Mock the transferYield function to return exactly what we expect
             vm.mockCall(
                 address(lendingManager),
                 abi.encodeWithSelector(lendingManager.transferYield.selector, targetYield, address(0)),
                 abi.encode(targetYield)
             );
-            
+
             // Also make sure we have enough tokens for the actual transfer
             vm.startPrank(DAI_WHALE);
             rewardToken.transfer(address(lendingManager), targetYield * 2);
