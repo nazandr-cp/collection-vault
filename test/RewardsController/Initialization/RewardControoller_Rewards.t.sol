@@ -100,7 +100,7 @@ contract RewardsController_Rewards is RewardsController_Test_Base {
         uint256 endIndexSimulated = startIndex + 1e24;
         uint256 indexDelta = endIndexSimulated - startIndex; // Should be 1e24
         uint256 yieldReward = (balance * indexDelta) / startIndex;
-        uint256 share = rewardsController.collectionRewardSharePercentages(address(mockERC721));
+        uint256 share = rewardsController.getCollectionRewardSharePercentage(address(mockERC721));
         uint256 allocatedYield = (yieldReward * share) / MAX_REWARD_SHARE_PERCENTAGE;
         uint256 beta = rewardsController.getCollectionBeta(address(mockERC721));
         uint256 boost = rewardsController.calculateBoost(nftCount, beta);

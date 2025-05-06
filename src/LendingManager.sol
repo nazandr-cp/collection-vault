@@ -71,6 +71,10 @@ contract LendingManager is ILendingManager, AccessControl {
     // Note: Role management events (`RoleGranted`, `RoleRevoked`) are emitted by the inherited AccessControl contract.
     /// @notice Emitted when accrued yield (underlying asset) is successfully transferred to a recipient (typically the RewardsController).
     event YieldTransferred(address indexed recipient, uint256 amount);
+    /// @notice Emitted when accrued yield (underlying asset) is successfully transferred in batch to a recipient.
+    event YieldTransferredBatch(
+        address indexed recipient, uint256 totalAmount, address[] collections, uint256[] amounts
+    );
     /// @notice Emitted when underlying assets are successfully deposited into the cToken contract.
     event DepositToProtocol(address indexed caller, uint256 amount);
     /// @notice Emitted when underlying assets are successfully withdrawn (redeemed) from the cToken contract.
@@ -310,6 +314,87 @@ contract LendingManager is ILendingManager, AccessControl {
 
         emit YieldTransferred(recipient, actualAmountTransferred); // Emit the actual amount transferred
         return actualAmountTransferred; // Return the actual amount transferred
+    }
+
+    /**
+     * @notice Redeem accrued yield for multiple collections from the Compound protocol and transfer to a recipient in a single batch.
+     * @dev Only callable by REWARDS_CONTROLLER_ROLE. Redeems and transfers yield to recipient.
+     *      The `collections` and `amounts` arrays are primarily for event emission and off-chain tracking.
+     *      The core logic sums `totalAmount` and processes it as a single redemption and transfer.
+     * @param collections Array of collection addresses (for logging/tracking).
+     * @param amounts Array of yield token amounts to transfer per collection.
+     * @param totalAmount The total sum of amounts to transfer.
+     * @param recipient Recipient address.
+     * @return totalAmountTransferred The actual total amount of yield transferred (may be less than requested due to capping).
+     */
+    function transferYieldBatch(
+        address[] calldata collections,
+        uint256[] calldata amounts,
+        uint256 totalAmount,
+        address recipient
+    ) external override onlyRewardsController returns (uint256 totalAmountTransferred) {
+        if (totalAmount == 0) return 0;
+        if (recipient == address(0)) revert AddressZero();
+        // Basic validation for array lengths if they are to be used beyond event data
+        if (collections.length != amounts.length) {
+            revert("Array length mismatch"); // Consider a more specific error
+        }
+
+        uint256 accrualResult = CTokenInterface(address(_cToken)).accrueInterest();
+        accrualResult; // Silence compiler warning
+
+        uint256 availableBalance = totalAssets();
+        uint256 availableYield =
+            (availableBalance > totalPrincipalDeposited) ? availableBalance - totalPrincipalDeposited : 0;
+
+        if (totalAmount > availableYield) {
+            totalAmountTransferred = availableYield;
+        } else {
+            totalAmountTransferred = totalAmount;
+        }
+
+        if (totalAmountTransferred == 0) {
+            return 0;
+        }
+
+        uint256 exchangeRate = CTokenInterface(address(_cToken)).exchangeRateStored();
+        if (exchangeRate == 0) {
+            // Should not happen if there's yield
+            return 0;
+        }
+        // Formula: cTokens = underlying * 1e18 / exchangeRate
+        uint256 cTokensToRedeem = (totalAmountTransferred * 1e18) / exchangeRate;
+
+        if (cTokensToRedeem == 0 && totalAmountTransferred > 0) {
+            // This case implies a very small amount of underlying that results in zero cTokens due to precision.
+            // Depending on desired behavior, could attempt to redeem 1 cToken if available,
+            // or simply return 0 if the amount is too small to be represented by cTokens.
+            // For now, if it calculates to 0 cTokens, we transfer 0.
+            return 0;
+        }
+        if (cTokensToRedeem == 0) {
+            // If totalAmountTransferred was also 0, this is fine.
+            return 0;
+        }
+
+        uint256 balanceBeforeRedeem = _asset.balanceOf(address(this));
+
+        uint256 redeemResult = _cToken.redeem(cTokensToRedeem);
+        if (redeemResult != 0) {
+            revert RedeemFailed();
+        }
+
+        uint256 balanceAfterRedeem = _asset.balanceOf(address(this));
+        uint256 actualAmountReceived = balanceAfterRedeem - balanceBeforeRedeem;
+
+        // It's possible actualAmountReceived is slightly different from totalAmountTransferred due to cToken precision.
+        // We transfer what was actually received.
+        if (actualAmountReceived > 0) {
+            _asset.safeTransfer(recipient, actualAmountReceived);
+        }
+
+        emit YieldTransferredBatch(recipient, actualAmountReceived, collections, amounts);
+        return actualAmountReceived;
     }
 
     /**

@@ -82,42 +82,96 @@ contract RewardsController_Gas_BalanceUpdates_Test is RewardsController_Test_Bas
         // Collection (mockERC721) is already whitelisted in RewardsController_Test_Base.setUp()
 
         // Prepare multi-user batch updates
-        IRewardsController.UserBalanceUpdateData[] memory updates =
+        IRewardsController.UserBalanceUpdateData[] memory updatesStruct =
             _prepareBalanceUpdates(address(mockERC721), BATCH_SIZE_10, block.number);
+
+        address[] memory users = new address[](BATCH_SIZE_10);
+        address[] memory collections = new address[](BATCH_SIZE_10);
+        uint256[] memory blockNumbers = new uint256[](BATCH_SIZE_10);
+        int256[] memory nftDeltas = new int256[](BATCH_SIZE_10);
+        int256[] memory balanceDeltas = new int256[](BATCH_SIZE_10);
+
+        for (uint256 i = 0; i < BATCH_SIZE_10; i++) {
+            users[i] = updatesStruct[i].user;
+            collections[i] = updatesStruct[i].collection;
+            blockNumbers[i] = updatesStruct[i].blockNumber;
+            nftDeltas[i] = updatesStruct[i].nftDelta;
+            balanceDeltas[i] = updatesStruct[i].balanceDelta;
+        }
 
         // Execute and measure gas
         uint256 nonce = rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER);
-        bytes memory signature = _signBalanceUpdates(updates, nonce, UPDATER_PRIVATE_KEY);
+        bytes memory signature = _signBalanceUpdatesArrays(
+            users, collections, blockNumbers, nftDeltas, balanceDeltas, nonce, UPDATER_PRIVATE_KEY
+        );
         vm.prank(AUTHORIZED_UPDATER);
-        rewardsController.processBalanceUpdates(AUTHORIZED_UPDATER, updates, signature);
+        rewardsController.processBalanceUpdates(
+            AUTHORIZED_UPDATER, users, collections, blockNumbers, nftDeltas, balanceDeltas, signature
+        );
     }
 
     function test_Gas_ProcessBalanceUpdates_Batch_50() public {
         // Collection (mockERC721) is already whitelisted in RewardsController_Test_Base.setUp()
 
         // Prepare multi-user batch updates
-        IRewardsController.UserBalanceUpdateData[] memory updates =
+        IRewardsController.UserBalanceUpdateData[] memory updatesStruct =
             _prepareBalanceUpdates(address(mockERC721), BATCH_SIZE_50, block.number);
+
+        address[] memory users = new address[](BATCH_SIZE_50);
+        address[] memory collections = new address[](BATCH_SIZE_50);
+        uint256[] memory blockNumbers = new uint256[](BATCH_SIZE_50);
+        int256[] memory nftDeltas = new int256[](BATCH_SIZE_50);
+        int256[] memory balanceDeltas = new int256[](BATCH_SIZE_50);
+
+        for (uint256 i = 0; i < BATCH_SIZE_50; i++) {
+            users[i] = updatesStruct[i].user;
+            collections[i] = updatesStruct[i].collection;
+            blockNumbers[i] = updatesStruct[i].blockNumber;
+            nftDeltas[i] = updatesStruct[i].nftDelta;
+            balanceDeltas[i] = updatesStruct[i].balanceDelta;
+        }
 
         // Execute and measure gas
         uint256 nonce = rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER);
-        bytes memory signature = _signBalanceUpdates(updates, nonce, UPDATER_PRIVATE_KEY);
+        bytes memory signature = _signBalanceUpdatesArrays(
+            users, collections, blockNumbers, nftDeltas, balanceDeltas, nonce, UPDATER_PRIVATE_KEY
+        );
         vm.prank(AUTHORIZED_UPDATER);
-        rewardsController.processBalanceUpdates(AUTHORIZED_UPDATER, updates, signature);
+        rewardsController.processBalanceUpdates(
+            AUTHORIZED_UPDATER, users, collections, blockNumbers, nftDeltas, balanceDeltas, signature
+        );
     }
 
     function test_Gas_ProcessBalanceUpdates_Batch_100() public {
         // Collection (mockERC721) is already whitelisted in RewardsController_Test_Base.setUp()
 
         // Prepare multi-user batch updates
-        IRewardsController.UserBalanceUpdateData[] memory updates =
+        IRewardsController.UserBalanceUpdateData[] memory updatesStruct =
             _prepareBalanceUpdates(address(mockERC721), BATCH_SIZE_100, block.number);
+
+        address[] memory users = new address[](BATCH_SIZE_100);
+        address[] memory collections = new address[](BATCH_SIZE_100);
+        uint256[] memory blockNumbers = new uint256[](BATCH_SIZE_100);
+        int256[] memory nftDeltas = new int256[](BATCH_SIZE_100);
+        int256[] memory balanceDeltas = new int256[](BATCH_SIZE_100);
+
+        for (uint256 i = 0; i < BATCH_SIZE_100; i++) {
+            users[i] = updatesStruct[i].user;
+            collections[i] = updatesStruct[i].collection;
+            blockNumbers[i] = updatesStruct[i].blockNumber;
+            nftDeltas[i] = updatesStruct[i].nftDelta;
+            balanceDeltas[i] = updatesStruct[i].balanceDelta;
+        }
 
         // Execute and measure gas
         uint256 nonce = rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER);
-        bytes memory signature = _signBalanceUpdates(updates, nonce, UPDATER_PRIVATE_KEY);
+        bytes memory signature = _signBalanceUpdatesArrays(
+            users, collections, blockNumbers, nftDeltas, balanceDeltas, nonce, UPDATER_PRIVATE_KEY
+        );
         vm.prank(AUTHORIZED_UPDATER);
-        rewardsController.processBalanceUpdates(AUTHORIZED_UPDATER, updates, signature);
+        rewardsController.processBalanceUpdates(
+            AUTHORIZED_UPDATER, users, collections, blockNumbers, nftDeltas, balanceDeltas, signature
+        );
     }
 
     // --- Helper Functions ---

@@ -55,6 +55,21 @@ interface ILendingManager {
     function transferYield(uint256 amount, address recipient) external returns (uint256 amountTransferred);
 
     /**
+     * @notice Transfer accrued base yield for multiple collections in a single batch to a recipient.
+     * @param collections Array of collection addresses (for logging/tracking, not used in core logic).
+     * @param amounts Array of yield token amounts to transfer per collection.
+     * @param totalAmount The total sum of amounts to transfer.
+     * @param recipient Recipient address.
+     * @return totalAmountTransferred The actual total amount of yield transferred (may be less than requested due to capping).
+     */
+    function transferYieldBatch(
+        address[] calldata collections,
+        uint256[] calldata amounts,
+        uint256 totalAmount,
+        address recipient
+    ) external returns (uint256 totalAmountTransferred);
+
+    /**
      * @notice Redeems the entire cToken balance held by the LendingManager.
      * @dev Used for scenarios like full vault redemption to sweep remaining dust.
      * @param recipient Recipient address.

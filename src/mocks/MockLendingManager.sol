@@ -40,9 +40,11 @@ contract MockLendingManager is ILendingManager {
     event MockDepositCalled(uint256 amount);
     event MockWithdrawCalled(uint256 amount);
     event MockTransferYieldCalled(uint256 amount, address recipient);
+    event MockTransferYieldBatchCalled(
+        address[] collections, uint256[] amounts, uint256 totalAmount, address recipient, uint256 totalAmountTransferred
+    );
 
     constructor(IERC20 _asset, CTokenInterface __cToken) {
-        // Renamed internal variable
         asset = _asset;
         _cToken = __cToken; // Store the provided cToken instance privately
     }
@@ -191,5 +193,46 @@ contract MockLendingManager is ILendingManager {
         //     mockAsset.transfer(recipient, amountRedeemed);
         // }
         return amountRedeemed;
+    }
+
+    // --- Mock Implementation for transferYieldBatch ---
+    bool public transferYieldBatchResult = true;
+    uint256 public transferYieldBatchCalledCount;
+    // Add shouldTransferYieldBatchRevert if separate control is needed from single transferYield
+    // bool internal shouldTransferYieldBatchRevert;
+
+    function transferYieldBatch(
+        address[] calldata collections,
+        uint256[] calldata amounts,
+        uint256 totalAmount,
+        address recipient
+    ) external override returns (uint256 totalAmountTransferred) {
+        transferYieldBatchCalledCount++;
+
+        require(msg.sender == rewardsControllerAddress, "MockLM: Caller is not RC for batch");
+        if (recipientExpectationSet) {
+            require(recipient == expectedTransferRecipient, "MockLM: Batch recipient mismatch");
+            // recipientExpectationSet = false; // Reset if desired
+        }
+
+        if (shouldTransferYieldRevert) {
+            // Re-using general revert flag for simplicity
+            revert("MockLM: transferYieldBatch forced revert");
+        }
+
+        uint256 available = this.getAvailableYield();
+        totalAmountTransferred = totalAmount > available ? available : totalAmount;
+
+        if (totalAmountTransferred > 0 && transferYieldBatchResult) {
+            asset.transfer(recipient, totalAmountTransferred);
+        } else if (!transferYieldBatchResult) {
+            totalAmountTransferred = 0;
+        } else {
+            // totalAmountTransferred is 0
+            totalAmountTransferred = 0;
+        }
+
+        emit MockTransferYieldBatchCalled(collections, amounts, totalAmount, recipient, totalAmountTransferred);
+        return totalAmountTransferred;
     }
 }

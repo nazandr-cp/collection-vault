@@ -327,15 +327,18 @@ contract RewardsController_Claim_Test is RewardsController_Test_Base {
 
         // 4. Clear any previous mocks and set up the mock to return exactly what we expect
         vm.clearMockedCalls();
-
-        // Mock the LendingManager to return the exact expected amount from transferYield
+        // Mock the LendingManager's transferYieldBatch to return the exact expected amount.
+        // This is a general mock: any call to transferYieldBatch will return expectedReward.
+        // For more specific mocking, one might need to match arguments if other calls are made.
         vm.mockCall(
             address(lendingManager),
-            abi.encodeWithSelector(ILendingManager.transferYield.selector),
-            abi.encode(expectedReward)
+            abi.encodeWithSelector(ILendingManager.transferYieldBatch.selector), // Use the correct selector
+            abi.encode(expectedReward) // Set the return data to expectedReward
         );
 
-        // Ensure LendingManager has enough tokens to transfer
+        // Ensure LendingManager has enough tokens to transfer (for the real one, if mock fails or isn't hit)
+        // However, with the mock above, this deal to lendingManager for the *actual transfer* isn't strictly necessary
+        // as the mock dictates the return value. It's good for ensuring the mock has "backing" if it were more complex.
         deal(address(rewardToken), address(lendingManager), expectedReward * 2);
 
         // 5. Claim for all collections

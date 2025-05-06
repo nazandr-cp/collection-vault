@@ -73,12 +73,11 @@ contract RewardsController_ClaimForAllVariations_Test is RewardsController_Test_
 
         // First set the initial balance for the user
         deal(address(rewardToken), user, initialBalance);
-
-        // Set up the mock to return the fixed amount on transferYield, with any arguments
+        // Set up the mock to return the fixed amount on transferYieldBatch
         vm.mockCall(
             address(lendingManager),
-            abi.encodeWithSelector(ILendingManager.transferYield.selector),
-            abi.encode(expectedTotalReward)
+            abi.encodeWithSelector(ILendingManager.transferYieldBatch.selector), // Correct selector
+            abi.encode(expectedTotalReward) // Return expected total reward
         );
 
         // Record logs and claim
@@ -194,13 +193,11 @@ contract RewardsController_ClaimForAllVariations_Test is RewardsController_Test_
         // Set the yield cap (e.g., cap at 25% of expected reward)
         uint256 availableYieldCapY = totalExpectedReward / 4;
         assertTrue(availableYieldCapY > 0, "Test setup error: Yield cap should be positive");
-
         // --- Mock the LendingManager to cap yield ---
-        // This is much more reliable than trying to manipulate cToken balances
         vm.mockCall(
             address(lendingManager),
-            abi.encodeWithSelector(LendingManager.transferYield.selector),
-            abi.encode(availableYieldCapY)
+            abi.encodeWithSelector(ILendingManager.transferYieldBatch.selector), // Correct selector
+            abi.encode(availableYieldCapY) // Return the capped yield
         );
 
         // --- Action ---

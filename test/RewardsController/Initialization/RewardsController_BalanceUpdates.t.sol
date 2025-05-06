@@ -502,27 +502,48 @@ contract RewardsController_Balance_Updates is RewardsController_Test_Base {
         uint256 block2 = block.number + 2;
         vm.roll(block2);
 
-        IRewardsController.UserBalanceUpdateData[] memory updates = new IRewardsController.UserBalanceUpdateData[](2);
-        updates[0] = IRewardsController.UserBalanceUpdateData({
+        IRewardsController.UserBalanceUpdateData[] memory updatesStruct =
+            new IRewardsController.UserBalanceUpdateData[](2);
+        updatesStruct[0] = IRewardsController.UserBalanceUpdateData({
             user: USER_A,
             collection: address(mockERC721),
             blockNumber: block1,
             nftDelta: 1,
             balanceDelta: 100 ether
         });
-        updates[1] = IRewardsController.UserBalanceUpdateData({
+        updatesStruct[1] = IRewardsController.UserBalanceUpdateData({
             user: USER_B,
             collection: address(mockERC721_2),
             blockNumber: block2,
             nftDelta: 2,
             balanceDelta: 50 ether
         });
-        bytes memory sig = _signBalanceUpdates(updates, nonce, UPDATER_PRIVATE_KEY);
+
+        uint256 batchSize = updatesStruct.length;
+        address[] memory users = new address[](batchSize);
+        address[] memory collections = new address[](batchSize);
+        uint256[] memory blockNumbers = new uint256[](batchSize);
+        int256[] memory nftDeltas = new int256[](batchSize);
+        int256[] memory balanceDeltas = new int256[](batchSize);
+
+        for (uint256 i = 0; i < batchSize; i++) {
+            users[i] = updatesStruct[i].user;
+            collections[i] = updatesStruct[i].collection;
+            blockNumbers[i] = updatesStruct[i].blockNumber;
+            nftDeltas[i] = updatesStruct[i].nftDelta;
+            balanceDeltas[i] = updatesStruct[i].balanceDelta;
+        }
+
+        bytes memory sig = _signBalanceUpdatesArrays(
+            users, collections, blockNumbers, nftDeltas, balanceDeltas, nonce, UPDATER_PRIVATE_KEY
+        );
 
         vm.expectEmit(true, true, false, true, address(rewardsController)); // signer, nonce indexed; count not indexed
-        emit IRewardsController.BalanceUpdatesProcessed(AUTHORIZED_UPDATER, nonce, updates.length);
+        emit IRewardsController.BalanceUpdatesProcessed(AUTHORIZED_UPDATER, nonce, batchSize);
 
-        rewardsController.processBalanceUpdates(AUTHORIZED_UPDATER, updates, sig);
+        rewardsController.processBalanceUpdates(
+            AUTHORIZED_UPDATER, users, collections, blockNumbers, nftDeltas, balanceDeltas, sig
+        );
 
         // Verify state for USER_A using getUserCollectionTracking
         address[] memory collectionsA = new address[](1);

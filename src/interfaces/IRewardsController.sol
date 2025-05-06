@@ -77,12 +77,7 @@ interface IRewardsController {
     function vault() external view returns (IERC4626);
     function rewardToken() external view returns (IERC20);
     function authorizedUpdater() external view returns (address);
-    function collectionBetas(address collection) external view returns (uint256 beta);
     function collectionRewardBasis(address collection) external view returns (RewardBasis rewardBasis);
-    function collectionRewardSharePercentages(address collection)
-        external
-        view
-        returns (uint256 rewardSharePercentage);
     function authorizedUpdaterNonce(address updater) external view returns (uint256 nonce);
     function globalRewardIndex() external view returns (uint256 index);
     function epochDuration() external view returns (uint256 duration);
@@ -97,8 +92,15 @@ interface IRewardsController {
     function setCollectionRewardSharePercentage(address collection, uint256 newSharePercentage) external;
 
     // Balance Update Processing
-    function processBalanceUpdates(address signer, UserBalanceUpdateData[] calldata updates, bytes calldata signature)
-        external;
+    function processBalanceUpdates(
+        address signer,
+        address[] calldata users,
+        address[] calldata collections,
+        uint256[] calldata blockNumbers,
+        int256[] calldata nftDeltas,
+        int256[] calldata balanceDeltas,
+        bytes calldata signature
+    ) external;
     function processUserBalanceUpdates(
         address signer,
         address user,
@@ -128,6 +130,7 @@ interface IRewardsController {
         returns (UserCollectionTracking[] memory trackingInfo);
     function getCollectionBeta(address nftCollection) external view returns (uint256);
     function getCollectionRewardBasis(address nftCollection) external view returns (RewardBasis);
+    function getCollectionRewardSharePercentage(address collection) external view returns (uint256);
     function getUserNFTCollections(address user) external view returns (address[] memory collections);
     function previewRewards(
         address user,

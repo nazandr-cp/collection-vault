@@ -45,13 +45,26 @@ contract RewardsController_Init is RewardsController_Test_Base {
         );
         vm.expectRevert(IRewardsController.AddressZero.selector);
         new TransparentUpgradeableProxy(address(newImpl), address(proxyAdmin), initData);
+
+        // Test for zero initialOwner
+        initData = abi.encodeWithSelector(
+            RewardsController.initialize.selector,
+            address(0),
+            address(lendingManager),
+            address(tokenVault),
+            AUTHORIZED_UPDATER
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(RewardsController.RewardsControllerInvalidInitialOwner.selector, address(0))
+        );
+        new TransparentUpgradeableProxy(address(newImpl), address(proxyAdmin), initData);
     }
 
     function test_Revert_Initialize_VaultAssetMismatch() public {
         MockERC20 mockAsset = new MockERC20("Mock Asset", "MOCK", 18);
         // Create a mock cToken for the mock asset
         MockCToken mockCT = new MockCToken(address(mockAsset));
-        
+
         // Create a real LendingManager with the mock asset
         LendingManager mockLM = new LendingManager(
             OWNER, // initialAdmin
@@ -60,10 +73,10 @@ contract RewardsController_Init is RewardsController_Test_Base {
             address(mockAsset), // asset address
             address(mockCT) // cToken address
         );
-        
+
         // Create the vault using the lending manager
         ERC4626Vault mockVault = new ERC4626Vault(mockAsset, "Mock Vault", "mV", OWNER, address(mockLM));
-        
+
         // Update the vault role in the lending manager
         vm.prank(OWNER);
         mockLM.revokeVaultRole(address(1));

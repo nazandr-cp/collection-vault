@@ -3,6 +3,8 @@ pragma solidity ^0.8.20;
 
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {IRewardsController} from "../../../src/interfaces/IRewardsController.sol";
+// Add missing import for the RewardsController contract type
+import {RewardsController} from "../../../src/RewardsController.sol";
 import {RewardsController_Test_Base} from "../RewardsController_Test_Base.sol";
 
 contract RewardsController_Admin is RewardsController_Test_Base {
@@ -45,7 +47,9 @@ contract RewardsController_Admin is RewardsController_Test_Base {
     function test_Revert_AddNFTCollection_AlreadyExists() public {
         vm.startPrank(OWNER);
         // Use the actual whitelisted mock address
-        vm.expectRevert(abi.encodeWithSelector(IRewardsController.CollectionAlreadyExists.selector, address(mockERC721)));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRewardsController.CollectionAlreadyExists.selector, address(mockERC721))
+        );
         rewardsController.addNFTCollection(
             address(mockERC721), BETA_1, IRewardsController.RewardBasis.BORROW, VALID_REWARD_SHARE_PERCENTAGE
         );
@@ -161,7 +165,7 @@ contract RewardsController_Admin is RewardsController_Test_Base {
         assertTrue(rewardsController.isCollectionWhitelisted(NEW_COLLECTION));
         assertEq(rewardsController.getCollectionBeta(NEW_COLLECTION), beta);
         assertEq(uint256(rewardsController.getCollectionRewardBasis(NEW_COLLECTION)), uint256(basis));
-        assertEq(rewardsController.collectionRewardSharePercentages(NEW_COLLECTION), share);
+        assertEq(rewardsController.getCollectionRewardSharePercentage(NEW_COLLECTION), share);
         vm.stopPrank();
     }
 
@@ -175,9 +179,14 @@ contract RewardsController_Admin is RewardsController_Test_Base {
         rewardsController.removeNFTCollection(collectionToRemove);
         assertFalse(rewardsController.isCollectionWhitelisted(collectionToRemove));
         // Check associated state is deleted (should revert or return 0)
-        vm.expectRevert(abi.encodeWithSelector(IRewardsController.CollectionNotWhitelisted.selector, collectionToRemove));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRewardsController.CollectionNotWhitelisted.selector, collectionToRemove)
+        );
         rewardsController.getCollectionBeta(collectionToRemove);
-        assertEq(rewardsController.collectionRewardSharePercentages(collectionToRemove), 0);
+        vm.expectRevert(
+            abi.encodeWithSelector(IRewardsController.CollectionNotWhitelisted.selector, collectionToRemove)
+        );
+        rewardsController.getCollectionRewardSharePercentage(collectionToRemove);
         vm.stopPrank();
     }
 
@@ -198,12 +207,12 @@ contract RewardsController_Admin is RewardsController_Test_Base {
         vm.startPrank(OWNER);
         // Use the actual whitelisted mock address
         address collectionToUpdate = address(mockERC721);
-        uint256 oldShare = rewardsController.collectionRewardSharePercentages(collectionToUpdate);
+        uint256 oldShare = rewardsController.getCollectionRewardSharePercentage(collectionToUpdate);
         uint256 newShare = 7500; // 75%
         vm.expectEmit(true, true, true, true, address(rewardsController));
         emit IRewardsController.CollectionRewardShareUpdated(collectionToUpdate, oldShare, newShare);
         rewardsController.setCollectionRewardSharePercentage(collectionToUpdate, newShare);
-        assertEq(rewardsController.collectionRewardSharePercentages(collectionToUpdate), newShare);
+        assertEq(rewardsController.getCollectionRewardSharePercentage(collectionToUpdate), newShare);
         vm.stopPrank();
     }
 

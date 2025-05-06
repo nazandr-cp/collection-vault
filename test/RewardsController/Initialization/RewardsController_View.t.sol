@@ -149,7 +149,8 @@ contract RewardsController_View is RewardsController_Test_Base {
         //     uint256 lastBalance,
         //     uint256 lastUpdateBlock
         // ) = rewardsController.userNFTData(USER_A, address(mockERC721)); // Use mock address
-        RewardsController.UserRewardState memory state = rewardsController.getUserRewardState(USER_A, address(mockERC721));
+        RewardsController.UserRewardState memory state =
+            rewardsController.getUserRewardState(USER_A, address(mockERC721));
 
         assertTrue(state.lastRewardIndex > 0);
         assertEq(state.accruedReward, 0);
@@ -158,25 +159,23 @@ contract RewardsController_View is RewardsController_Test_Base {
         assertEq(state.lastUpdateBlock, block1);
     }
 
-    function test_CollectionRewardSharePercentages_Success() public view {
+    function test_CollectionRewardSharePercentages_Success() public {
         // Collection 1 added in setUp with VALID_REWARD_SHARE_PERCENTAGE
         assertEq(
-            rewardsController.collectionRewardSharePercentages(address(mockERC721)), // Use mock address
+            rewardsController.getCollectionRewardSharePercentage(address(mockERC721)), // Use new getter
             VALID_REWARD_SHARE_PERCENTAGE,
             "Share percentage mismatch for collection 1"
         );
         // Collection 2 added in setUp with VALID_REWARD_SHARE_PERCENTAGE
         assertEq(
-            rewardsController.collectionRewardSharePercentages(address(mockERC721_2)), // Use mock address
+            rewardsController.getCollectionRewardSharePercentage(address(mockERC721_2)), // Use new getter
             VALID_REWARD_SHARE_PERCENTAGE,
             "Share percentage mismatch for collection 2"
         );
-        // Non-whitelisted collection should have 0 share
-        assertEq(
-            rewardsController.collectionRewardSharePercentages(NFT_COLLECTION_3),
-            0,
-            "Share percentage should be 0 for non-whitelisted"
-        );
+        // Non-whitelisted collection should revert or return 0 depending on implementation.
+        // The current getter `getCollectionRewardSharePercentage` has `onlyWhitelistedCollection` modifier.
+        vm.expectRevert(abi.encodeWithSelector(IRewardsController.CollectionNotWhitelisted.selector, NFT_COLLECTION_3));
+        rewardsController.getCollectionRewardSharePercentage(NFT_COLLECTION_3); // This should revert
     }
 
     function test_UserNFTData_Initial() public view {
@@ -188,7 +187,8 @@ contract RewardsController_View is RewardsController_Test_Base {
         //     uint256 lastBalance,
         //     uint256 lastUpdateBlock
         // ) = rewardsController.userNFTData(USER_C, address(mockERC721)); // USER_C has no activity, use mock address
-        RewardsController.UserRewardState memory state1 = rewardsController.getUserRewardState(USER_C, address(mockERC721));
+        RewardsController.UserRewardState memory state1 =
+            rewardsController.getUserRewardState(USER_C, address(mockERC721));
 
         assertEq(state1.lastRewardIndex, 0, "Initial lastRewardIndex should be 0");
         assertEq(state1.accruedReward, 0, "Initial accruedReward should be 0");
@@ -199,7 +199,8 @@ contract RewardsController_View is RewardsController_Test_Base {
         // Also check for a whitelisted collection the user hasn't interacted with
         // (lastRewardIndex, accruedReward, lastNFTBalance, lastBalance, lastUpdateBlock) =
         //     rewardsController.userNFTData(USER_A, address(mockERC721_2)); // USER_A hasn't interacted with C2 yet, use mock address
-        RewardsController.UserRewardState memory state2 = rewardsController.getUserRewardState(USER_A, address(mockERC721_2));
+        RewardsController.UserRewardState memory state2 =
+            rewardsController.getUserRewardState(USER_A, address(mockERC721_2));
 
         assertEq(state2.lastRewardIndex, 0, "Initial lastRewardIndex for C2 should be 0");
         assertEq(state2.accruedReward, 0, "Initial accruedReward for C2 should be 0");

@@ -28,15 +28,19 @@ import {console} from "forge-std/console.sol"; // Add console for debugging
 contract RewardsController_Test_Base is Test {
     using Strings for uint256;
 
-    bytes32 public constant USER_BALANCE_UPDATE_DATA_TYPEHASH = keccak256(
-        "UserBalanceUpdateData(address user,address collection,uint256 blockNumber,int256 nftDelta,int256 balanceDelta)"
+    // USER_BALANCE_UPDATE_DATA_TYPEHASH is no longer directly used by the refactored processBalanceUpdates in RewardsController
+    // but might be used by other test helpers if they construct this struct for other purposes.
+    // For now, let's keep it if other signing helpers for different functions use it.
+    bytes32 public constant USER_BALANCE_UPDATE_DATA_TYPEHASH_OLD = keccak256( // Renamed to avoid conflict if needed elsewhere
+    "UserBalanceUpdateData(address user,address collection,uint256 blockNumber,int256 nftDelta,int256 balanceDelta)");
+    // This is for the new parallel array structure in processBalanceUpdates
+    bytes32 public constant BALANCE_UPDATES_ARRAYS_TYPEHASH = keccak256(
+        "BalanceUpdates(address[] users,address[] collections,uint256[] blockNumbers,int256[] nftDeltas,int256[] balanceDeltas,uint256 nonce)"
     );
-    bytes32 public constant BALANCE_UPDATES_TYPEHASH =
-        keccak256("BalanceUpdates(UserBalanceUpdateData[] updates,uint256 nonce)");
-    bytes32 public constant BALANCE_UPDATE_DATA_TYPEHASH =
-        keccak256("BalanceUpdateData(address collection,uint256 blockNumber,int256 nftDelta,int256 balanceDelta)");
-    bytes32 public constant USER_BALANCE_UPDATES_TYPEHASH =
-        keccak256("UserBalanceUpdates(address user,BalanceUpdateData[] updates,uint256 nonce)");
+    bytes32 public constant BALANCE_UPDATE_DATA_TYPEHASH = // Used by processUserBalanceUpdates and individual updates
+     keccak256("BalanceUpdateData(address collection,uint256 blockNumber,int256 nftDelta,int256 balanceDelta)");
+    bytes32 public constant USER_BALANCE_UPDATES_TYPEHASH = // Used by processUserBalanceUpdates
+     keccak256("UserBalanceUpdates(address user,BalanceUpdateData[] updates,uint256 nonce)");
 
     address constant USER_A = address(0xAAA);
     address constant USER_B = address(0xBBB);
@@ -222,32 +226,46 @@ contract RewardsController_Test_Base is Test {
         signature = abi.encodePacked(r, s, v);
     }
 
-    // Helper to sign UserBalanceUpdateData array (multi-user batch)
-    function _signBalanceUpdates(
-        IRewardsController.UserBalanceUpdateData[] memory updates,
+    // Helper to sign parallel arrays for processBalanceUpdates (multi-user batch)
+    function _signBalanceUpdatesArrays(
+        address[] memory users,
+        address[] memory collections,
+        uint256[] memory blockNumbers,
+        int256[] memory nftDeltas,
+        int256[] memory balanceDeltas,
         uint256 nonce,
         uint256 privateKey
     ) internal view returns (bytes memory signature) {
-        bytes32 updatesHash = _hashUserBalanceUpdates(updates);
-        bytes32 structHash = keccak256(abi.encode(BALANCE_UPDATES_TYPEHASH, updatesHash, nonce));
-        // Replicate _hashTypedDataV4 logic using the locally built domain separator
-        bytes32 domainSeparator = _buildDomainSeparator(); // Use local helper
+        bytes32 structHash = keccak256(
+            abi.encode(
+                BALANCE_UPDATES_ARRAYS_TYPEHASH, // Use the new typehash for parallel arrays
+                keccak256(abi.encodePacked(users)),
+                keccak256(abi.encodePacked(collections)),
+                keccak256(abi.encodePacked(blockNumbers)),
+                keccak256(abi.encodePacked(nftDeltas)),
+                keccak256(abi.encodePacked(balanceDeltas)),
+                nonce
+            )
+        );
+        bytes32 domainSeparator = _buildDomainSeparator();
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
         signature = abi.encodePacked(r, s, v);
     }
 
-    // Helper to create hash for UserBalanceUpdateData array
-    function _hashUserBalanceUpdates(IRewardsController.UserBalanceUpdateData[] memory updates)
-        internal
-        pure
-        returns (bytes32)
-    {
+    // _hashUserBalanceUpdates and the old _signBalanceUpdates might still be needed if tests
+    // call other functions that use the UserBalanceUpdateData struct directly for signing,
+    // or if there are tests for the old hashing mechanism itself.
+    // For now, we assume the primary path for processBalanceUpdates uses the new array signing.
+    // If _hashUserBalanceUpdates is truly unused after refactoring tests, it can be removed.
+    function _hashUserBalanceUpdates_OLD(
+        IRewardsController.UserBalanceUpdateData[] memory updates // Renamed
+    ) internal pure returns (bytes32) {
         bytes32[] memory dataHashes = new bytes32[](updates.length);
         for (uint256 i = 0; i < updates.length; i++) {
             dataHashes[i] = keccak256(
                 abi.encode(
-                    USER_BALANCE_UPDATE_DATA_TYPEHASH,
+                    USER_BALANCE_UPDATE_DATA_TYPEHASH_OLD, // Use renamed old typehash
                     updates[i].user,
                     updates[i].collection,
                     updates[i].blockNumber,
