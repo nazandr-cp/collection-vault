@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol"; // Import for decimals()
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -157,7 +157,9 @@ contract LendingManager is ILendingManager, AccessControl {
      * @return success Boolean indicating whether the deposit was successful (always true if no revert).
      */
     function depositToLendingProtocol(uint256 amount) external override onlyVault returns (bool success) {
-        if (amount == 0) return true;
+        if (amount == 0) {
+            return true;
+        }
 
         _asset.safeTransferFrom(msg.sender, address(this), amount);
 
@@ -184,7 +186,7 @@ contract LendingManager is ILendingManager, AccessControl {
         if (amount == 0) return true;
 
         uint256 accrualResult = CTokenInterface(address(_cToken)).accrueInterest();
-        accrualResult; // Silence compiler warning
+        require(accrualResult == 0, "Accrue interest failed");
 
         uint256 availableBalance = totalAssets();
         if (availableBalance < amount) {
@@ -282,24 +284,34 @@ contract LendingManager is ILendingManager, AccessControl {
             // We can't redeem 0 cTokens, so return 0 transferred.
             return 0;
         }
-        if (cTokensToRedeem == 0) return 0;
-
-        uint256 balanceBeforeRedeem = _asset.balanceOf(address(this)); // Get balance before
-
-        uint256 redeemResult = _cToken.redeem(cTokensToRedeem);
-        if (redeemResult != 0) revert RedeemFailed(); // cToken redeem failed
-
-        uint256 balanceAfterRedeem = _asset.balanceOf(address(this)); // Get balance after
-
-        // Use the actual balance received after redemption for the transfer
-        uint256 actualAmountTransferred = balanceAfterRedeem - balanceBeforeRedeem; // Calculate actual received amount
-
-        if (actualAmountTransferred > 0) {
-            _asset.safeTransfer(recipient, actualAmountTransferred);
+        // The duplicate check for (cTokensToRedeem == 0 && amountTransferred > 0) seems redundant,
+        // as the first one would already return.
+        // The original code had two identical blocks here. I'm keeping one for safety.
+        if (cTokensToRedeem == 0 && amountTransferred > 0) {
+            return 0;
+        }
+        if (cTokensToRedeem == 0) {
+            // This covers the case where amountTransferred might be 0 as well
+            return 0;
         }
 
-        emit YieldTransferred(recipient, actualAmountTransferred); // Emit the actual amount transferred
-        return actualAmountTransferred; // Return the actual amount transferred
+        uint256 balanceBeforeRedeem = _asset.balanceOf(address(this));
+
+        uint256 redeemResult = _cToken.redeem(cTokensToRedeem);
+        if (redeemResult != 0) {
+            revert RedeemFailed();
+        }
+
+        uint256 balanceAfterRedeem = _asset.balanceOf(address(this));
+
+        uint256 actualAmountReceived = balanceAfterRedeem - balanceBeforeRedeem;
+
+        if (actualAmountReceived > 0) {
+            _asset.safeTransfer(recipient, actualAmountReceived);
+        }
+
+        emit YieldTransferred(recipient, actualAmountReceived);
+        return actualAmountReceived;
     }
 
     /**
@@ -347,18 +359,27 @@ contract LendingManager is ILendingManager, AccessControl {
             // This can happen if totalAmountTransferred is very small (dust)
             return 0;
         }
-        if (cTokensToRedeem == 0) return 0;
+        // The duplicate check for (cTokensToRedeem == 0 && totalAmountTransferred > 0) seems redundant.
+        // The original code had two identical blocks here. I'm keeping one for safety.
+        if (cTokensToRedeem == 0 && totalAmountTransferred > 0) {
+            return 0;
+        }
+        if (cTokensToRedeem == 0) {
+            // This covers the case where totalAmountTransferred might be 0 as well
+            return 0;
+        }
 
         uint256 balanceBeforeRedeem = _asset.balanceOf(address(this));
 
         uint256 redeemResult = _cToken.redeem(cTokensToRedeem);
-        if (redeemResult != 0) revert RedeemFailed(); // cToken redeem failed
+        if (redeemResult != 0) {
+            revert RedeemFailed();
+        }
 
         uint256 balanceAfterRedeem = _asset.balanceOf(address(this));
+
         uint256 actualAmountReceived = balanceAfterRedeem - balanceBeforeRedeem;
 
-        // It's possible actualAmountReceived is slightly different from totalAmountTransferred due to cToken precision.
-        // We transfer what was actually received.
         if (actualAmountReceived > 0) {
             _asset.safeTransfer(recipient, actualAmountReceived);
         }

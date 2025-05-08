@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import "forge-std/console.sol";
+
 import {CTokenInterface} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol";
 import {CErc20Interface} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol"; // Added import
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -95,9 +97,40 @@ contract MockCToken is
             "MockCToken: Contract lacks underlying"
         );
 
+        console.log(
+            "MockCToken.redeemUnderlying: msg.sender=%s, redeemUnderlyingAmount=%d, cTokensToBurn=%d",
+            msg.sender,
+            redeemUnderlyingAmount,
+            cTokensToBurn
+        );
+        uint256 myUnderlyingBalance = IERC20(underlying).balanceOf(address(this));
+        console.log(
+            "MockCToken.redeemUnderlying: My underlying balance BEFORE transfer to msg.sender: %d", myUnderlyingBalance
+        );
+
         cTokenBalances[msg.sender] -= cTokensToBurn;
-        // Simulate transferring underlying back to the caller (LendingManager)
-        IERC20(underlying).transfer(msg.sender, redeemUnderlyingAmount);
+        bool success = IERC20(underlying).transfer(msg.sender, redeemUnderlyingAmount);
+        if (!success) {
+            console.log(
+                "MockCToken.redeemUnderlying: FAILED to transfer %d underlying to %s",
+                redeemUnderlyingAmount,
+                msg.sender
+            );
+            // Note: Compound's redeemUnderlying usually reverts on internal failure or returns error code.
+            // For simplicity, we log and continue, but a real cToken might revert or return non-zero.
+            // The redeemResult check handles explicit error simulation.
+        } else {
+            console.log(
+                "MockCToken.redeemUnderlying: SUCCESSFULLY transferred %d underlying to %s",
+                redeemUnderlyingAmount,
+                msg.sender
+            );
+        }
+        uint256 myUnderlyingBalanceAfter = IERC20(underlying).balanceOf(address(this));
+        console.log(
+            "MockCToken.redeemUnderlying: My underlying balance AFTER transfer to msg.sender: %d",
+            myUnderlyingBalanceAfter
+        );
 
         emit Redeem(msg.sender, redeemUnderlyingAmount, cTokensToBurn); // Use inherited event
         return 0; // Return 0 for success as per Compound interface
@@ -116,8 +149,28 @@ contract MockCToken is
             IERC20(underlying).balanceOf(address(this)) >= underlyingToRedeem, "MockCToken: Contract lacks underlying"
         );
 
+        console.log(
+            "MockCToken.redeem: msg.sender=%s, redeemTokens=%d, underlyingToRedeem=%d",
+            msg.sender,
+            redeemTokens,
+            underlyingToRedeem
+        );
+        uint256 myUnderlyingBalance = IERC20(underlying).balanceOf(address(this));
+        console.log("MockCToken.redeem: My underlying balance BEFORE transfer to msg.sender: %d", myUnderlyingBalance);
+
         cTokenBalances[msg.sender] -= redeemTokens;
-        IERC20(underlying).transfer(msg.sender, underlyingToRedeem);
+        bool success = IERC20(underlying).transfer(msg.sender, underlyingToRedeem);
+        if (!success) {
+            console.log("MockCToken.redeem: FAILED to transfer %d underlying to %s", underlyingToRedeem, msg.sender);
+        } else {
+            console.log(
+                "MockCToken.redeem: SUCCESSFULLY transferred %d underlying to %s", underlyingToRedeem, msg.sender
+            );
+        }
+        uint256 myUnderlyingBalanceAfter = IERC20(underlying).balanceOf(address(this));
+        console.log(
+            "MockCToken.redeem: My underlying balance AFTER transfer to msg.sender: %d", myUnderlyingBalanceAfter
+        );
 
         emit Redeem(msg.sender, underlyingToRedeem, redeemTokens);
         return 0;
@@ -155,6 +208,37 @@ contract MockCToken is
 
     function balanceOf(address owner) external view override returns (uint256) {
         return cTokenBalances[owner];
+    }
+
+    // Added mock implementation for transferUnderlyingTo
+    // This function is declared in CTokenInterface but often implemented in CErc20Delegator/CEther
+    // For our mock, we need an implementation.
+    function transferUnderlyingTo(address recipient, uint256 amount) external returns (uint256) {
+        // This function is NOT part of CErc20Interface, but CTokenInterface.
+        // It's called by LendingManager to get yield.
+        // It should transfer 'amount' of 'underlying' from this cToken contract to 'recipient'.
+        console.log("MockCToken.transferUnderlyingTo: recipient=%s, amount=%d", recipient, amount);
+        uint256 myUnderlyingBalance = IERC20(underlying).balanceOf(address(this));
+        console.log("MockCToken.transferUnderlyingTo: my underlying balance=%d", myUnderlyingBalance);
+
+        if (myUnderlyingBalance < amount) {
+            console.log(
+                "MockCToken.transferUnderlyingTo: INSUFFICIENT BALANCE! Has %d, needs %d", myUnderlyingBalance, amount
+            );
+            return 1; // Simulate a Compound error code (non-zero means failure)
+        }
+
+        bool success = IERC20(underlying).transfer(recipient, amount);
+        if (!success) {
+            console.log("MockCToken.transferUnderlyingTo: underlying.transfer FAILED!");
+            return 1; // Simulate a Compound error code
+        }
+
+        // The standard Transfer event is for cToken transfers, not underlying.
+        // For logging the effect of this operation, we can emit a custom event or just rely on console logs.
+        // Let's assume for now console logs are sufficient for debugging.
+        console.log("MockCToken.transferUnderlyingTo: SUCCESS, transferred %d to %s", amount, recipient);
+        return 0; // Compound's cTokens return 0 on success for this function
     }
 
     // --- Added Minimal Implementations for Abstract Functions ---

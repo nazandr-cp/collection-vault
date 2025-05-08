@@ -47,6 +47,12 @@ contract RewardsController_ClaimForAllVariations_Test is RewardsController_Test_
         // Set yield for A, zero for B
         mockCToken.setExchangeRate(3e16); // Simulate yield accrual
 
+        // Update globalRewardIndex to reflect the new exchange rate before user state is recorded
+        IRewardsController.BalanceUpdateData[] memory noSimUpdatesForClaimHelper;
+        vm.prank(USER_C); // Dummy user for updating global index
+        rewardsController.claimRewardsForCollection(address(mockERC721_alt), noSimUpdatesForClaimHelper); // Use a distinct collection
+        vm.prank(address(this)); // Revert prank to test contract context
+
         // Deposit and stake for both collections at the same block
         _depositAndStake(user, collectionA, 1, initialBalanceA);
         _depositAndStake(user, collectionB, 1, initialBalanceB);
@@ -178,6 +184,16 @@ contract RewardsController_ClaimForAllVariations_Test is RewardsController_Test_
         uint256 rateIncrease = 1e8; // Example increase
         uint256 finalRate = initialRate + rateIncrease;
         mockCToken.setExchangeRate(finalRate); // Update mock cToken rate to reflect yield
+
+        // Update globalRewardIndex in the controller by making a claim for a different user/collection
+        // This ensures the subsequent previews are based on an up-to-date global index.
+        IRewardsController.BalanceUpdateData[] memory noSimUpdatesForClaimHelper;
+        vm.prank(USER_B); // Use a different user to avoid interfering with USER_A's state
+        // Use a collection that USER_A is not using in this specific test to avoid state interference,
+        // or ensure USER_B has no stake in mockERC721_alt if it's used by USER_A elsewhere.
+        // For simplicity, if mockERC721_alt is generally available and USER_B has no stake, it's fine.
+        rewardsController.claimRewardsForCollection(address(mockERC721_alt), noSimUpdatesForClaimHelper);
+        vm.prank(address(this)); // Revert prank
 
         // Calculate expected reward for USER_A *before* capping
         address[] memory collectionsToPreview = new address[](2);

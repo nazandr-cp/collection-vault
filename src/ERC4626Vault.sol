@@ -6,10 +6,14 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
 
-contract ERC4626Vault is ERC4626, AccessControl {
+import "forge-std/console.sol";
+
+contract ERC4626Vault is ERC4626, AccessControl, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Math for uint256;
 
@@ -60,9 +64,11 @@ contract ERC4626Vault is ERC4626, AccessControl {
 
     function setLendingManager(address _lendingManagerAddress) external onlyRole(ADMIN_ROLE) {
         if (_lendingManagerAddress == address(0)) revert AddressZero();
+        ILendingManager oldLendingManager = lendingManager;
         lendingManager = ILendingManager(_lendingManagerAddress);
         if (address(lendingManager.asset()) != address(asset())) revert LendingManagerMismatch();
         IERC20(asset()).approve(_lendingManagerAddress, type(uint256).max);
+        IERC20(asset()).approve(address(oldLendingManager), 0);
     }
 
     function totalAssets() public view override returns (uint256) {
@@ -76,11 +82,15 @@ contract ERC4626Vault is ERC4626, AccessControl {
     function depositForCollection(uint256 assets, address receiver, address collectionAddress)
         public
         virtual
+        nonReentrant
         returns (uint256 shares)
     {
         shares = previewDeposit(assets);
+        // Console.log("ERC4626Vault.depositForCollection: calculated shares=%d", shares);
         _deposit(msg.sender, receiver, assets, shares);
+        // Console.log("ERC4626Vault.depositForCollection: after _deposit, before _hookDeposit");
         _hookDeposit(assets);
+        // Console.log("ERC4626Vault.depositForCollection: after _hookDeposit");
         collectionTotalAssetsDeposited[collectionAddress] += assets;
         emit CollectionDeposit(collectionAddress, msg.sender, receiver, assets, shares);
     }
@@ -92,6 +102,7 @@ contract ERC4626Vault is ERC4626, AccessControl {
     function mintForCollection(uint256 shares, address receiver, address collectionAddress)
         public
         virtual
+        nonReentrant
         returns (uint256 assets)
     {
         assets = previewMint(shares);
@@ -108,6 +119,7 @@ contract ERC4626Vault is ERC4626, AccessControl {
     function withdrawForCollection(uint256 assets, address receiver, address owner, address collectionAddress)
         public
         virtual
+        nonReentrant
         returns (uint256 shares)
     {
         uint256 collectionBalance = collectionTotalAssetsDeposited[collectionAddress];
@@ -128,6 +140,7 @@ contract ERC4626Vault is ERC4626, AccessControl {
     function redeemForCollection(uint256 shares, address receiver, address owner, address collectionAddress)
         public
         virtual
+        nonReentrant
         returns (uint256 assets)
     {
         uint256 _totalSupply = totalSupply();

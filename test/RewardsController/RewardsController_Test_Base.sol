@@ -163,6 +163,20 @@ contract RewardsController_Test_Base is Test {
         rewardToken.transfer(USER_A, userFunding);
         rewardToken.transfer(USER_B, userFunding);
         rewardToken.transfer(USER_C, userFunding);
+
+        // USER_A deposits into TokenVault to ensure vault.totalSupply() is non-zero for reward calculations
+        uint256 initialVaultDeposit = 1000 ether;
+        if (userFunding >= initialVaultDeposit) {
+            // DAI_WHALE is still the actor here.
+            // DAI_WHALE has userFunding (actually, DAI_WHALE has a lot more from deal).
+            // This check is more about ensuring initialVaultDeposit is reasonable.
+            // DAI_WHALE approves tokenVault to spend DAI_WHALE's DAI
+            rewardToken.approve(address(tokenVault), initialVaultDeposit);
+            // DAI_WHALE deposits its DAI, USER_A is the receiver of the vault shares.
+            // Use depositForCollection as the generic deposit is disabled.
+            // Use mockERC721 as a placeholder collection for this initial seeding.
+            tokenVault.depositForCollection(initialVaultDeposit, USER_A, address(mockERC721));
+        }
         vm.stopPrank();
 
         vm.label(OWNER, "OWNER");
@@ -473,6 +487,16 @@ contract RewardsController_Test_Base is Test {
             lmTotalAssetsBeforeImplicitAccrual,
             currentPrincipal
         );
+
+        // Additionally, the LendingManager contract itself needs to hold the actual rewardTokens representing the yield
+        // that it is supposed to be able to transfer. This simulates the LM having realized/skimmed this yield.
+        // This should happen *after* all exchange rate manipulations, as the LM's ability to transfer
+        // is based on its actual token holdings, not just the cToken's state.
+        if (targetYield > 0) {
+            console.log("Dealing %d rewardToken to LendingManager contract", targetYield);
+            deal(address(rewardToken), address(lendingManager), targetYield);
+        }
+
         console.log("--- End _generateYieldInLendingManager ---");
     }
 }
