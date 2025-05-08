@@ -27,8 +27,6 @@ contract MockCToken is
     // Use 1e18 scale to match observed mainnet behavior, not theoretical formula
     uint256 private constant EXCHANGE_RATE_SCALE = 1e18;
 
-    // Stored rate should be scaled: 0.02 * 1e18 = 2e16
-    uint256 public currentExchangeRate = 2e16; // 0.02 scaled by 1e18
     mapping(address => uint256) public cTokenBalances;
 
     uint256 public mintResult = 0;
@@ -48,8 +46,9 @@ contract MockCToken is
 
     // --- Mock Control Functions ---
     function setExchangeRate(uint256 _rate) external {
-        // Assume input rate is scaled correctly
-        currentExchangeRate = _rate;
+        // This function is for testing, to directly set the exchange rate.
+        // It should update the `exchangeRateMantissa` which is returned by `exchangeRateStored()`.
+        exchangeRateMantissa = _rate;
     }
 
     function setMintResult(uint256 _result) external {
@@ -69,7 +68,9 @@ contract MockCToken is
         IERC20(underlying).transferFrom(msg.sender, address(this), mintAmount);
 
         // Calculate cTokens using scaled rate: cTokens = underlying * scale / rate
-        uint256 cTokensToMint = mintAmount * EXCHANGE_RATE_SCALE / currentExchangeRate;
+        uint256 rate = this.exchangeRateCurrent(); // Use current (potentially accrued) rate
+        require(rate > 0, "MockCToken: Exchange rate cannot be zero");
+        uint256 cTokensToMint = mintAmount * EXCHANGE_RATE_SCALE / rate;
         cTokenBalances[msg.sender] += cTokensToMint;
 
         emit Mint(msg.sender, mintAmount, cTokensToMint); // Use inherited event
@@ -81,7 +82,9 @@ contract MockCToken is
         if (redeemResult != 0) return redeemResult;
 
         // Calculate required cTokens using scaled rate: cTokens = underlying * scale / rate
-        uint256 cTokensToBurn = redeemUnderlyingAmount * EXCHANGE_RATE_SCALE / currentExchangeRate;
+        uint256 rate = this.exchangeRateCurrent(); // Use current (potentially accrued) rate
+        require(rate > 0, "MockCToken: Exchange rate cannot be zero");
+        uint256 cTokensToBurn = redeemUnderlyingAmount * EXCHANGE_RATE_SCALE / rate;
 
         // Check if owner has enough cTokens
         require(cTokenBalances[msg.sender] >= cTokensToBurn, "MockCToken: Insufficient cTokens");
@@ -104,7 +107,9 @@ contract MockCToken is
     function redeem(uint256 redeemTokens) external override(CErc20Interface) returns (uint256) {
         // Added override specifier
         // Calculate underlying amount based on tokens and rate
-        uint256 underlyingToRedeem = redeemTokens * currentExchangeRate / EXCHANGE_RATE_SCALE;
+        uint256 rate = this.exchangeRateCurrent(); // Use current (potentially accrued) rate
+        require(rate > 0, "MockCToken: Exchange rate cannot be zero");
+        uint256 underlyingToRedeem = redeemTokens * rate / EXCHANGE_RATE_SCALE;
 
         require(cTokenBalances[msg.sender] >= redeemTokens, "MockCToken: Insufficient cTokens");
         require(
@@ -135,7 +140,13 @@ contract MockCToken is
             return 0;
         }
         // underlying = cTokens * rate / scale
-        return cTokenBalance * currentExchangeRate / EXCHANGE_RATE_SCALE;
+        // For view function, typically use exchangeRateStored to avoid state change if accrueInterest is complex.
+        // However, to be consistent with exchangeRateCurrent() potentially being called by LendingManager,
+        // and our change to use exchangeRateMantissa which is updated by accrueInterest,
+        // we should use exchangeRateMantissa here.
+        // Note: exchangeRateCurrent() is not view, so we use exchangeRateMantissa directly.
+        require(exchangeRateMantissa > 0, "MockCToken: Exchange rate cannot be zero for balanceOfUnderlying");
+        return cTokenBalance * exchangeRateMantissa / EXCHANGE_RATE_SCALE;
     }
 
     function exchangeRateStored() external view override returns (uint256) {

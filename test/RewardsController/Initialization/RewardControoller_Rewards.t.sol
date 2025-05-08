@@ -88,7 +88,12 @@ contract RewardsController_Rewards is RewardsController_Test_Base {
         uint256 startIndex = initialTracking[0].lastUserRewardIndex;
 
         vm.roll(block.number + 100); // Accrue time
-        // REMOVED: mockCToken.accrueInterest(); // Accrue interest - previewRewards does this internally
+        // mockCToken.accrueInterest(); // REMOVED: Accrue interest - The claim call below will handle accrual via _calculateAndUpdateGlobalIndex
+        // Update globalRewardIndex in the controller by making a claim for a different user/collection
+        IRewardsController.BalanceUpdateData[] memory noSimUpdatesForClaim;
+        vm.prank(USER_B);
+        rewardsController.claimRewardsForCollection(address(mockERC721_alt), noSimUpdatesForClaim);
+        vm.prank(address(this)); // Revert prank
 
         address[] memory collections = new address[](1);
         collections[0] = address(mockERC721);
@@ -125,7 +130,12 @@ contract RewardsController_Rewards is RewardsController_Test_Base {
         uint256 block2 = block.number + 50; // Simulate update happening later
         uint256 block3 = block.number + 100; // Preview time
         vm.roll(block3);
-        // REMOVED: mockCToken.accrueInterest(); // previewRewards calls _calculateGlobalIndexAt which accrues interest
+        // mockCToken.accrueInterest(); // REMOVED: Accrue interest - The claim call below will handle accrual
+        // Update globalRewardIndex in the controller
+        IRewardsController.BalanceUpdateData[] memory noSimUpdatesForClaim;
+        vm.prank(USER_B);
+        rewardsController.claimRewardsForCollection(address(mockERC721_alt), noSimUpdatesForClaim);
+        vm.prank(address(this)); // Revert prank
 
         IRewardsController.BalanceUpdateData[] memory simUpdates = new IRewardsController.BalanceUpdateData[](1);
         simUpdates[0] = IRewardsController.BalanceUpdateData({
@@ -163,7 +173,12 @@ contract RewardsController_Rewards is RewardsController_Test_Base {
         uint256 block2 = block.number + 50; // Simulate update happening later
         uint256 block3 = block.number + 100; // Preview time
         vm.roll(block3);
-        // REMOVED: mockCToken.accrueInterest(); // previewRewards calls _calculateGlobalIndexAt which accrues interest
+        // mockCToken.accrueInterest(); // REMOVED: Accrue interest - The claim call below will handle accrual
+        // Update globalRewardIndex in the controller
+        IRewardsController.BalanceUpdateData[] memory noSimUpdatesForClaim;
+        vm.prank(USER_B);
+        rewardsController.claimRewardsForCollection(address(mockERC721_alt), noSimUpdatesForClaim);
+        vm.prank(address(this)); // Revert prank
 
         IRewardsController.BalanceUpdateData[] memory simUpdates = new IRewardsController.BalanceUpdateData[](1);
         simUpdates[0] = IRewardsController.BalanceUpdateData({

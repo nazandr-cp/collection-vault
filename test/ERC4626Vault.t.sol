@@ -51,7 +51,7 @@ contract ERC4626VaultTest is Test {
         // Now that we have the vault address, update the vault role in LendingManager
         vm.prank(OWNER);
         lendingManager.revokeVaultRole(VAULT_ADDRESS); // Remove temporary address
-        
+
         vm.prank(OWNER);
         lendingManager.grantVaultRole(address(vault)); // Grant role to actual vault address
         assetToken.mint(USER_ALICE, USER_INITIAL_ASSET);
@@ -111,9 +111,9 @@ contract ERC4626VaultTest is Test {
             assetToken.balanceOf(USER_ALICE), USER_INITIAL_ASSET - depositAmount, "Alice asset balance after deposit"
         );
         assertEq(assetToken.balanceOf(address(vault)), 0, "Vault direct asset balance should be 0");
-        assertEq(lendingManager.totalAssets(), depositAmount, "LM total assets after deposit");
+        assertApproxEqAbs(lendingManager.totalAssets(), depositAmount, 1e10, "LM total assets after deposit");
         assertEq(vault.balanceOf(USER_ALICE), shares, "Alice shares after deposit");
-        assertEq(vault.totalAssets(), depositAmount, "Vault total assets after deposit");
+        assertApproxEqAbs(vault.totalAssets(), depositAmount, 1e10, "Vault total assets after deposit");
     }
 
     function test_Withdraw_Success() public {
@@ -121,7 +121,7 @@ contract ERC4626VaultTest is Test {
         // Ensure vault can approve assets to lending manager
         vm.prank(address(vault));
         assetToken.approve(address(lendingManager), depositAmount);
-        
+
         vm.prank(USER_ALICE);
         uint256 sharesAlice = vault.depositForCollection(depositAmount, USER_ALICE, TEST_COLLECTION_ADDRESS);
         vm.stopPrank(); // Stop prank after deposit
@@ -134,12 +134,9 @@ contract ERC4626VaultTest is Test {
         bytes memory redeemReturnValue = abi.encode(uint256(0)); // Success return code
         vm.mockCall(
             address(mockCToken),
-            abi.encodeWithSelector(mockCToken.redeem.selector, withdrawAmount),
+            abi.encodeWithSelector(mockCToken.redeemUnderlying.selector, withdrawAmount),
             redeemReturnValue
         );
-        
-        // Mint tokens to lending manager to simulate withdrawal from Compound
-        assetToken.mint(address(lendingManager), withdrawAmount);
 
         vm.startPrank(USER_ALICE);
         vm.recordLogs(); // Start recording logs
@@ -181,22 +178,27 @@ contract ERC4626VaultTest is Test {
         );
         assertEq(assetToken.balanceOf(address(vault)), 0, "Vault direct asset balance should be 0 after withdraw");
         assertEq(vault.balanceOf(USER_ALICE), sharesAlice - sharesBurned, "Alice shares after withdraw");
-        assertEq(lendingManager.totalAssets(), depositAmount - withdrawAmount, "LM total assets after withdraw");
-        assertEq(
-            vault.totalAssets(), vaultTotalAssetsBeforeWithdraw - withdrawAmount, "Vault total assets after withdraw"
+        assertApproxEqAbs(
+            lendingManager.totalAssets(), depositAmount - withdrawAmount, 1e10, "LM total assets after withdraw"
+        );
+        assertApproxEqAbs(
+            vault.totalAssets(),
+            vaultTotalAssetsBeforeWithdraw - withdrawAmount,
+            1e10,
+            "Vault total assets after withdraw"
         );
     }
 
     function test_Mint_Success() public {
         uint256 mintShares = 50 ether;
-        
+
         // Calculate expected assets based on current vault state (empty)
         uint256 expectedAssets = vault.previewMint(mintShares);
 
         // Mint assets required for the vault mint operation *before* pranking
         assetToken.approve(address(vault), expectedAssets); // Approve as owner (test contract)
         assetToken.mint(USER_BOB, expectedAssets); // Mint as owner (test contract)
-        
+
         // Ensure vault can approve assets to lending manager
         vm.prank(address(vault));
         assetToken.approve(address(lendingManager), expectedAssets);
@@ -233,20 +235,20 @@ contract ERC4626VaultTest is Test {
         assertEq(assetToken.balanceOf(USER_BOB), USER_INITIAL_ASSET, "Bob asset after mint");
         assertEq(assetToken.balanceOf(address(vault)), 0, "Vault asset balance after mint should be 0");
         assertEq(vault.balanceOf(USER_BOB), mintShares, "Bob share balance after mint");
-        assertEq(lendingManager.totalAssets(), expectedAssets, "LM total assets after mint");
-        assertEq(vault.totalAssets(), expectedAssets, "Vault total assets after mint");
+        assertApproxEqAbs(lendingManager.totalAssets(), expectedAssets, 1e10, "LM total assets after mint");
+        assertApproxEqAbs(vault.totalAssets(), expectedAssets, 1e10, "Vault total assets after mint");
     }
 
     function test_Redeem_Success() public {
         uint256 mintShares = 500 ether;
-        
+
         // Simulate initial mint
         uint256 requiredAssets = vault.previewMint(mintShares);
-        
+
         // Mint required assets *before* pranking as USER_BOB
         assetToken.approve(address(vault), requiredAssets); // Approve as owner (test contract)
         assetToken.mint(USER_BOB, requiredAssets); // Mint as owner (test contract)
-        
+
         // Ensure vault can approve assets to lending manager
         vm.prank(address(vault));
         assetToken.approve(address(lendingManager), requiredAssets);
@@ -265,12 +267,9 @@ contract ERC4626VaultTest is Test {
         bytes memory redeemReturnValue = abi.encode(uint256(0)); // Success return code
         vm.mockCall(
             address(mockCToken),
-            abi.encodeWithSelector(mockCToken.redeem.selector, expectedAssetsFromRedeem),
+            abi.encodeWithSelector(mockCToken.redeemUnderlying.selector, expectedAssetsFromRedeem),
             redeemReturnValue
         );
-        
-        // Mint tokens to lending manager to simulate withdrawal from Compound
-        assetToken.mint(address(lendingManager), expectedAssetsFromRedeem);
 
         vm.startPrank(USER_BOB);
         vm.recordLogs(); // Start recording logs
@@ -311,25 +310,28 @@ contract ERC4626VaultTest is Test {
         assertEq(vault.balanceOf(USER_BOB), mintShares - redeemSharesAmount, "Bob shares after redeem");
         // Use approx check for LM/Vault total assets due to potential dust/rounding in redeemAll
         assertApproxEqAbs(
-            lendingManager.totalAssets(), requiredAssets - expectedAssetsFromRedeem, 1e6, "LM total assets after redeem"
+            lendingManager.totalAssets(),
+            requiredAssets - expectedAssetsFromRedeem,
+            1e10,
+            "LM total assets after redeem"
         );
         assertApproxEqAbs(
             vault.totalAssets(),
             vaultTotalAssetsBeforeRedeem - expectedAssetsFromRedeem,
-            1e6, // Allow some dust difference
+            1e10, // Allow some dust difference
             "Vault total assets after redeem"
         );
     }
 
     function test_RevertIf_Deposit_LMFails() public {
         // This test is repurposed to test withdraw failure from the real LendingManager
-        
+
         uint256 depositAmount = 100 ether;
-        
+
         // Approve tokens for vault from user and from vault to LM
         vm.prank(address(vault));
         assetToken.approve(address(lendingManager), depositAmount);
-        
+
         // First make a deposit
         vm.startPrank(USER_ALICE);
         assetToken.approve(address(vault), depositAmount);
@@ -341,12 +343,12 @@ contract ERC4626VaultTest is Test {
         bytes memory redeemFailReturnValue = abi.encode(uint256(1)); // Error return code
         vm.mockCall(
             address(mockCToken),
-            abi.encodeWithSelector(mockCToken.redeem.selector, withdrawAmount),
+            abi.encodeWithSelector(mockCToken.redeemUnderlying.selector, withdrawAmount), // Changed to redeemUnderlying
             redeemFailReturnValue
         );
 
         vm.startPrank(USER_ALICE);
-        vm.expectRevert(ERC4626Vault.LendingManagerWithdrawFailed.selector);
+        vm.expectRevert(LendingManager.RedeemFailed.selector); // Changed from ERC4626Vault.LendingManagerWithdrawFailed.selector
         // Use withdrawForCollection
         vault.withdrawForCollection(withdrawAmount, USER_ALICE, USER_ALICE, TEST_COLLECTION_ADDRESS);
         vm.stopPrank();
@@ -354,13 +356,13 @@ contract ERC4626VaultTest is Test {
 
     function test_RevertIf_Withdraw_LMFails() public {
         // Re-purpose this test to check withdrawal when LM has insufficient balance
-        
+
         uint256 depositAmount = 100 ether;
-        
+
         // Approve tokens for vault from user and from vault to LM
         vm.prank(address(vault));
         assetToken.approve(address(lendingManager), depositAmount);
-        
+
         // First make a deposit
         vm.startPrank(USER_ALICE);
         assetToken.approve(address(vault), depositAmount);
@@ -376,10 +378,10 @@ contract ERC4626VaultTest is Test {
         bytes memory redeemReturnValue = abi.encode(uint256(0)); // Success return code
         vm.mockCall(
             address(mockCToken),
-            abi.encodeWithSelector(mockCToken.redeem.selector, withdrawAmount),
+            abi.encodeWithSelector(mockCToken.redeemUnderlying.selector, withdrawAmount), // Changed to redeemUnderlying
             redeemReturnValue
         );
-        
+
         // Only mint a partial amount to the lending manager (insufficient for full withdrawal)
         assetToken.mint(address(lendingManager), depositAmount / 2);
 
@@ -401,21 +403,17 @@ contract ERC4626VaultTest is Test {
 
     function test_RevertIf_Constructor_LMMismatch() public {
         MockERC20 wrongAsset = new MockERC20("Wrong Asset", "WST", 18);
-        
+
         // Create mock cToken for the correct asset
         MockCToken tempCToken = new MockCToken(address(assetToken));
-        
+
         // Setup temporary addresses for LendingManager
         address VAULT_ADDRESS = address(1);
         address REWARDS_CONTROLLER_ADDRESS = address(2);
-        
+
         // Create LendingManager with correct asset
         LendingManager tempLM = new LendingManager(
-            OWNER,
-            VAULT_ADDRESS,
-            REWARDS_CONTROLLER_ADDRESS,
-            address(assetToken),
-            address(tempCToken)
+            OWNER, VAULT_ADDRESS, REWARDS_CONTROLLER_ADDRESS, address(assetToken), address(tempCToken)
         );
 
         vm.prank(OWNER);

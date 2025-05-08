@@ -344,67 +344,6 @@ contract RewardsController is
         emit UserBalanceUpdatesProcessed(user, nonce, uLen);
     }
 
-    /**
-     * @notice Process a single NFT balance update for a user and collection with signature verification
-     */
-    function processNFTBalanceUpdate(
-        address user,
-        address collection,
-        uint256 blockNumber,
-        int256 nftDelta,
-        bytes calldata signature
-    ) external nonReentrant {
-        address signer = authorizedUpdater;
-
-        bytes32 structHash = keccak256(abi.encode(BALANCE_UPDATE_DATA_TYPEHASH, collection, blockNumber, nftDelta, 0));
-
-        bytes32 digest = _hashTypedDataV4(structHash);
-        bytes memory signatureBytes = signature;
-        (address recoveredSigner, ECDSA.RecoverError err,) = ECDSA.tryRecover(digest, signatureBytes);
-
-        if (err != ECDSA.RecoverError.NoError || recoveredSigner != signer) {
-            revert IRewardsController.InvalidSignature();
-        }
-
-        authorizedUpdaterNonce[signer]++;
-        if (!_whitelistedCollections.contains(collection)) {
-            revert IRewardsController.CollectionNotWhitelisted(collection);
-        }
-
-        _processSingleUpdate(user, collection, blockNumber, nftDelta, 0);
-    }
-
-    /**
-     * @notice Process a single deposit balance update for a user and collection with signature verification
-     */
-    function processDepositUpdate(
-        address user,
-        address collection,
-        uint256 blockNumber,
-        int256 depositDelta,
-        bytes calldata signature
-    ) external nonReentrant {
-        address signer = authorizedUpdater;
-
-        bytes32 structHash =
-            keccak256(abi.encode(BALANCE_UPDATE_DATA_TYPEHASH, collection, blockNumber, 0, depositDelta));
-
-        bytes32 digest = _hashTypedDataV4(structHash);
-        bytes memory signatureBytes = signature;
-        (address recoveredSigner, ECDSA.RecoverError err,) = ECDSA.tryRecover(digest, signatureBytes);
-
-        if (err != ECDSA.RecoverError.NoError || recoveredSigner != signer) {
-            revert IRewardsController.InvalidSignature();
-        }
-
-        authorizedUpdaterNonce[signer]++;
-        if (!_whitelistedCollections.contains(collection)) {
-            revert IRewardsController.CollectionNotWhitelisted(collection);
-        }
-
-        _processSingleUpdate(user, collection, blockNumber, 0, depositDelta);
-    }
-
     // --- Hashing Helpers for Batches ---
 
     function _hashBalanceUpdates(BalanceUpdateData[] calldata updates) internal pure returns (bytes32) {
@@ -651,10 +590,7 @@ contract RewardsController is
         address user,
         address[] calldata nftCollections,
         BalanceUpdateData[] calldata simulatedUpdates
-    ) external override returns (uint256 pendingReward) {
-        // Keep external, remove view for now
-
-        // Changed visibility to external override
+    ) external view override returns (uint256 pendingReward) {
         uint256 numNftCollections = nftCollections.length;
         if (numNftCollections == 0) {
             return 0;
@@ -663,6 +599,8 @@ contract RewardsController is
         uint256 numSimulatedUpdates = simulatedUpdates.length;
         for (uint256 _i = 0; _i < numSimulatedUpdates;) {
             BalanceUpdateData memory _update = simulatedUpdates[_i];
+            // Accessing userRewardState directly in a loop can be gas intensive.
+            // However, for a view function, this is acceptable for providing information.
             UserRewardState storage _info = userRewardState[user][_update.collection];
             uint256 _lastProcessed = _info.lastUpdateBlock;
             if (_update.blockNumber < _lastProcessed) {
@@ -674,8 +612,9 @@ contract RewardsController is
         }
         uint256 totalRawPendingReward = 0;
 
-        // Calculate the current index ONCE (includes accrual via _calculateAndUpdateGlobalIndex)
-        uint256 currentIndex = _calculateAndUpdateGlobalIndex();
+        // Use the stored globalRewardIndex as view functions cannot modify state
+        // by calling _calculateAndUpdateGlobalIndex()
+        uint256 currentIndex = globalRewardIndex;
 
         uint256 cLen = nftCollections.length;
         for (uint256 i = 0; i < cLen;) {
@@ -743,7 +682,8 @@ contract RewardsController is
         BitMaps.BitMap storage mask = userActiveMasks[user];
         uint8 localNextBitIndex = nextBitIndex;
 
-        if (localNextBitIndex == 0) { // If no collections are registered globally, or user has no mask bits set up to this point.
+        if (localNextBitIndex == 0) {
+            // If no collections are registered globally, or user has no mask bits set up to this point.
             emit RewardsClaimedForAll(user, 0);
             return;
         }
@@ -763,8 +703,10 @@ contract RewardsController is
                 address collection = bitIndexToCollection[i];
                 // Ensure the collection mapped by bitIndex is still valid (not removed)
                 if (collection == address(0)) {
-                    unchecked { ++i; }
-                    continue; 
+                    unchecked {
+                        ++i;
+                    }
+                    continue;
                 }
 
                 UserRewardState storage info = userRewardState[user][collection];
@@ -783,7 +725,9 @@ contract RewardsController is
                 totalRewardToRequest += totalDueForCollection;
                 actualActiveCollectionCount++; // Increment count of processed active collections
             }
-            unchecked { ++i; }
+            unchecked {
+                ++i;
+            }
         }
 
         // If no collections were found to be active for the user or yielded rewards
@@ -796,12 +740,15 @@ contract RewardsController is
         // as `actualActiveCollectionCount` is the definitive count of processed collections.
 
         if (totalRewardToRequest == 0) {
-            for (uint256 i = 0; i < actualActiveCollectionCount;) { // Use actualActiveCollectionCount
+            for (uint256 i = 0; i < actualActiveCollectionCount;) {
+                // Use actualActiveCollectionCount
                 UserRewardState storage info = userRewardState[user][claims[i].collectionAddress];
                 info.accruedReward = 0;
                 info.lastRewardIndex = claims[i].indexUsed;
                 info.lastUpdateBlock = bn;
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
             emit RewardsClaimedForAll(user, 0);
             return;
@@ -810,10 +757,13 @@ contract RewardsController is
         // Prepare arrays for batch transfer, sized by actualActiveCollectionCount
         address[] memory collectionsToTransfer = new address[](actualActiveCollectionCount);
         uint256[] memory amountsToTransfer = new uint256[](actualActiveCollectionCount);
-        for(uint256 i = 0; i < actualActiveCollectionCount;) { // Use actualActiveCollectionCount
+        for (uint256 i = 0; i < actualActiveCollectionCount;) {
+            // Use actualActiveCollectionCount
             collectionsToTransfer[i] = claims[i].collectionAddress;
             amountsToTransfer[i] = claims[i].individualReward;
-            unchecked { ++i; }
+            unchecked {
+                ++i;
+            }
         }
 
         uint256 totalYieldReceived =
@@ -824,15 +774,19 @@ contract RewardsController is
         }
 
         if (totalYieldReceived == totalRewardToRequest) {
-            for (uint256 i = 0; i < actualActiveCollectionCount;) { // Use actualActiveCollectionCount
+            for (uint256 i = 0; i < actualActiveCollectionCount;) {
+                // Use actualActiveCollectionCount
                 UserRewardState storage info = userRewardState[user][claims[i].collectionAddress];
                 info.accruedReward = 0;
                 info.lastRewardIndex = claims[i].indexUsed;
                 info.lastUpdateBlock = bn;
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
         } else if (totalYieldReceived < totalRewardToRequest && totalRewardToRequest > 0) {
-            for (uint256 i = 0; i < actualActiveCollectionCount;) { // Use actualActiveCollectionCount
+            for (uint256 i = 0; i < actualActiveCollectionCount;) {
+                // Use actualActiveCollectionCount
                 UserRewardState storage info = userRewardState[user][claims[i].collectionAddress];
                 uint256 totalDueForThisCollection = claims[i].individualReward;
 
@@ -840,13 +794,15 @@ contract RewardsController is
                 uint256 deficitForCollection =
                     Math.mulDiv(totalDueForThisCollection, totalShortfall, totalRewardToRequest);
 
-                if (deficitForCollection <= 1) { 
+                if (deficitForCollection <= 1) {
                     deficitForCollection = 0;
                 }
-                info.accruedReward = uint128(deficitForCollection); 
+                info.accruedReward = uint128(deficitForCollection);
                 info.lastRewardIndex = claims[i].indexUsed;
                 info.lastUpdateBlock = bn;
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
         }
         emit RewardsClaimedForAll(user, totalYieldReceived);

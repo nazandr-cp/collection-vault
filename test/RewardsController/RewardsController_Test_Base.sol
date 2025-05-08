@@ -73,6 +73,7 @@ contract RewardsController_Test_Base is Test {
     MockERC20 internal mockERC20; // Generic mock ERC20 for testing transfers etc.
     MockERC721 internal mockERC721; // Mock NFT Collection 1
     MockERC721 internal mockERC721_2; // Mock NFT Collection 2
+    MockERC721 internal mockERC721_alt; // Mock NFT Collection Alt for testing specific scenarios
     MockCToken internal mockCToken; // Mock cToken for yield simulation
     ProxyAdmin public proxyAdmin;
 
@@ -90,6 +91,7 @@ contract RewardsController_Test_Base is Test {
         mockERC20 = new MockERC20("Mock Token", "MOCK", 18);
         mockERC721 = new MockERC721("Mock NFT 1", "MNFT1");
         mockERC721_2 = new MockERC721("Mock NFT 2", "MNFT2");
+        mockERC721_alt = new MockERC721("Mock NFT Alt", "MNFTA");
         mockCToken = new MockCToken(address(rewardToken)); // Mock cToken using DAI as underlying
 
         // *** Set initial exchange rate BEFORE LM/RC initialization ***
@@ -143,6 +145,12 @@ contract RewardsController_Test_Base is Test {
         rewardsController.addNFTCollection(
             address(mockERC721_2), BETA_2, IRewardsController.RewardBasis.DEPOSIT, VALID_REWARD_SHARE_PERCENTAGE
         );
+        rewardsController.addNFTCollection(
+            address(mockERC721_alt),
+            BETA_1,
+            IRewardsController.RewardBasis.DEPOSIT,
+            VALID_REWARD_SHARE_PERCENTAGE // Whitelist alt collection
+        );
 
         vm.stopPrank();
 
@@ -171,6 +179,7 @@ contract RewardsController_Test_Base is Test {
         // Update labels to reflect actual mock addresses being whitelisted
         vm.label(address(mockERC721), "NFT_COLLECTION_1 (Mock)");
         vm.label(address(mockERC721_2), "NFT_COLLECTION_2 (Mock)");
+        vm.label(address(mockERC721_alt), "NFT_COLLECTION_ALT (Mock)");
         vm.label(NFT_COLLECTION_3, "NFT_COLLECTION_3 (Constant, Non-WL)"); // Keep this label distinct if needed
     }
 
@@ -378,78 +387,92 @@ contract RewardsController_Test_Base is Test {
 
     // Helper function to generate yield in the real LendingManager
     function _generateYieldInLendingManager(uint256 targetYield) internal {
-        console.log("Generating yield: %d wei", targetYield);
+        console.log("--- _generateYieldInLendingManager ---");
+        console.log("Target Yield to Generate: %d", targetYield);
 
-        // 1. First we need to make sure we have principal deposited
+        // 1. Ensure principal is deposited
         uint256 currentPrincipal = lendingManager.totalPrincipalDeposited();
+        console.log("Current Principal in LM (before any new deposit): %d", currentPrincipal);
         if (currentPrincipal == 0) {
-            // Get DAI from the whale for principal deposit
-            uint256 principalAmount = 100 ether; // A larger base amount for principal
+            uint256 principalAmount = 100 ether; // Default principal deposit
+            console.log("No principal found, depositing: %d", principalAmount);
             vm.startPrank(DAI_WHALE);
             rewardToken.transfer(address(tokenVault), principalAmount);
             vm.stopPrank();
 
-            // Have the vault deposit to the lending manager
             vm.startPrank(address(tokenVault));
             rewardToken.approve(address(lendingManager), principalAmount);
             lendingManager.depositToLendingProtocol(principalAmount);
             vm.stopPrank();
-
-            currentPrincipal = lendingManager.totalPrincipalDeposited();
-            console.log("Deposited principal: %d wei", currentPrincipal);
+            currentPrincipal = lendingManager.totalPrincipalDeposited(); // Update after deposit
+            console.log("Deposited Principal now: %d", currentPrincipal);
         }
 
-        // 2. Calculate exchange rate to achieve target yield
-        uint256 cTokenBalance = mockCToken.balanceOf(address(lendingManager));
-        if (cTokenBalance > 0) {
-            // Setting a much higher exchange rate to ensure sufficient yield
-            // The target assets should be principal + significantly more than the requested yield
-            uint256 targetAssets = currentPrincipal + targetYield * 10; // Multiply by 10 for safety margin
-            uint256 newExchangeRate = (targetAssets * 1e18) / cTokenBalance;
+        uint256 cTokenBalanceOfLM = mockCToken.balanceOf(address(lendingManager));
+        console.log("cToken Balance of LM: %d", cTokenBalanceOfLM);
+        uint256 exchangeRateToSetInitially;
 
-            console.log("Setting exchange rate to: %d", newExchangeRate);
+        if (cTokenBalanceOfLM == 0) {
+            if (targetYield > 0) {
+                console.log("Warning: LM cToken balance is 0, but targetYield > 0. Cannot use exchange rate for yield.");
+            }
+            exchangeRateToSetInitially = mockCToken.exchangeRateStored(); // Keep current rate
+            console.log("LM cToken balance is 0. Keeping current ER: %d", exchangeRateToSetInitially);
+            // Note: If cTokenBalanceOfLM is 0, LM.totalAssets() won't reflect cToken-based yield.
+            // LM.availableYieldInProtocol() will be 0 unless LM has direct underlying balance (which it shouldn't from this helper).
+        } else {
+            // cTokenBalanceOfLM > 0
+            uint256 finalTargetTotalUnderlying = currentPrincipal + targetYield;
+            console.log("Final Target Total Underlying (Principal + TargetYield): %d", finalTargetTotalUnderlying);
 
-            // Update both exchange rate variables in the mock (they should match)
-            mockCToken.setExchangeRate(newExchangeRate);
+            uint256 finalTargetExchangeRate = (finalTargetTotalUnderlying * 1e18) / cTokenBalanceOfLM;
+            console.log("Calculated Final Target Exchange Rate (ER_final): %d", finalTargetExchangeRate);
 
-            // Directly set the mantissa used by exchangeRateStored
-            vm.store(address(mockCToken), bytes32(uint256(16)), bytes32(newExchangeRate));
+            uint256 increment = mockCToken.accrualIncrement();
+            console.log("MockCToken Accrual Increment: %d", increment);
+
+            if (finalTargetExchangeRate > increment) {
+                exchangeRateToSetInitially = finalTargetExchangeRate - increment;
+            } else {
+                exchangeRateToSetInitially = finalTargetExchangeRate; // Cannot pre-compensate fully.
+                if (finalTargetExchangeRate > 0 && finalTargetExchangeRate <= increment) {
+                    console.log(
+                        "Log: ER_final (%d) <= increment (%d). Setting ER_initial to ER_final.",
+                        finalTargetExchangeRate,
+                        increment
+                    );
+                }
+            }
+            if (exchangeRateToSetInitially == 0 && (currentPrincipal > 0 || targetYield > 0)) {
+                exchangeRateToSetInitially = 1; // Minimum positive rate
+                console.log("ER_initial was calculated as 0, set to 1.");
+            }
+            console.log("Exchange Rate to Set Initially in MockCToken (ER_initial): %d", exchangeRateToSetInitially);
+            mockCToken.setExchangeRate(exchangeRateToSetInitially);
+            console.log(
+                "MockCToken ER after setExchangeRate (should be ER_initial): %d", mockCToken.exchangeRateStored()
+            );
         }
 
-        // 3. Roll blocks to trigger interest accrual
-        vm.roll(block.number + 100);
-
-        // 4. Call accrueInterest to update interest
-        mockCToken.accrueInterest();
-
-        // 5. Make sure we have enough physical tokens for transfers
+        // 3. Fund MockCToken so it can execute transferUnderlyingTo for the targetYield amount.
         vm.startPrank(DAI_WHALE);
-        // Transfer a multiple of the target yield to ensure we have enough
-        rewardToken.transfer(address(lendingManager), targetYield * 5);
+        // Fund generously, enough for MockCToken to cover the targetYield if LM requests it.
+        uint256 fundingForMockCToken = targetYield > 0 ? targetYield * 5 : (100 ether / 2);
+        console.log("Funding MockCToken with underlying: %d", fundingForMockCToken);
+        rewardToken.transfer(address(mockCToken), fundingForMockCToken);
         vm.stopPrank();
 
-        // 6. Verify we have the yield available
-        uint256 totalAssets = lendingManager.totalAssets();
-        uint256 availableYield = totalAssets > currentPrincipal ? totalAssets - currentPrincipal : 0;
-        console.log("Generated yield: %d / %d requested", availableYield, targetYield);
-
-        // 7. If we're still short on yield, directly simulate an expected transferYield amount
-        // This is a bit hackish but necessary for tests to pass with real LendingManager
-        // We'll use vm.mockCall to make transferYield behave as expected
-        if (availableYield < targetYield) {
-            console.log("Using mockCall to ensure expected yield transfer");
-
-            // Mock the transferYield function to return exactly what we expect
-            vm.mockCall(
-                address(lendingManager),
-                abi.encodeWithSelector(lendingManager.transferYield.selector, targetYield, address(0)),
-                abi.encode(targetYield)
-            );
-
-            // Also make sure we have enough tokens for the actual transfer
-            vm.startPrank(DAI_WHALE);
-            rewardToken.transfer(address(lendingManager), targetYield * 2);
-            vm.stopPrank();
-        }
+        // Log LM's perspective of available yield *before* the natural accrual that happens during a claim
+        uint256 lmTotalAssetsBeforeImplicitAccrual = lendingManager.totalAssets(); // Uses ER_initial
+        uint256 lmAvailableYieldBeforeImplicitAccrual = lmTotalAssetsBeforeImplicitAccrual > currentPrincipal
+            ? lmTotalAssetsBeforeImplicitAccrual - currentPrincipal
+            : 0;
+        console.log(
+            "LM availableYield (using ER_initial, BEFORE claim's accrual): %d (Assets: %d, Principal: %d)",
+            lmAvailableYieldBeforeImplicitAccrual,
+            lmTotalAssetsBeforeImplicitAccrual,
+            currentPrincipal
+        );
+        console.log("--- End _generateYieldInLendingManager ---");
     }
 }

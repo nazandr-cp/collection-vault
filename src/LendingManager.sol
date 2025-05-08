@@ -62,8 +62,9 @@ contract LendingManager is ILendingManager, AccessControl {
     /// @notice Precision factor (18 decimals) used in reward calculations.
 
     // Compound V2 Exchange Rate Scale: 1 * 10^(18 + underlyingDecimals - cTokenDecimals)
-    // Assuming underlying=18 decimals, cToken=8 decimals: 1 * 10^(18 + 18 - 8) = 1e28
-    uint256 private constant EXCHANGE_RATE_SCALE = 1e28;
+    // This scale is already incorporated in the exchangeRateStored() value from cToken.
+    // To get underlying, the formula is: (cTokenBalance * exchangeRateStored()) / 1e18
+    uint256 private constant EXCHANGE_RATE_DENOMINATOR = 1e18;
 
     uint256 public totalPrincipalDeposited;
     /// @notice Tracks the net amount of underlying assets deposited by the Vault.
@@ -219,24 +220,12 @@ contract LendingManager is ILendingManager, AccessControl {
      */
     function totalAssets() public view override returns (uint256) {
         uint256 cTokenBalance = CTokenInterface(address(_cToken)).balanceOf(address(this));
-        if (cTokenBalance == 0) {
-            return 0;
+        uint256 currentExchangeRate = CTokenInterface(address(_cToken)).exchangeRateStored();
+        uint256 underlyingBalanceInCToken;
+        if (cTokenBalance > 0 && currentExchangeRate > 0) {
+            underlyingBalanceInCToken = (cTokenBalance * currentExchangeRate) / EXCHANGE_RATE_DENOMINATOR;
         }
-
-        uint256 exchangeRate = CTokenInterface(address(_cToken)).exchangeRateStored();
-        if (exchangeRate == 0) {
-            return 0;
-        }
-
-        // Formula: assets = (cTokenBalance * exchangeRate) / 1e18
-        // Based on observed mainnet cToken behavior, exchangeRateStored() is scaled by 1e18.
-        // The formula is: underlying = cTokens * exchangeRateStored / 1e18
-        uint256 scaleFactor = 1e18;
-
-        // Formula: underlying = cTokens * scaledExchangeRate / scaleFactor
-        uint256 assets = (cTokenBalance * exchangeRate) / scaleFactor;
-
-        return assets;
+        return underlyingBalanceInCToken;
     }
 
     /**
@@ -273,7 +262,7 @@ contract LendingManager is ILendingManager, AccessControl {
 
         uint256 availableBalance = totalAssets();
         uint256 availableYield =
-            (availableBalance > totalPrincipalDeposited) ? availableBalance - totalPrincipalDeposited : 0;
+            availableBalance > totalPrincipalDeposited ? availableBalance - totalPrincipalDeposited : 0;
 
         if (amount > availableYield) {
             amountTransferred = availableYield;
@@ -281,27 +270,24 @@ contract LendingManager is ILendingManager, AccessControl {
             amountTransferred = amount;
         }
 
-        if (amountTransferred == 0) {
-            return 0;
-        }
+        if (amountTransferred == 0) return 0; // No yield to transfer
 
         uint256 exchangeRate = CTokenInterface(address(_cToken)).exchangeRateStored();
-        if (exchangeRate == 0) {
-            return 0;
-        }
+        if (exchangeRate == 0) return 0; // Should not happen if there's yield
         // Formula: cTokens = underlying * 1e18 / exchangeRate
-        uint256 cTokensToRedeem = (amountTransferred * 1e18) / exchangeRate;
+        uint256 cTokensToRedeem = (amountTransferred * EXCHANGE_RATE_DENOMINATOR) / exchangeRate;
 
-        if (cTokensToRedeem == 0) {
+        if (cTokensToRedeem == 0 && amountTransferred > 0) {
+            // This can happen if amountTransferred is very small (dust)
+            // We can't redeem 0 cTokens, so return 0 transferred.
             return 0;
         }
+        if (cTokensToRedeem == 0) return 0;
 
         uint256 balanceBeforeRedeem = _asset.balanceOf(address(this)); // Get balance before
 
         uint256 redeemResult = _cToken.redeem(cTokensToRedeem);
-        if (redeemResult != 0) {
-            revert RedeemFailed();
-        }
+        if (redeemResult != 0) revert RedeemFailed(); // cToken redeem failed
 
         uint256 balanceAfterRedeem = _asset.balanceOf(address(this)); // Get balance after
 
@@ -335,17 +321,14 @@ contract LendingManager is ILendingManager, AccessControl {
     ) external override onlyRewardsController returns (uint256 totalAmountTransferred) {
         if (totalAmount == 0) return 0;
         if (recipient == address(0)) revert AddressZero();
-        // Basic validation for array lengths if they are to be used beyond event data
-        if (collections.length != amounts.length) {
-            revert("Array length mismatch"); // Consider a more specific error
-        }
+        if (collections.length != amounts.length) revert("Array length mismatch"); // Added revert
 
         uint256 accrualResult = CTokenInterface(address(_cToken)).accrueInterest();
         accrualResult; // Silence compiler warning
 
         uint256 availableBalance = totalAssets();
         uint256 availableYield =
-            (availableBalance > totalPrincipalDeposited) ? availableBalance - totalPrincipalDeposited : 0;
+            availableBalance > totalPrincipalDeposited ? availableBalance - totalPrincipalDeposited : 0;
 
         if (totalAmount > availableYield) {
             totalAmountTransferred = availableYield;
@@ -353,36 +336,23 @@ contract LendingManager is ILendingManager, AccessControl {
             totalAmountTransferred = totalAmount;
         }
 
-        if (totalAmountTransferred == 0) {
-            return 0;
-        }
+        if (totalAmountTransferred == 0) return 0; // No yield to transfer
 
         uint256 exchangeRate = CTokenInterface(address(_cToken)).exchangeRateStored();
-        if (exchangeRate == 0) {
-            // Should not happen if there's yield
-            return 0;
-        }
+        if (exchangeRate == 0) return 0; // Should not happen if there's yield
         // Formula: cTokens = underlying * 1e18 / exchangeRate
-        uint256 cTokensToRedeem = (totalAmountTransferred * 1e18) / exchangeRate;
+        uint256 cTokensToRedeem = (totalAmountTransferred * EXCHANGE_RATE_DENOMINATOR) / exchangeRate;
 
         if (cTokensToRedeem == 0 && totalAmountTransferred > 0) {
-            // This case implies a very small amount of underlying that results in zero cTokens due to precision.
-            // Depending on desired behavior, could attempt to redeem 1 cToken if available,
-            // or simply return 0 if the amount is too small to be represented by cTokens.
-            // For now, if it calculates to 0 cTokens, we transfer 0.
+            // This can happen if totalAmountTransferred is very small (dust)
             return 0;
         }
-        if (cTokensToRedeem == 0) {
-            // If totalAmountTransferred was also 0, this is fine.
-            return 0;
-        }
+        if (cTokensToRedeem == 0) return 0;
 
         uint256 balanceBeforeRedeem = _asset.balanceOf(address(this));
 
         uint256 redeemResult = _cToken.redeem(cTokensToRedeem);
-        if (redeemResult != 0) {
-            revert RedeemFailed();
-        }
+        if (redeemResult != 0) revert RedeemFailed(); // cToken redeem failed
 
         uint256 balanceAfterRedeem = _asset.balanceOf(address(this));
         uint256 actualAmountReceived = balanceAfterRedeem - balanceBeforeRedeem;
@@ -520,15 +490,4 @@ contract LendingManager is ILendingManager, AccessControl {
         emit WithdrawFromProtocol(recipient, amountRedeemed);
         return amountRedeemed;
     }
-
-    // --- View Functions ---
-    // Note: The public state variable `totalPrincipalDeposited` automatically provides a getter function.
-    // The explicit function below was removed to resolve the compiler error (Identifier already declared).
-    // /**
-    //  * @notice Returns the total principal amount deposited by the Vault into the lending protocol.
-    //  * @return The total principal deposited in the underlying asset's units.
-    //  */
-    // function totalPrincipalDeposited() external view override returns (uint256) {
-    //     return totalPrincipalDeposited;
-    // }
 }

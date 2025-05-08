@@ -14,10 +14,25 @@ contract ERC4626Vault is ERC4626, AccessControl {
     using Math for uint256;
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
-    ILendingManager public immutable lendingManager;
+    ILendingManager public lendingManager;
     mapping(address => uint256) public collectionTotalAssetsDeposited;
-    event CollectionDeposit(address indexed collectionAddress, address indexed caller, address indexed receiver, uint256 assets, uint256 shares);
-    event CollectionWithdraw(address indexed collectionAddress, address caller, address indexed receiver, address indexed owner, uint256 assets, uint256 shares);
+
+    event CollectionDeposit(
+        address indexed collectionAddress,
+        address indexed caller,
+        address indexed receiver,
+        uint256 assets,
+        uint256 shares
+    );
+    event CollectionWithdraw(
+        address indexed collectionAddress,
+        address caller,
+        address indexed receiver,
+        address indexed owner,
+        uint256 assets,
+        uint256 shares
+    );
+
     error LendingManagerDepositFailed();
     error LendingManagerWithdrawFailed();
     error LendingManagerMismatch();
@@ -43,6 +58,13 @@ contract ERC4626Vault is ERC4626, AccessControl {
         IERC20(asset()).approve(_lendingManagerAddress, type(uint256).max);
     }
 
+    function setLendingManager(address _lendingManagerAddress) external onlyRole(ADMIN_ROLE) {
+        if (_lendingManagerAddress == address(0)) revert AddressZero();
+        lendingManager = ILendingManager(_lendingManagerAddress);
+        if (address(lendingManager.asset()) != address(asset())) revert LendingManagerMismatch();
+        IERC20(asset()).approve(_lendingManagerAddress, type(uint256).max);
+    }
+
     function totalAssets() public view override returns (uint256) {
         return super.totalAssets() + lendingManager.totalAssets();
     }
@@ -51,7 +73,11 @@ contract ERC4626Vault is ERC4626, AccessControl {
         revert FunctionDisabled();
     }
 
-    function depositForCollection(uint256 assets, address receiver, address collectionAddress) public virtual returns (uint256 shares) {
+    function depositForCollection(uint256 assets, address receiver, address collectionAddress)
+        public
+        virtual
+        returns (uint256 shares)
+    {
         shares = previewDeposit(assets);
         _deposit(msg.sender, receiver, assets, shares);
         _hookDeposit(assets);
@@ -63,7 +89,11 @@ contract ERC4626Vault is ERC4626, AccessControl {
         revert FunctionDisabled();
     }
 
-    function mintForCollection(uint256 shares, address receiver, address collectionAddress) public virtual returns (uint256 assets) {
+    function mintForCollection(uint256 shares, address receiver, address collectionAddress)
+        public
+        virtual
+        returns (uint256 assets)
+    {
         assets = previewMint(shares);
         _deposit(msg.sender, receiver, assets, shares);
         _hookDeposit(assets);
@@ -75,9 +105,15 @@ contract ERC4626Vault is ERC4626, AccessControl {
         revert FunctionDisabled();
     }
 
-    function withdrawForCollection(uint256 assets, address receiver, address owner, address collectionAddress) public virtual returns (uint256 shares) {
+    function withdrawForCollection(uint256 assets, address receiver, address owner, address collectionAddress)
+        public
+        virtual
+        returns (uint256 shares)
+    {
         uint256 collectionBalance = collectionTotalAssetsDeposited[collectionAddress];
-        if (assets > collectionBalance) revert CollectionInsufficientBalance(collectionAddress, assets, collectionBalance);
+        if (assets > collectionBalance) {
+            revert CollectionInsufficientBalance(collectionAddress, assets, collectionBalance);
+        }
         shares = previewWithdraw(assets);
         _hookWithdraw(assets);
         _withdraw(msg.sender, receiver, owner, assets, shares);
@@ -89,7 +125,11 @@ contract ERC4626Vault is ERC4626, AccessControl {
         revert FunctionDisabled();
     }
 
-    function redeemForCollection(uint256 shares, address receiver, address owner, address collectionAddress) public virtual returns (uint256 assets) {
+    function redeemForCollection(uint256 shares, address receiver, address owner, address collectionAddress)
+        public
+        virtual
+        returns (uint256 assets)
+    {
         uint256 _totalSupply = totalSupply();
         assets = previewRedeem(shares);
         if (assets == 0) require(shares == 0, "ERC4626: redeem rounds down to zero assets");

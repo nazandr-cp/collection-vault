@@ -112,29 +112,40 @@ contract RewardsController_View is RewardsController_Test_Base {
 
     function test_GetWhitelistedCollections() public {
         address[] memory whitelisted = rewardsController.getWhitelistedCollections();
-        assertEq(whitelisted.length, 2); // Initially added 2
+        assertEq(whitelisted.length, 3); // Initially added 3 (mockERC721, mockERC721_2, mockERC721_alt)
         // Order might not be guaranteed
-        assertTrue(whitelisted[0] == address(mockERC721) || whitelisted[1] == address(mockERC721)); // Use mock address
-        assertTrue(whitelisted[0] == address(mockERC721_2) || whitelisted[1] == address(mockERC721_2)); // Use mock address
+        bool initialFoundC1 = false;
+        bool initialFoundC2 = false;
+        bool initialFoundCAlt = false;
+        for (uint256 i = 0; i < whitelisted.length; i++) {
+            if (whitelisted[i] == address(mockERC721)) initialFoundC1 = true;
+            if (whitelisted[i] == address(mockERC721_2)) initialFoundC2 = true;
+            if (whitelisted[i] == address(mockERC721_alt)) initialFoundCAlt = true;
+        }
+        assertTrue(initialFoundC1, "Initial Collection 1 not found");
+        assertTrue(initialFoundC2, "Initial Collection 2 not found");
+        assertTrue(initialFoundCAlt, "Initial Collection Alt not found");
 
-        // Add another
+        // Add another (NFT_COLLECTION_3)
         vm.startPrank(OWNER);
         rewardsController.addNFTCollection(
             NFT_COLLECTION_3, BETA_1, IRewardsController.RewardBasis.BORROW, VALID_REWARD_SHARE_PERCENTAGE
         );
         vm.stopPrank();
         whitelisted = rewardsController.getWhitelistedCollections();
-        assertEq(whitelisted.length, 3);
-        // Check for all three now
-        bool found1 = false;
-        bool found2 = false;
-        bool found3 = false;
+        assertEq(whitelisted.length, 4); // Now expect 4
+        // Check for all four now
+        bool foundC1 = false;
+        bool foundC2 = false;
+        bool foundCAlt = false;
+        bool foundC3 = false;
         for (uint256 i = 0; i < whitelisted.length; i++) {
-            if (whitelisted[i] == address(mockERC721)) found1 = true;
-            if (whitelisted[i] == address(mockERC721_2)) found2 = true;
-            if (whitelisted[i] == NFT_COLLECTION_3) found3 = true;
+            if (whitelisted[i] == address(mockERC721)) foundC1 = true;
+            if (whitelisted[i] == address(mockERC721_2)) foundC2 = true;
+            if (whitelisted[i] == address(mockERC721_alt)) foundCAlt = true;
+            if (whitelisted[i] == NFT_COLLECTION_3) foundC3 = true;
         }
-        assertTrue(found1 && found2 && found3, "Did not find all whitelisted collections");
+        assertTrue(foundC1 && foundC2 && foundCAlt && foundC3, "Did not find all whitelisted collections");
     }
 
     function test_UserNFTData() public {

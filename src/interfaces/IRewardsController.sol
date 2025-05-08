@@ -107,20 +107,6 @@ interface IRewardsController {
         BalanceUpdateData[] calldata updates,
         bytes calldata signature
     ) external;
-    function processNFTBalanceUpdate(
-        address user,
-        address collection,
-        uint256 blockNumber,
-        int256 nftDelta,
-        bytes calldata signature
-    ) external;
-    function processDepositUpdate(
-        address user,
-        address collection,
-        uint256 blockNumber,
-        int256 depositDelta,
-        bytes calldata signature
-    ) external;
 
     // View Functions
     function calculateBoost(uint256 nftBalance, uint256 beta) external pure returns (uint256 boostFactor);
