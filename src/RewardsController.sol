@@ -76,9 +76,9 @@ contract RewardsController is
     mapping(address => CollectionConfig) public collectionConfigs;
 
     // Bitmap-based active collection tracking
-    mapping(address => uint8) public collectionBitIndices;
+    mapping(address => uint256) public collectionBitIndices;
     address[256] public bitIndexToCollection;
-    uint8 public nextBitIndex;
+    uint256 public nextBitIndex;
 
     // User Reward Tracking
     mapping(address => mapping(address => UserRewardState)) internal userRewardState;
@@ -104,7 +104,7 @@ contract RewardsController is
     error SimulationNFTUpdateUnderflow(uint256 currentValue, uint256 deltaMagnitude);
     error RewardsControllerInvalidInitialOwner(address owner);
     error InvalidBetaValue(uint256 beta);
-    error MaxCollectionsReached(uint8 currentMaxIndex, uint8 limit);
+    error MaxCollectionsReached(uint256 currentMaxIndex, uint8 limit);
 
     modifier onlyWhitelistedCollection(address collection) {
         if (!_whitelistedCollections.contains(collection)) {
@@ -194,7 +194,7 @@ contract RewardsController is
         delete collectionRewardBasis[collection];
         delete collectionConfigs[collection];
 
-        uint8 bitIndex = collectionBitIndices[collection];
+        uint256 bitIndex = collectionBitIndices[collection]; // Changed from uint8 to uint256
         if (bitIndex < nextBitIndex && bitIndexToCollection[bitIndex] == collection) {
             bitIndexToCollection[bitIndex] = address(0);
         }
@@ -401,7 +401,7 @@ contract RewardsController is
             user, collection, updateBlock, nftDelta, info.lastNFTBalance, balanceDelta, info.lastBalance
         );
 
-        uint8 bitIndex = collectionBitIndices[collection];
+        uint256 bitIndex = collectionBitIndices[collection];
         if (info.lastNFTBalance > 0 || info.lastBalance > 0) {
             userActiveMasks[user].set(bitIndex);
         } else {
@@ -556,7 +556,8 @@ contract RewardsController is
     function getUserNFTCollections(address user) external view override returns (address[] memory) {
         BitMaps.BitMap storage mask = userActiveMasks[user];
         uint256 setBitsCount = 0;
-        for (uint8 i = 0; i < nextBitIndex; ++i) {
+        for (uint256 i = 0; i < nextBitIndex; ++i) {
+            // Changed i from uint8 to uint256
             if (mask.get(i)) {
                 if (bitIndexToCollection[i] != address(0)) {
                     setBitsCount++;
@@ -570,7 +571,8 @@ contract RewardsController is
 
         address[] memory activeCollections = new address[](setBitsCount);
         uint256 counter = 0;
-        for (uint8 i = 0; i < nextBitIndex; ++i) {
+        for (uint256 i = 0; i < nextBitIndex; ++i) {
+            // Changed i from uint8 to uint256
             if (mask.get(i)) {
                 address collection = bitIndexToCollection[i];
                 if (collection != address(0)) {
@@ -680,7 +682,7 @@ contract RewardsController is
     function claimRewardsForAll(BalanceUpdateData[] calldata simulatedUpdates) external override nonReentrant {
         address user = msg.sender;
         BitMaps.BitMap storage mask = userActiveMasks[user];
-        uint8 localNextBitIndex = nextBitIndex;
+        uint256 localNextBitIndex = nextBitIndex; // Changed from uint8 to uint256
 
         if (localNextBitIndex == 0) {
             // If no collections are registered globally, or user has no mask bits set up to this point.
@@ -698,11 +700,14 @@ contract RewardsController is
         uint256 currentIndex = _calculateAndUpdateGlobalIndex();
 
         // Single pass to find active collections, calculate rewards, and populate claims
-        for (uint8 i = 0; i < localNextBitIndex;) {
+        for (uint256 i = 0; i < localNextBitIndex;) {
             if (mask.get(i)) {
                 address collection = bitIndexToCollection[i];
                 // Ensure the collection mapped by bitIndex is still valid (not removed)
                 if (collection == address(0)) {
+                    // Collection was removed. If the user's mask has this bit set, it's stale.
+                    // Clear it to save gas on future calls for this user.
+                    mask.unset(i);
                     unchecked {
                         ++i;
                     }
