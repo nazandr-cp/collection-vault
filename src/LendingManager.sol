@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
@@ -13,7 +14,7 @@ import {CErc20Interface, CTokenInterface} from "compound-protocol-2.8.1/contract
  * @title LendingManager (Compound V2 Fork Adapter)
  * @notice Manages deposits and withdrawals to a specific Compound V2 fork cToken market.
  */
-contract LendingManager is ILendingManager, AccessControl {
+contract LendingManager is ILendingManager, AccessControl, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     bytes32 public constant VAULT_ROLE = keccak256("VAULT_ROLE");
@@ -111,7 +112,7 @@ contract LendingManager is ILendingManager, AccessControl {
         _;
     }
 
-    function depositToLendingProtocol(uint256 amount) external override onlyVault returns (bool success) {
+    function depositToLendingProtocol(uint256 amount) external override onlyVault nonReentrant returns (bool success) {
         if (amount == 0) {
             return true;
         }
@@ -129,7 +130,13 @@ contract LendingManager is ILendingManager, AccessControl {
         return true;
     }
 
-    function withdrawFromLendingProtocol(uint256 amount) external override onlyVault returns (bool success) {
+    function withdrawFromLendingProtocol(uint256 amount)
+        external
+        override
+        onlyVault
+        nonReentrant
+        returns (bool success)
+    {
         if (amount == 0) return true;
 
         uint256 accrualResult = CTokenInterface(address(_cToken)).accrueInterest();
@@ -179,6 +186,7 @@ contract LendingManager is ILendingManager, AccessControl {
         external
         override
         onlyRewardsController
+        nonReentrant
         returns (uint256 amountTransferred)
     {
         if (amount == 0) return 0;
@@ -237,7 +245,7 @@ contract LendingManager is ILendingManager, AccessControl {
         uint256[] calldata amounts,
         uint256 totalAmount,
         address recipient
-    ) external override onlyRewardsController returns (uint256 totalAmountTransferredOutput) {
+    ) external override onlyRewardsController nonReentrant returns (uint256 totalAmountTransferredOutput) {
         if (totalAmount == 0) return 0;
         if (recipient == address(0)) revert AddressZero();
         if (collections.length != amounts.length) revert("Array length mismatch");
@@ -291,49 +299,55 @@ contract LendingManager is ILendingManager, AccessControl {
         return actualAmountReceived;
     }
 
-    function grantRewardsControllerRole(address newController) external onlyRole(ADMIN_ROLE) {
+    function grantRewardsControllerRole(address newController) external onlyRole(ADMIN_ROLE) nonReentrant {
         if (newController == address(0)) revert AddressZero();
         _grantRole(REWARDS_CONTROLLER_ROLE, newController);
     }
 
-    function revokeRewardsControllerRole(address controller) external onlyRole(ADMIN_ROLE) {
+    function revokeRewardsControllerRole(address controller) external onlyRole(ADMIN_ROLE) nonReentrant {
         if (controller == address(0)) revert AddressZero();
         _revokeRole(REWARDS_CONTROLLER_ROLE, controller);
     }
 
     // --- Administrative Functions for Role Management ---
 
-    function grantVaultRole(address newVault) external onlyRole(ADMIN_ROLE) {
+    function grantVaultRole(address newVault) external onlyRole(ADMIN_ROLE) nonReentrant {
         if (newVault == address(0)) revert AddressZero();
         _grantRole(VAULT_ROLE, newVault);
     }
 
-    function revokeVaultRole(address vault) external onlyRole(ADMIN_ROLE) {
+    function revokeVaultRole(address vault) external onlyRole(ADMIN_ROLE) nonReentrant {
         if (vault == address(0)) revert AddressZero();
         _revokeRole(VAULT_ROLE, vault);
     }
 
-    function grantAdminRole(address newAdmin) external onlyRole(ADMIN_ROLE) {
+    function grantAdminRole(address newAdmin) external onlyRole(ADMIN_ROLE) nonReentrant {
         if (newAdmin == address(0)) revert AddressZero();
         _grantRole(ADMIN_ROLE, newAdmin);
     }
 
-    function revokeAdminRole(address admin) external onlyRole(ADMIN_ROLE) {
+    function revokeAdminRole(address admin) external onlyRole(ADMIN_ROLE) nonReentrant {
         if (admin == address(0)) revert AddressZero();
         _revokeRole(ADMIN_ROLE, admin);
     }
 
-    function grantAdminRoleAsDefaultAdmin(address newAdmin) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function grantAdminRoleAsDefaultAdmin(address newAdmin) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
         if (newAdmin == address(0)) revert AddressZero();
         _grantRole(ADMIN_ROLE, newAdmin);
     }
 
-    function revokeAdminRoleAsDefaultAdmin(address admin) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function revokeAdminRoleAsDefaultAdmin(address admin) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
         if (admin == address(0)) revert AddressZero();
         _revokeRole(ADMIN_ROLE, admin);
     }
 
-    function redeemAllCTokens(address recipient) external override onlyVault returns (uint256 amountRedeemed) {
+    function redeemAllCTokens(address recipient)
+        external
+        override
+        onlyVault
+        nonReentrant
+        returns (uint256 amountRedeemed)
+    {
         if (recipient == address(0)) revert AddressZero();
 
         uint256 cTokenBalance = CTokenInterface(address(_cToken)).balanceOf(address(this));

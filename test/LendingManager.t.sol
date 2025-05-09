@@ -9,6 +9,144 @@ import {MockCToken} from "../src/mocks/MockCToken.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {CTokenInterface, CErc20Interface} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol"; // Already in LendingManager, but good for attacker context
+import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+
+interface ILendingManager {
+    function depositToLendingProtocol(uint256 amount) external returns (bool success);
+    function withdrawFromLendingProtocol(uint256 amount) external returns (bool success);
+    function transferYield(uint256 amount, address recipient) external returns (uint256 amountTransferred);
+    function transferYieldBatch(
+        address[] calldata collections,
+        uint256[] calldata amounts,
+        uint256 totalAmount,
+        address recipient
+    ) external returns (uint256 totalAmountTransferredOutput);
+    function redeemAllCTokens(address recipient) external returns (uint256 amountRedeemed);
+    function asset() external view returns (IERC20);
+    function grantVaultRole(address newVault) external;
+    function grantRewardsControllerRole(address newController) external;
+}
+
+contract ReentrancyAttacker is
+    ReentrancyGuard // Inherit to use nonReentrant locally if needed for complex attacks
+{
+    ILendingManager public lendingManager;
+    IERC20 public assetToken;
+    address public targetFuncSelector; // To control which function the attacker calls back
+    bool public callHappened = false;
+    uint256 public attackAmount;
+
+    enum AttackMode {
+        Deposit,
+        Withdraw,
+        TransferYield,
+        TransferYieldBatch,
+        RedeemAll
+    }
+
+    AttackMode public currentAttackMode;
+
+    constructor(address _lendingManager, address _assetToken) {
+        lendingManager = ILendingManager(_lendingManager);
+        assetToken = IERC20(_assetToken);
+    }
+
+    function setAttackMode(AttackMode mode, uint256 amount) public {
+        currentAttackMode = mode;
+        attackAmount = amount;
+    }
+
+    // This function will be called by the test to initiate the attack
+    function attackDeposit(uint256 amount) external {
+        assetToken.approve(address(lendingManager), amount);
+        lendingManager.depositToLendingProtocol(amount);
+    }
+
+    function attackWithdraw(uint256 amount) external {
+        lendingManager.withdrawFromLendingProtocol(amount);
+    }
+
+    function attackTransferYield(uint256 amount, address recipient) external {
+        lendingManager.transferYield(amount, recipient);
+    }
+
+    function attackTransferYieldBatch(
+        address[] calldata collections,
+        uint256[] calldata amounts,
+        uint256 totalAmount,
+        address recipient
+    ) external {
+        lendingManager.transferYieldBatch(collections, amounts, totalAmount, recipient);
+    }
+
+    function attackRedeemAll(address recipient) external {
+        lendingManager.redeemAllCTokens(recipient);
+    }
+
+    // Fallback to attempt reentrancy when LendingManager sends ETH (not applicable here as it sends ERC20)
+    // receive() external payable {
+    //     if (address(lendingManager) != address(0)) {
+    //         // Generic re-entry attempt, specific re-entry logic might be needed per function
+    //         // For ERC20 transfers, reentrancy happens if the token contract allows callbacks (e.g. ERC777)
+    //         // or if the vulnerable contract makes an external call *before* updating state.
+    //         // Here, nonReentrant should prevent it regardless.
+    //         callHappened = true;
+    //         if (currentAttackMode == AttackMode.Deposit) {
+    //             // This specific re-entry won't work directly from `receive` for depositToLendingProtocol
+    //             // as it's an ERC20 transfer. Re-entrancy would be via a malicious token or an external call within LM.
+    //             // The nonReentrant modifier protects against re-entry during the function's execution.
+    //         }
+    //     }
+    // }
+
+    // For ERC20 based reentrancy, the attack vector is usually through a malicious token
+    // or an external call made by the victim contract during the token transfer.
+    // Since we are testing `nonReentrant` on `LendingManager` itself,
+    // the attacker's `onERC20Received` (if it were an ERC777 or similar) or a direct call back
+    // during an intermediate external call by `LendingManager` would be the vector.
+    // The `nonReentrant` modifier should prevent any such re-entry.
+
+    // Let's simulate a direct re-entrant call if LendingManager made an external call
+    // to this contract (e.g., if this attacker contract was also the cToken or asset token - which it isn't here).
+    // The key is that `nonReentrant` on LM's functions should stop any re-entry.
+
+    // This function will be called if LendingManager calls out to this contract
+    // (e.g. if this attacker was a malicious cToken or asset token - which it is not in this setup)
+    // For testing `nonReentrant` directly, we assume the attacker somehow gets execution control
+    // during one of the LM's guarded functions.
+    function attemptReentrantCall() internal {
+        callHappened = true; // Mark that this function was reached
+        if (currentAttackMode == AttackMode.Deposit) {
+            // Attempt to call depositToLendingProtocol again
+            // This will fail due to nonReentrant if called from within an active depositToLendingProtocol call
+            lendingManager.depositToLendingProtocol(attackAmount);
+        } else if (currentAttackMode == AttackMode.Withdraw) {
+            lendingManager.withdrawFromLendingProtocol(attackAmount);
+        } else if (currentAttackMode == AttackMode.TransferYield) {
+            // For transferYield, the recipient is external. If attacker is recipient:
+            lendingManager.transferYield(attackAmount, address(this));
+        } else if (currentAttackMode == AttackMode.TransferYieldBatch) {
+            address[] memory collections = new address[](0);
+            uint256[] memory amounts = new uint256[](0);
+            lendingManager.transferYieldBatch(collections, amounts, attackAmount, address(this));
+        } else if (currentAttackMode == AttackMode.RedeemAll) {
+            lendingManager.redeemAllCTokens(address(this));
+        }
+    }
+
+    // This is a more realistic hook for ERC20 transfers if the token itself was malicious
+    // and called back. We'll use a direct call for testing `nonReentrant` simplicity.
+    // function onTokenTransfer(address, uint256, bytes calldata) external returns (bool) {
+    //     attemptReentrantCall();
+    //     return true;
+    // }
+
+    // If LendingManager calls some arbitrary function on this contract during its execution
+    function externalCallHook() public {
+        attemptReentrantCall();
+    }
+}
 
 contract LendingManagerTest is Test {
     // --- Constants & Config ---
@@ -352,4 +490,140 @@ contract LendingManagerTest is Test {
 
     // Removed obsolete test: test_RevertIf_SetRewardsController_NotOwner
     // Removed obsolete test: test_RevertIf_SetRewardsController_ZeroAddress
+
+    // --- Reentrancy Tests ---
+
+    ReentrancyAttacker attacker;
+    address attackerAddress;
+
+    modifier setUpReentrancyTest(ReentrancyAttacker.AttackMode mode, uint256 amount) {
+        attacker = new ReentrancyAttacker(address(lendingManager), address(assetToken));
+        attackerAddress = address(attacker);
+        attacker.setAttackMode(mode, amount);
+
+        // Grant necessary roles to the attacker contract
+        vm.prank(OWNER); // Assuming OWNER is DEFAULT_ADMIN_ROLE for LendingManager
+        lendingManager.grantVaultRole(attackerAddress);
+        vm.prank(OWNER);
+        lendingManager.grantRewardsControllerRole(attackerAddress);
+
+        // Fund attacker for relevant operations
+        deal(address(assetToken), attackerAddress, 1_000_000 ether); // Give attacker some asset tokens
+        vm.prank(attackerAddress);
+        assetToken.approve(address(lendingManager), type(uint256).max); // Attacker approves LM
+
+        // For withdraw/redeem tests, attacker needs to have deposited first (or LM has funds)
+        // For simplicity in testing reentrancy guard itself, we can assume LM has some funds.
+        // Let's ensure LM has some cTokens by having the VAULT deposit.
+        uint256 initialDepositForLM = 100_000 ether;
+        vm.startPrank(VAULT_ADDRESS);
+        assetToken.approve(address(lendingManager), initialDepositForLM);
+        lendingManager.depositToLendingProtocol(initialDepositForLM);
+        vm.stopPrank();
+
+        // For transferYield, ensure there's yield
+        vm.warp(block.timestamp + 1 days);
+        cToken.accrueInterest();
+
+        // Set up the cToken mock to call back to the attacker's externalCallHook
+        // This simulates the point where re-entrancy might occur if LM made an external call
+        // during its guarded function. The `nonReentrant` modifier should prevent this.
+        cToken.setReentrancyTarget(attackerAddress); // MockCToken needs this function
+        _;
+    }
+
+    function test_Reentrancy_DepositToLendingProtocol()
+        public
+        setUpReentrancyTest(ReentrancyAttacker.AttackMode.Deposit, 1 ether)
+    {
+        vm.startPrank(attackerAddress);
+        // The attacker's depositToLendingProtocol will call the real LM's deposit.
+        // If LM calls cToken.mint(), and cToken (mocked) calls back to attacker.externalCallHook(),
+        // attacker.externalCallHook() will try to call LM.depositToLendingProtocol() again.
+        vm.expectRevert(abi.encodeWithSignature("ReentrancyGuardRevert()"));
+        attacker.attackDeposit(1 ether);
+        vm.stopPrank();
+    }
+
+    function test_Reentrancy_WithdrawFromLendingProtocol()
+        public
+        setUpReentrancyTest(ReentrancyAttacker.AttackMode.Withdraw, 1 ether)
+    {
+        // Ensure there are funds to withdraw by attacker (attacker is also the vault for this test)
+        // Attacker (as vault) deposits first
+        vm.startPrank(attackerAddress);
+        assetToken.approve(address(lendingManager), 10 ether);
+        lendingManager.depositToLendingProtocol(10 ether);
+        vm.stopPrank();
+
+        vm.startPrank(attackerAddress);
+        // cToken.redeemUnderlying() will be called by LM.
+        // Mock cToken calls back to attacker.externalCallHook().
+        // attacker.externalCallHook() tries to call LM.withdrawFromLendingProtocol() again.
+        vm.expectRevert(abi.encodeWithSignature("ReentrancyGuardRevert()"));
+        attacker.attackWithdraw(1 ether);
+        vm.stopPrank();
+    }
+
+    function test_Reentrancy_TransferYield()
+        public
+        setUpReentrancyTest(ReentrancyAttacker.AttackMode.TransferYield, 1 ether)
+    {
+        // Ensure there's yield to transfer. setUpReentrancyTest already advances time.
+        uint256 currentTotalAssets = lendingManager.totalAssets();
+        uint256 yieldGenerated = currentTotalAssets > lendingManager.totalPrincipalDeposited()
+            ? currentTotalAssets - lendingManager.totalPrincipalDeposited()
+            : 0;
+        assertTrue(yieldGenerated > 0.1 ether, "Not enough yield generated for test");
+
+        vm.startPrank(attackerAddress); // Attacker is also RewardsController for this test
+        // LM.transferYield calls cToken.redeem() -> cToken (mock) calls back to attacker.externalCallHook()
+        // -> attacker tries to call LM.transferYield() again.
+        vm.expectRevert(abi.encodeWithSignature("ReentrancyGuardRevert()"));
+        attacker.attackTransferYield(yieldGenerated > 1 ether ? 1 ether : yieldGenerated, attackerAddress); // Attacker is recipient
+        vm.stopPrank();
+    }
+
+    function test_Reentrancy_TransferYieldBatch()
+        public
+        setUpReentrancyTest(ReentrancyAttacker.AttackMode.TransferYieldBatch, 1 ether)
+    {
+        uint256 currentTotalAssets = lendingManager.totalAssets();
+        uint256 yieldGenerated = currentTotalAssets > lendingManager.totalPrincipalDeposited()
+            ? currentTotalAssets - lendingManager.totalPrincipalDeposited()
+            : 0;
+        assertTrue(yieldGenerated > 0.1 ether, "Not enough yield generated for batch test");
+
+        address[] memory collections = new address[](1);
+        collections[0] = MOCK_NFT_COLLECTION;
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = yieldGenerated > 1 ether ? 1 ether : yieldGenerated;
+
+        vm.startPrank(attackerAddress); // Attacker is also RewardsController
+        vm.expectRevert(abi.encodeWithSignature("ReentrancyGuardRevert()"));
+        attacker.attackTransferYieldBatch(collections, amounts, amounts[0], attackerAddress);
+        vm.stopPrank();
+    }
+
+    function test_Reentrancy_RedeemAllCTokens()
+        public
+        setUpReentrancyTest(ReentrancyAttacker.AttackMode.RedeemAll, 0) // Amount not used by mode directly
+    {
+        // Ensure LM has cTokens from the attacker's (as vault) deposit
+        vm.startPrank(attackerAddress);
+        assetToken.approve(address(lendingManager), 10 ether);
+        lendingManager.depositToLendingProtocol(10 ether); // Attacker (as vault) deposits
+        vm.stopPrank();
+
+        // Check cToken balance of LM to ensure redeemAll makes sense
+        uint256 lmCTokenBalance = CTokenInterface(address(cToken)).balanceOf(address(lendingManager));
+        assertTrue(lmCTokenBalance > 0, "LM should have cTokens to redeem all");
+
+        vm.startPrank(attackerAddress); // Attacker is also Vault
+        // LM.redeemAllCTokens calls cToken.redeem() -> cToken (mock) calls back to attacker.externalCallHook()
+        // -> attacker tries to call LM.redeemAllCTokens() again.
+        vm.expectRevert(abi.encodeWithSignature("ReentrancyGuardRevert()"));
+        attacker.attackRedeemAll(attackerAddress); // Attacker is recipient
+        vm.stopPrank();
+    }
 }

@@ -40,7 +40,7 @@ interface IRewardsController {
     }
 
     // Events
-    event AuthorizedUpdaterChanged(address oldUpdater, address newUpdater);
+    event AuthorizedUpdaterChanged(address indexed oldUpdater, address indexed newUpdater, address indexed admin);
     event NFTCollectionAdded(
         address indexed collection, uint256 beta, RewardBasis rewardBasis, uint256 rewardSharePercentage
     );
@@ -54,6 +54,18 @@ interface IRewardsController {
     event RewardsClaimedForCollection(address indexed user, address indexed collection, uint256 amount);
     event RewardsClaimedForAll(address indexed user, uint256 totalAmount);
     event YieldTransferCapped(address indexed user, uint256 calculatedReward, uint256 transferredAmount);
+    event StaleClaimAttempt(address indexed user, uint64 expectedNonce, uint64 userNonce);
+    event CollectionConfigChanged(
+        address indexed collection,
+        uint96 oldBeta,
+        uint96 newBeta,
+        uint16 oldRewardSharePercentage,
+        uint16 newRewardSharePercentage,
+        IRewardsController.RewardBasis oldRewardBasis,
+        IRewardsController.RewardBasis newRewardBasis,
+        address indexed admin
+    );
+    event DustSwept(address indexed recipient, uint256 amount);
 
     // Errors
     error AddressZero();
@@ -71,6 +83,7 @@ interface IRewardsController {
     error CollectionsArrayEmpty();
     error InvalidEpochDuration();
     error InvalidRewardSharePercentage();
+    error MaxSnapshotsReached(address user, address collection, uint256 limit);
 
     // State Variable Getters
     function lendingManager() external view returns (ILendingManager);
@@ -81,6 +94,8 @@ interface IRewardsController {
     function authorizedUpdaterNonce(address updater) external view returns (uint256 nonce);
     function globalRewardIndex() external view returns (uint256 index);
     function epochDuration() external view returns (uint256 duration);
+    function globalUpdateNonce() external view returns (uint64);
+    function userLastSyncedNonce(address user) external view returns (uint64);
 
     // Admin Functions
     function setAuthorizedUpdater(address _newUpdater) external;
@@ -90,6 +105,7 @@ interface IRewardsController {
     function updateBeta(address collection, uint256 newBeta) external;
     function setEpochDuration(uint256 newDuration) external;
     function setCollectionRewardSharePercentage(address collection, uint256 newSharePercentage) external;
+    function sweepDust(address recipient) external;
 
     // Balance Update Processing
     function processBalanceUpdates(
@@ -129,4 +145,10 @@ interface IRewardsController {
     // Claiming Functions
     function claimRewardsForCollection(address nftCollection, BalanceUpdateData[] calldata simulatedUpdates) external;
     function claimRewardsForAll(BalanceUpdateData[] calldata simulatedUpdates) external;
+    function syncAndClaim(
+        address signer,
+        BalanceUpdateData[] calldata updates,
+        bytes calldata signature,
+        BalanceUpdateData[] calldata simulatedUpdatesForClaim
+    ) external;
 }

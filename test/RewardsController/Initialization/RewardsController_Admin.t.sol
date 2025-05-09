@@ -143,7 +143,7 @@ contract RewardsController_Admin is RewardsController_Test_Base {
         vm.startPrank(OWNER);
         address oldUpdater = rewardsController.authorizedUpdater();
         vm.expectEmit(true, true, true, true, address(rewardsController));
-        emit IRewardsController.AuthorizedUpdaterChanged(oldUpdater, NEW_UPDATER);
+        emit IRewardsController.AuthorizedUpdaterChanged(oldUpdater, NEW_UPDATER, OWNER);
         rewardsController.setAuthorizedUpdater(NEW_UPDATER);
         assertEq(rewardsController.authorizedUpdater(), NEW_UPDATER);
         vm.stopPrank();
@@ -218,9 +218,12 @@ contract RewardsController_Admin is RewardsController_Test_Base {
 
     function test_SetEpochDuration_Success() public {
         vm.startPrank(OWNER);
-        // uint256 oldDuration = rewardsController.epochDuration();
+        uint256 oldDuration = rewardsController.epochDuration();
         uint256 newDuration = 86400; // 1 day
-        // No specific event for epoch duration change in the interface/contract
+
+        vm.expectEmit(true, true, true, true, address(rewardsController));
+        emit IRewardsController.EpochDurationChanged(oldDuration, newDuration, OWNER);
+
         rewardsController.setEpochDuration(newDuration);
         assertEq(rewardsController.epochDuration(), newDuration);
         vm.stopPrank();

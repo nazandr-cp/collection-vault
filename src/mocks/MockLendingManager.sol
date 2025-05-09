@@ -5,7 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {CTokenInterface, CErc20Interface} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol";
 import {ILendingManager} from "../interfaces/ILendingManager.sol";
 import {MockCToken} from "./MockCToken.sol";
-import {console} from "forge-std/console.sol"; // Import console
+// import {console} from "forge-std/console.sol"; // Import console
 
 /**
  * @title MockLendingManager

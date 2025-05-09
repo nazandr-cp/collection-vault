@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: UNLICENSED */
 pragma solidity ^0.8.20;
 
-import {console} from "forge-std/console.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
@@ -49,6 +48,18 @@ contract RewardsController is
         uint256 indexUsed;
     }
 
+    /// @notice Represents a snapshot of a user's reward-relevant state at a specific point in time (blockNumber and rewardIndex).
+    /// @param blockNumber The block number when this state segment began.
+    /// @param nftBalance The user's NFT balance during this segment.
+    /// @param balance The user's token balance (e.g., LP tokens) during this segment.
+    /// @param rewardIndex The global reward index at the start of this segment (at blockNumber).
+    struct RewardSnapshot {
+        uint32 blockNumber;
+        uint32 nftBalance;
+        uint128 balance;
+        uint256 rewardIndex;
+    }
+
     bytes32 public constant BALANCE_UPDATES_ARRAYS_TYPEHASH = keccak256(
         "BalanceUpdates(address[] users,address[] collections,uint256[] blockNumbers,int256[] nftDeltas,int256[] balanceDeltas,uint256 nonce)"
     );
@@ -61,6 +72,8 @@ contract RewardsController is
     uint256 private constant PRECISION_FACTOR = 1e18;
     uint256 private constant MAX_REWARD_SHARE_PERCENTAGE = 10000;
     uint8 private constant MAX_COLLECTIONS_BITMAP = 255;
+    /// @dev Soft-cap on the number of snapshots stored per user per collection to prevent gas griefing.
+    uint256 private constant MAX_SNAPSHOTS = 50;
 
     ILendingManager public lendingManager;
     IERC4626 public vault;
@@ -79,8 +92,18 @@ contract RewardsController is
     mapping(address => mapping(address => UserRewardState)) internal userRewardState;
     mapping(address => BitMaps.BitMap) internal userActiveMasks;
     mapping(address => uint256) public authorizedUpdaterNonce;
+    /// @notice Stores historical snapshots of user's state for each collection.
+    /// @dev Snapshots are used to calculate rewards for past segments when a user claims.
+    /// @dev mapping: user => collection => array of RewardSnapshot
+    mapping(address => mapping(address => RewardSnapshot[])) public userSnapshots;
 
     uint256 public globalRewardIndex;
+
+    /// @notice Global nonce incremented on each batch of balance updates.
+    uint64 public globalUpdateNonce;
+    /// @notice Tracks the globalUpdateNonce at which a user's balance state was last synced.
+    mapping(address => uint64) public userLastSyncedNonce;
+    uint256 public globalDustBucket;
 
     event SingleUpdateProcessed(
         address indexed user,
@@ -91,6 +114,10 @@ contract RewardsController is
         int256 balanceDelta,
         uint128 finalBalance
     );
+
+    /// @notice Emitted when a user (param `user`) attempts to claim rewards with an outdated nonce (param `userNonce`),
+    ///         when a newer nonce (param `expectedNonce`) was expected.
+    event EpochDurationChanged(uint256 oldDuration, uint256 newDuration, address indexed changedBy);
 
     error BalanceUpdateUnderflow(uint256 currentValue, uint256 deltaMagnitude);
     error UpdateOutOfOrder(address user, address collection, uint256 updateBlock, uint256 lastProcessedBlock);
@@ -148,7 +175,7 @@ contract RewardsController is
         if (_newUpdater == address(0)) revert IRewardsController.AddressZero();
         address oldUpdater = authorizedUpdater;
         authorizedUpdater = _newUpdater;
-        emit AuthorizedUpdaterChanged(oldUpdater, _newUpdater);
+        emit AuthorizedUpdaterChanged(oldUpdater, _newUpdater, owner());
     }
 
     function addNFTCollection(
@@ -177,6 +204,16 @@ contract RewardsController is
         nextBitIndex++;
 
         emit NFTCollectionAdded(collection, beta, rewardBasis, rewardSharePercentage);
+        emit CollectionConfigChanged(
+            collection,
+            0, // oldBeta
+            uint96(beta), // newBeta
+            0, // oldRewardSharePercentage
+            uint16(rewardSharePercentage), // newRewardSharePercentage
+            RewardBasis.DEPOSIT, // oldRewardBasis (assuming default or not applicable for new)
+            rewardBasis, // newRewardBasis
+            owner()
+        );
     }
 
     function removeNFTCollection(address collection) external override onlyOwner {
@@ -195,6 +232,18 @@ contract RewardsController is
         delete collectionBitIndices[collection];
 
         emit NFTCollectionRemoved(collection);
+        CollectionConfig memory removedConfig = collectionConfigs[collection]; // Temp store before delete
+        RewardBasis removedRewardBasis = collectionRewardBasis[collection]; // Temp store before delete
+        emit CollectionConfigChanged(
+            collection,
+            removedConfig.beta, // oldBeta
+            0, // newBeta
+            removedConfig.rewardSharePercentage, // oldRewardSharePercentage
+            0, // newRewardSharePercentage
+            removedRewardBasis, // oldRewardBasis
+            RewardBasis.DEPOSIT, // newRewardBasis (assuming default or not applicable for removed)
+            owner()
+        );
     }
 
     function updateBeta(address collection, uint256 newBeta)
@@ -208,6 +257,16 @@ contract RewardsController is
         uint256 oldBeta = config.beta;
         config.beta = uint96(newBeta);
         emit BetaUpdated(collection, oldBeta, newBeta);
+        emit CollectionConfigChanged(
+            collection,
+            uint96(oldBeta),
+            uint96(newBeta),
+            config.rewardSharePercentage, // oldRewardSharePercentage (unchanged)
+            config.rewardSharePercentage, // newRewardSharePercentage (unchanged)
+            collectionRewardBasis[collection], // oldRewardBasis (unchanged)
+            collectionRewardBasis[collection], // newRewardBasis (unchanged)
+            owner()
+        );
     }
 
     function setCollectionRewardSharePercentage(address collection, uint256 newSharePercentage)
@@ -221,6 +280,16 @@ contract RewardsController is
         uint256 oldSharePercentage = config.rewardSharePercentage;
         config.rewardSharePercentage = uint16(newSharePercentage);
         emit CollectionRewardShareUpdated(collection, oldSharePercentage, newSharePercentage);
+        emit CollectionConfigChanged(
+            collection,
+            config.beta, // oldBeta (unchanged)
+            config.beta, // newBeta (unchanged)
+            uint16(oldSharePercentage),
+            uint16(newSharePercentage),
+            collectionRewardBasis[collection], // oldRewardBasis (unchanged)
+            collectionRewardBasis[collection], // newRewardBasis (unchanged)
+            owner()
+        );
     }
 
     function processBalanceUpdates(
@@ -267,6 +336,7 @@ contract RewardsController is
         }
 
         authorizedUpdaterNonce[signer]++;
+        globalUpdateNonce++;
 
         for (uint256 i = 0; i < numUpdates;) {
             address currentCollection = collections[i];
@@ -308,6 +378,7 @@ contract RewardsController is
         }
 
         authorizedUpdaterNonce[signer]++;
+        globalUpdateNonce++;
 
         uint256 uLen = updates.length;
         for (uint256 i = 0; i < uLen;) {
@@ -365,9 +436,27 @@ contract RewardsController is
         }
 
         if (info.lastUpdateBlock == 0 || updateBlock > info.lastUpdateBlock) {
-            info.lastRewardIndex = globalRewardIndex;
+            // Create snapshot *before* applying deltas to info.lastNFTBalance and info.lastBalance
+            // This snapshot represents the state for the segment ending at updateBlock.
+            if (info.lastUpdateBlock > 0) {
+                // Only create a snapshot if there was a previous state
+                RewardSnapshot memory newSnapshot = RewardSnapshot({
+                    blockNumber: info.lastUpdateBlock, // The block number of the *previous* update, marking end of segment
+                    nftBalance: info.lastNFTBalance, // NFT balance *during* the concluded segment
+                    balance: info.lastBalance, // Balance *during* the concluded segment
+                    rewardIndex: info.lastRewardIndex // Reward index at the *start* of this concluded segment
+                });
+
+                RewardSnapshot[] storage snapshots = userSnapshots[user][collection];
+                if (snapshots.length >= MAX_SNAPSHOTS) {
+                    revert IRewardsController.MaxSnapshotsReached(user, collection, MAX_SNAPSHOTS);
+                }
+                snapshots.push(newSnapshot);
+            }
+
+            info.lastRewardIndex = globalRewardIndex; // Update to current global index for the *new* state
             if (updateBlock > type(uint32).max) revert("RewardsController: updateBlock overflows uint32");
-            info.lastUpdateBlock = uint32(updateBlock);
+            info.lastUpdateBlock = uint32(updateBlock); // This is the start of the new segment
         }
 
         uint256 newNFTBalance = _applyDelta(info.lastNFTBalance, nftDelta);
@@ -377,6 +466,24 @@ contract RewardsController is
         uint256 newBalance = _applyDelta(info.lastBalance, balanceDelta);
         if (newBalance > type(uint128).max) revert("RewardsController: newBalance overflows uint128");
         info.lastBalance = uint128(newBalance);
+
+        // If it's the very first update for this user/collection, create an initial snapshot.
+        // This ensures that the period from deployment/initialization up to the first balance update
+        // can be calculated if there was a balance.
+        if (
+            userSnapshots[user][collection].length == 0 && (info.lastNFTBalance > 0 || info.lastBalance > 0)
+                && info.lastUpdateBlock > 0
+        ) {
+            RewardSnapshot memory initialSnapshot = RewardSnapshot({
+                blockNumber: info.lastUpdateBlock,
+                nftBalance: info.lastNFTBalance,
+                balance: info.lastBalance,
+                rewardIndex: info.lastRewardIndex
+            });
+            userSnapshots[user][collection].push(initialSnapshot);
+        }
+
+        userLastSyncedNonce[user] = globalUpdateNonce;
 
         emit SingleUpdateProcessed(
             user, collection, updateBlock, nftDelta, info.lastNFTBalance, balanceDelta, info.lastBalance
@@ -606,6 +713,11 @@ contract RewardsController is
     {
         address user = msg.sender;
 
+        if (userLastSyncedNonce[user] != globalUpdateNonce) {
+            emit StaleClaimAttempt(user, userLastSyncedNonce[user], globalUpdateNonce);
+            revert("STALE_BALANCES");
+        }
+
         uint256 currentIndex = _calculateAndUpdateGlobalIndex();
 
         UserRewardState storage info = userRewardState[user][nftCollection];
@@ -633,11 +745,28 @@ contract RewardsController is
 
         _updateUserRewardStateAfterClaim(user, nftCollection, actualYieldReceived, totalDue, indexUsed);
 
+        // Delete processed snapshots for this user and collection
+        delete userSnapshots[user][nftCollection];
+
         emit RewardsClaimedForCollection(user, nftCollection, actualYieldReceived);
     }
 
     function claimRewardsForAll(BalanceUpdateData[] calldata simulatedUpdates) external override nonReentrant {
         address user = msg.sender;
+
+        if (userLastSyncedNonce[user] != globalUpdateNonce) {
+            emit StaleClaimAttempt(user, userLastSyncedNonce[user], globalUpdateNonce);
+            revert("STALE_BALANCES");
+        }
+        uint256 currentIndex = _calculateAndUpdateGlobalIndex();
+        _executeClaimForAllLogic(user, simulatedUpdates, currentIndex);
+    }
+
+    function _executeClaimForAllLogic(
+        address user,
+        BalanceUpdateData[] calldata simulatedUpdates,
+        uint256 currentIndex // Passed in, not recalculated
+    ) internal {
         BitMaps.BitMap storage mask = userActiveMasks[user];
         uint256 localNextBitIndex = nextBitIndex;
 
@@ -651,7 +780,7 @@ contract RewardsController is
         uint256 totalRewardToRequest = 0;
         uint32 bn = uint32(block.number);
 
-        uint256 currentIndex = _calculateAndUpdateGlobalIndex();
+        // currentIndex is passed as a parameter
 
         for (uint256 i = 0; i < localNextBitIndex;) {
             bool isMaskSet = mask.get(i);
@@ -699,6 +828,7 @@ contract RewardsController is
                 info.accruedReward = 0;
                 info.lastRewardIndex = claims[i].indexUsed;
                 info.lastUpdateBlock = bn;
+                delete userSnapshots[user][claims[i].collectionAddress];
                 unchecked {
                     ++i;
                 }
@@ -730,6 +860,7 @@ contract RewardsController is
                 info.accruedReward = 0;
                 info.lastRewardIndex = claims[i].indexUsed;
                 info.lastUpdateBlock = bn;
+                delete userSnapshots[user][claims[i].collectionAddress];
                 unchecked {
                     ++i;
                 }
@@ -743,12 +874,16 @@ contract RewardsController is
                     totalDueForThisCollection, (totalRewardToRequest - totalYieldReceived), totalRewardToRequest
                 );
 
-                if (deficitForCollection <= 1 && totalDueForThisCollection > 0) {
+                if (deficitForCollection == 1 && totalDueForThisCollection > 0) {
+                    globalDustBucket += 1;
+                    deficitForCollection = 0;
+                } else if (deficitForCollection < 1 && totalDueForThisCollection > 0) {
                     deficitForCollection = 0;
                 }
                 info.accruedReward = uint128(deficitForCollection);
                 info.lastRewardIndex = claims[i].indexUsed;
                 info.lastUpdateBlock = bn;
+                delete userSnapshots[user][claims[i].collectionAddress];
                 unchecked {
                     ++i;
                 }
@@ -757,61 +892,180 @@ contract RewardsController is
         emit RewardsClaimedForAll(user, totalYieldReceived);
     }
 
+    /**
+     * @notice Allows a user to synchronize their balance updates and claim all rewards in a single transaction.
+     * @dev The balance updates must be signed by the authorized updater. The user calling this function is msg.sender.
+     * @param signer The address of the authorized updater who signed the balance updates for msg.sender.
+     * @param updates An array of balance update data for msg.sender.
+     * @param signature The EIP-712 signature from the authorized updater for the provided updates concerning msg.sender.
+     * @param simulatedUpdatesForClaim Optional simulated updates to be considered during the claim process for msg.sender,
+     *                                 applied on top of the just-synced state.
+     */
+    function syncAndClaim(
+        address signer,
+        BalanceUpdateData[] calldata updates,
+        bytes calldata signature,
+        BalanceUpdateData[] calldata simulatedUpdatesForClaim
+    ) external override nonReentrant {
+        address user = msg.sender; // The user performing the sync and claim
+
+        // --- Begin: Adapted logic from processUserBalanceUpdates ---
+        uint256 numUpdates = updates.length;
+        // REMOVED: if (numUpdates == 0) revert IRewardsController.EmptyBatch();
+
+        if (signer != authorizedUpdater) {
+            revert IRewardsController.InvalidSignature(); // Ensure signer is the authorized updater
+        }
+
+        uint256 nonce = authorizedUpdaterNonce[signer]; // Use signer's nonce
+
+        // Verify signature for updates related to 'user' (msg.sender)
+        bytes32 updatesHash = _hashBalanceUpdates(updates);
+        bytes32 structHash = keccak256(abi.encode(USER_BALANCE_UPDATES_TYPEHASH, user, updatesHash, nonce));
+        bytes32 digest = _hashTypedDataV4(structHash);
+
+        (address recoveredSigner, ECDSA.RecoverError err,) = ECDSA.tryRecover(digest, signature);
+
+        if (err != ECDSA.RecoverError.NoError || recoveredSigner != signer) {
+            revert IRewardsController.InvalidSignature();
+        }
+
+        authorizedUpdaterNonce[signer]++; // Increment signer's nonce
+        if (numUpdates > 0) {
+            // If there are updates to process
+            globalUpdateNonce++; // Increment global nonce for this batch of updates
+            // The loop for processing updates will follow, and _processSingleUpdate
+            // will set userLastSyncedNonce[user] to this new globalUpdateNonce.
+            for (uint256 i = 0; i < numUpdates;) {
+                BalanceUpdateData memory currentUpdate = updates[i];
+                if (!_whitelistedCollections.contains(currentUpdate.collection)) {
+                    revert IRewardsController.CollectionNotWhitelisted(currentUpdate.collection);
+                }
+                // _processSingleUpdate will set userLastSyncedNonce[user] = globalUpdateNonce
+                _processSingleUpdate(
+                    user, // user is msg.sender
+                    currentUpdate.collection,
+                    currentUpdate.blockNumber,
+                    currentUpdate.nftDelta,
+                    currentUpdate.balanceDelta
+                );
+                unchecked {
+                    ++i;
+                }
+            }
+            emit UserBalanceUpdatesProcessed(user, nonce, numUpdates); // Event for user (msg.sender)
+        } else {
+            // numUpdates == 0
+            // If there are no updates to process, the user's nonce needs to be synced
+            // to the *current* globalUpdateNonce. No increment to globalUpdateNonce for this specific call.
+            userLastSyncedNonce[user] = globalUpdateNonce;
+        }
+        // --- End: Adapted logic from processUserBalanceUpdates ---
+
+        // Now, claim rewards for msg.sender.
+        uint256 currentGlobalIdx = _calculateAndUpdateGlobalIndex();
+        _executeClaimForAllLogic(user, simulatedUpdatesForClaim, currentGlobalIdx);
+    }
+
     function _getRawPendingRewardsSingleCollection(
         address user,
         address nftCollection,
         BalanceUpdateData[] memory simulatedUpdates,
-        uint256 currentIndex
-    ) internal view returns (uint256 totalRawReward, uint256 calculatedIndex) {
-        UserRewardState storage info = userRewardState[user][nftCollection];
-
-        if (block.number <= info.lastUpdateBlock) {
-            return (0, currentIndex);
-        }
-
+        uint256 currentGlobalIndex
+    ) internal view returns (uint256 totalRawReward, uint256 finalCalculatedIndex) {
+        UserRewardState storage currentUserState = userRewardState[user][nftCollection];
+        RewardSnapshot[] storage snapshots = userSnapshots[user][nftCollection];
+        uint256 numSnapshots = snapshots.length;
         uint256 rewardSharePercentage = collectionConfigs[nftCollection].rewardSharePercentage;
-
-        uint256 segmentStartIndex = info.lastRewardIndex;
-        uint256 segmentNFTBalance = info.lastNFTBalance;
-        uint256 segmentBalance = info.lastBalance;
 
         totalRawReward = 0;
 
-        uint256 numSimulatedUpdates_2 = simulatedUpdates.length;
-        for (uint256 i = 0; i < numSimulatedUpdates_2;) {
-            BalanceUpdateData memory update = simulatedUpdates[i];
+        // Iterate over stored historical snapshots to calculate rewards for past, completed segments.
+        // Each snapshot `snapshots[i]` defines a state (nftBalance, balance) that was active
+        // starting from `snapshots[i].rewardIndex`. This state ended when `snapshots[i+1].rewardIndex` began,
+        // or when `currentUserState.lastRewardIndex` began if `snapshots[i]` is the last historical one.
+        for (uint256 i = 0; i < numSnapshots; ++i) {
+            RewardSnapshot memory histSnapshot = snapshots[i];
 
-            if (update.blockNumber < info.lastUpdateBlock) {
-                revert SimulationUpdateOutOfOrder(update.blockNumber, info.lastUpdateBlock);
+            uint256 histSegmentNftBalance = histSnapshot.nftBalance;
+            uint256 histSegmentBalance = histSnapshot.balance;
+            uint256 histSegmentStartIndex = histSnapshot.rewardIndex;
+            uint256 histSegmentEndIndex;
+
+            if (i + 1 < numSnapshots) {
+                // This historical segment (using histSnapshot's balances) ends where the next historical segment begins.
+                histSegmentEndIndex = snapshots[i + 1].rewardIndex;
+            } else {
+                // This is the last historical snapshot. Its period (using histSnapshot's balances)
+                // ends when the current live user state (`currentUserState`) began.
+                histSegmentEndIndex = currentUserState.lastRewardIndex;
+            }
+
+            if (histSegmentEndIndex > histSegmentStartIndex) {
+                uint256 indexDelta = histSegmentEndIndex - histSegmentStartIndex;
+                totalRawReward += _calculateRewardsWithDelta(
+                    nftCollection,
+                    indexDelta,
+                    histSegmentStartIndex,
+                    histSegmentNftBalance,
+                    histSegmentBalance,
+                    rewardSharePercentage
+                );
+            }
+        }
+
+        // Initialize balances for the "live" segment using the current user state.
+        // These will be modified by simulated updates in the next block of code.
+        // The start index for this live segment is `currentUserState.lastRewardIndex`.
+        uint256 finalSegmentNftBalance = currentUserState.lastNFTBalance;
+        uint256 finalSegmentBalance = currentUserState.lastBalance;
+        // The subsequent code block for simulated updates will modify these ^ balances.
+        // The final calculation for the live segment will use `currentUserState.lastRewardIndex` as its start index.
+
+        // Apply simulated updates to the current state for the final segment calculation
+        uint256 numSimulatedUpdates = simulatedUpdates.length;
+        for (uint256 i = 0; i < numSimulatedUpdates; ++i) {
+            BalanceUpdateData memory update = simulatedUpdates[i];
+            // Simulated updates should apply to the state *after* all historical snapshots.
+            // Their block numbers must be after the last *actual* update block.
+            if (update.blockNumber < currentUserState.lastUpdateBlock && currentUserState.lastUpdateBlock > 0) {
+                // A simulated update cannot be before the last known actual update block, unless there are no actual updates.
+                revert SimulationUpdateOutOfOrder(update.blockNumber, currentUserState.lastUpdateBlock);
             }
 
             if (update.nftDelta < 0) {
                 uint256 absNftDelta = uint256(-update.nftDelta);
-                if (absNftDelta > segmentNFTBalance) {
-                    revert SimulationNFTUpdateUnderflow(segmentNFTBalance, absNftDelta);
+                if (absNftDelta > finalSegmentNftBalance) {
+                    revert SimulationNFTUpdateUnderflow(finalSegmentNftBalance, absNftDelta);
                 }
             }
             if (update.balanceDelta < 0) {
                 uint256 absBalanceDelta = uint256(-update.balanceDelta);
-                if (absBalanceDelta > segmentBalance) {
-                    revert SimulationBalanceUpdateUnderflow(segmentBalance, absBalanceDelta);
+                if (absBalanceDelta > finalSegmentBalance) {
+                    revert SimulationBalanceUpdateUnderflow(finalSegmentBalance, absBalanceDelta);
                 }
             }
-            segmentNFTBalance = _applyDelta(segmentNFTBalance, update.nftDelta);
-            segmentBalance = _applyDelta(segmentBalance, update.balanceDelta);
-            unchecked {
-                ++i;
-            }
+            finalSegmentNftBalance = _applyDelta(finalSegmentNftBalance, update.nftDelta);
+            finalSegmentBalance = _applyDelta(finalSegmentBalance, update.balanceDelta);
         }
 
-        if (currentIndex > segmentStartIndex) {
-            uint256 indexDelta = currentIndex - segmentStartIndex;
-            totalRawReward = _calculateRewardsWithDelta(
-                nftCollection, indexDelta, segmentStartIndex, segmentNFTBalance, segmentBalance, rewardSharePercentage
+        // Calculate reward for the final segment (from last actual update/snapshot up to currentGlobalIndex)
+        // The `finalSegmentStartIndex` should be `currentUserState.lastRewardIndex` because that's the index
+        // from which the current period of accumulation starts.
+        if (currentGlobalIndex > currentUserState.lastRewardIndex) {
+            uint256 indexDelta = currentGlobalIndex - currentUserState.lastRewardIndex;
+            totalRawReward += _calculateRewardsWithDelta(
+                nftCollection,
+                indexDelta,
+                currentUserState.lastRewardIndex, // Starting index for this final segment
+                finalSegmentNftBalance, // Balances after simulated updates
+                finalSegmentBalance, // Balances after simulated updates
+                rewardSharePercentage
             );
         }
 
-        calculatedIndex = currentIndex;
+        finalCalculatedIndex = currentGlobalIndex;
+        return (totalRawReward, finalCalculatedIndex);
     }
 
     function _updateUserRewardStateAfterClaim(
@@ -838,7 +1092,10 @@ contract RewardsController is
 
     function setEpochDuration(uint256 newDuration) external override onlyOwner {
         if (newDuration == 0) revert IRewardsController.InvalidEpochDuration();
+        uint256 oldDuration = epochDuration;
         epochDuration = newDuration;
+        globalUpdateNonce++; // This nonce increment might be related to balance updates, consider if it's appropriate here or if a dedicated config nonce is better. For now, keeping as is.
+        emit EpochDurationChanged(oldDuration, newDuration, owner());
     }
 
     function updateUserRewardStateForTesting(
@@ -867,5 +1124,36 @@ contract RewardsController is
         _calculateAndUpdateGlobalIndex();
     }
 
-    uint256[39] private __gap;
+    /**
+     * @notice Allows the owner to sweep accumulated dust from the globalDustBucket.
+     * @param recipient The address to receive the swept dust.
+     */
+    function sweepDust(address recipient) external override onlyOwner nonReentrant {
+        if (recipient == address(0)) revert AddressZero();
+        uint256 dustAmount = globalDustBucket;
+        if (dustAmount == 0) {
+            // No event if no dust to sweep, or could revert.
+            // For now, just return.
+            return;
+        }
+
+        globalDustBucket = 0;
+        // Attempt to transfer the dust.
+        // Given it's dust, it might be very small.
+        // A direct transfer is fine; if it fails for some reason (e.g. recipient cannot receive ETH/tokens),
+        // the dust remains in this contract, which is acceptable.
+        // Using rewardToken for consistency, assuming dust is of rewardToken type.
+        bool success = rewardToken.transfer(recipient, dustAmount);
+        if (success) {
+            emit DustSwept(recipient, dustAmount);
+        } else {
+            // If transfer fails, revert the dust bucket to its original amount.
+            // This prevents loss of dust if the transfer fails for an unexpected reason.
+            globalDustBucket = dustAmount;
+            // Optionally, emit an event or revert here.
+            // For now, we silently fail the transfer but keep the dust recorded.
+        }
+    }
+
+    uint256[38] private __gap; // Adjusted gap due to new state variable
 }

@@ -95,9 +95,21 @@ contract RewardsController_Rewards is RewardsController_Test_Base {
             "test_PreviewRewards_BasicAccrual: globalRewardIndex BEFORE USER_B claim: %s",
             rewardsController.globalRewardIndex()
         );
-        IRewardsController.BalanceUpdateData[] memory noSimUpdatesForClaim;
+        IRewardsController.BalanceUpdateData[] memory emptyUpdates; // For syncing USER_B
+        IRewardsController.BalanceUpdateData[] memory noSimUpdatesForClaim; // For USER_B's claim part of syncAndClaim
         vm.prank(USER_B);
-        rewardsController.claimRewardsForCollection(address(mockERC721_alt), noSimUpdatesForClaim);
+        // USER_B syncs (with empty updates) and then claims for mockERC721_alt.
+        // This updates USER_B's nonce and also updates the globalRewardIndex.
+        // Assuming _signBalanceUpdates is available from RewardsController_Test_Base.sol
+        // and 'address(this)' is the authorizedUpdater in the test setup.
+        rewardsController.syncAndClaim(
+            AUTHORIZED_UPDATER,
+            emptyUpdates,
+            _signUserBalanceUpdates(
+                USER_B, emptyUpdates, rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER), UPDATER_PRIVATE_KEY
+            ),
+            noSimUpdatesForClaim
+        );
         vm.prank(address(this)); // Revert prank
         console.log(
             "test_PreviewRewards_BasicAccrual: globalRewardIndex AFTER USER_B claim: %s",
@@ -149,9 +161,17 @@ contract RewardsController_Rewards is RewardsController_Test_Base {
         vm.roll(block3);
         // mockCToken.accrueInterest(); // REMOVED: Accrue interest - The claim call below will handle accrual
         // Update globalRewardIndex in the controller
-        IRewardsController.BalanceUpdateData[] memory noSimUpdatesForClaim;
+        IRewardsController.BalanceUpdateData[] memory emptyUpdates; // For syncing USER_B
+        IRewardsController.BalanceUpdateData[] memory noSimUpdatesForClaim; // For USER_B's claim part of syncAndClaim
         vm.prank(USER_B);
-        rewardsController.claimRewardsForCollection(address(mockERC721_alt), noSimUpdatesForClaim);
+        rewardsController.syncAndClaim(
+            AUTHORIZED_UPDATER,
+            emptyUpdates,
+            _signUserBalanceUpdates(
+                USER_B, emptyUpdates, rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER), UPDATER_PRIVATE_KEY
+            ),
+            noSimUpdatesForClaim
+        );
         vm.prank(address(this)); // Revert prank
 
         IRewardsController.BalanceUpdateData[] memory simUpdates = new IRewardsController.BalanceUpdateData[](1);
@@ -192,9 +212,17 @@ contract RewardsController_Rewards is RewardsController_Test_Base {
         vm.roll(block3);
         // mockCToken.accrueInterest(); // REMOVED: Accrue interest - The claim call below will handle accrual
         // Update globalRewardIndex in the controller
-        IRewardsController.BalanceUpdateData[] memory noSimUpdatesForClaim;
+        IRewardsController.BalanceUpdateData[] memory emptyUpdates; // For syncing USER_B
+        IRewardsController.BalanceUpdateData[] memory noSimUpdatesForClaim; // For USER_B's claim part of syncAndClaim
         vm.prank(USER_B);
-        rewardsController.claimRewardsForCollection(address(mockERC721_alt), noSimUpdatesForClaim);
+        rewardsController.syncAndClaim(
+            AUTHORIZED_UPDATER,
+            emptyUpdates,
+            _signUserBalanceUpdates(
+                USER_B, emptyUpdates, rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER), UPDATER_PRIVATE_KEY
+            ),
+            noSimUpdatesForClaim
+        );
         vm.prank(address(this)); // Revert prank
 
         IRewardsController.BalanceUpdateData[] memory simUpdates = new IRewardsController.BalanceUpdateData[](1);

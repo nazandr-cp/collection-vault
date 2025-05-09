@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 pragma solidity ^0.8.20;
 
-import {Test, Vm, console} from "forge-std/Test.sol";
+import {console} from "forge-std/console.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {RewardsController} from "../../src/RewardsController.sol";
 import {LendingManager} from "../../src/LendingManager.sol";
@@ -20,7 +21,6 @@ import {ProxyAdmin} from "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.s
 import {MockERC20} from "../../src/mocks/MockERC20.sol";
 import {MockERC721} from "../../src/mocks/MockERC721.sol";
 import {MockCToken} from "../../src/mocks/MockCToken.sol";
-import {console} from "forge-std/console.sol";
 
 contract RewardsController_Test_Base is Test {
     using Strings for uint256;
@@ -48,6 +48,7 @@ contract RewardsController_Test_Base is Test {
     address constant NEW_UPDATER = address(0x000000000000000000000000000000000000000d);
     address constant AUTHORIZED_UPDATER = 0x70997970C51812dc3A010C7d01b50e0d17dc79C8;
     uint256 constant UPDATER_PRIVATE_KEY = 0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d;
+    uint256 constant OWNER_PRIVATE_KEY = 0x1000000000000000000000000000000000000000000000000000000000000001; // Dummy PK for OWNER
     uint256 constant PRECISION = 1e18;
     uint256 constant BETA_1 = 0.1 ether;
     uint256 constant BETA_2 = 0.05 ether;
@@ -205,9 +206,20 @@ contract RewardsController_Test_Base is Test {
         uint256 privateKey
     ) internal view returns (bytes memory signature) {
         bytes32 updatesHash = _hashBalanceUpdates(updates);
+        console.logBytes32(updatesHash);
         bytes32 structHash = keccak256(abi.encode(USER_BALANCE_UPDATES_TYPEHASH, user, updatesHash, nonce));
+        console.log("TestBase._signUserBalanceUpdates: user =");
+        console.log(user);
+        console.log("TestBase._signUserBalanceUpdates: nonce =");
+        console.log(nonce);
+        console.log("TestBase._signUserBalanceUpdates: structHash =");
+        console.logBytes32(structHash);
         bytes32 domainSeparator = _buildDomainSeparator();
+        console.log("TestBase._signUserBalanceUpdates: domainSeparator =");
+        console.logBytes32(domainSeparator);
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+        console.log("TestBase._signUserBalanceUpdates: final digest for signing =");
+        console.logBytes32(digest);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
         signature = abi.encodePacked(r, s, v);
     }
@@ -441,5 +453,42 @@ contract RewardsController_Test_Base is Test {
         }
 
         console.log("--- End _generateYieldInLendingManager ---");
+    }
+
+    function _calculateRewardsManually(
+        address user, // Not directly used in this simplified version, but good for context
+        address collection,
+        uint256 nftBalanceDuringPeriod,
+        uint256 balanceDuringPeriod,
+        uint256 startIndex,
+        uint256 endIndex
+    ) internal view returns (uint256 rawReward) {
+        user; // Suppress unused variable warning
+
+        if (nftBalanceDuringPeriod == 0 || balanceDuringPeriod == 0 || startIndex == 0 || endIndex <= startIndex) {
+            return 0;
+        }
+
+        uint256 indexDelta = endIndex - startIndex;
+        (
+            uint96 betaLocal,
+            uint16 rewardSharePercentageLocal,
+            IRewardsController.RewardBasis, /*rewardBasis*/
+            bool /*isWhitelisted*/
+        ) = rewardsController.collectionConfigs(collection);
+        uint256 rewardSharePercentage = rewardSharePercentageLocal;
+
+        // Simplified replication of RewardsController._calculateRewardsWithDelta
+        uint256 yieldReward = (balanceDuringPeriod * indexDelta) / startIndex; // Assuming startIndex is the 'lastRewardIndex' for the period
+
+        uint256 beta = betaLocal;
+        uint256 boostFactor = rewardsController.calculateBoost(nftBalanceDuringPeriod, beta);
+
+        uint256 bonusReward = (yieldReward * boostFactor) / PRECISION; // PRECISION is 1e18
+        uint256 totalYieldWithBoost = yieldReward + bonusReward;
+
+        rawReward = (totalYieldWithBoost * rewardSharePercentage) / MAX_REWARD_SHARE_PERCENTAGE;
+
+        return rawReward;
     }
 }
