@@ -35,7 +35,7 @@ contract MockCToken is
     uint256 public redeemResult = 0;
 
     uint256 public exchangeRateMantissa; // Example: 2 * 10^(18 + underlyingDecimals - 8)
-    uint256 public constant accrualIncrement = 1e24; // Increased increment
+    uint256 public constant accrualIncrement = 2e25; // Increased increment significantly
 
     constructor(address _underlying) {
         underlying = _underlying; // Initialize inherited state variable
@@ -180,7 +180,12 @@ contract MockCToken is
     function accrueInterest() external override returns (uint256) {
         // Simulate interest accrual by slightly increasing the exchange rate
         if (accrueInterestEnabled) {
+            console.log("MockCToken.accrueInterest: exchangeRateMantissa BEFORE increment: %s", exchangeRateMantissa);
+            console.log("MockCToken.accrueInterest: accrualIncrement: %s", accrualIncrement);
             exchangeRateMantissa += accrualIncrement; // Use increased increment
+            console.log("MockCToken.accrueInterest: exchangeRateMantissa AFTER increment: %s", exchangeRateMantissa);
+        } else {
+            console.log("MockCToken.accrueInterest: Accrual SKIPPED (accrueInterestEnabled=false)");
         }
         emit AccrueInterest(0, 0, exchangeRateMantissa, 0); // Emit event with new rate
         return 0; // Return value often ignored, 0 is fine for mock

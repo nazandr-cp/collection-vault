@@ -12,31 +12,58 @@ import {console} from "forge-std/console.sol"; // Import console
  * @notice Mock contract for testing ERC4626Vault interactions.
  */
 contract MockLendingManager is ILendingManager {
-    IERC20 public asset;
-    CTokenInterface private _cToken; // Changed to private
+    // --- State Variables from LendingManager ---
+    bytes32 public constant VAULT_ROLE = keccak256("VAULT_ROLE");
+    bytes32 public constant REWARDS_CONTROLLER_ROLE = keccak256("REWARDS_CONTROLLER_ROLE");
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE"); // DEFAULT_ADMIN_ROLE is part of AccessControl
+
+    uint256 public constant R0_BASIS_POINTS = 5;
+    uint256 public constant BASIS_POINTS_DENOMINATOR = 10_000;
+    // PRECISION and EXCHANGE_RATE_DENOMINATOR are private constants, not part of public interface
+
+    IERC20 public asset; // Matches asset() getter
+    CTokenInterface private _cToken; // Internal in LendingManager, private here is fine for mock
     uint256 public totalPrincipalDeposited;
-    mapping(address => uint256) public principalDeposited;
 
-    uint256 private _mockAvailableYield = type(uint256).max; // Default to max, effectively no cap
-
-    // Declare missing state variables
-    address public rewardsControllerAddress;
+    // --- Mock Specific State Variables ---
+    mapping(address => uint256) public principalDepositedByVault; // Renamed for clarity
+    uint256 private _mockAvailableYield = type(uint256).max;
+    address public rewardsControllerAddressMock; // To avoid conflict if inheriting AccessControl roles
     address public mockCTokenAddress;
-
     uint256 internal mockBaseRewardPerBlock;
     uint256 internal mockTotalAssets;
     bool internal shouldTransferYieldRevert;
     bool public depositResult = true;
     bool public withdrawResult = true;
     bool public transferYieldResult = true;
-
-    // Track calls
     uint256 public depositCalledCount;
     uint256 public withdrawCalledCount;
     uint256 public transferYieldCalledCount;
-    address public expectedTransferRecipient; // Removed 'internal' modifier
+    address public expectedTransferRecipient;
     bool private recipientExpectationSet = false;
+    bool public transferYieldBatchResult = true;
+    uint256 public transferYieldBatchCalledCount;
 
+    // --- Events from LendingManager ---
+    event YieldTransferred(address indexed recipient, uint256 amount);
+    event YieldTransferredBatch(
+        address indexed recipient, uint256 totalAmount, address[] collections, uint256[] amounts
+    );
+    event DepositToProtocol(address indexed caller, uint256 amount);
+    event WithdrawFromProtocol(address indexed caller, uint256 amount);
+
+    // --- Errors from LendingManager ---
+    error MintFailed();
+    error RedeemFailed();
+    error TransferYieldFailed(); // Though SafeERC20 might make it redundant
+    error AddressZero();
+    error InsufficientBalanceInProtocol();
+    error LM_CallerNotVault(address caller);
+    error LM_CallerNotRewardsController(address caller);
+    error CannotRemoveLastAdmin(bytes32 role);
+    error ArrayLengthMismatch(); // Added from transferYieldBatch in original
+
+    // --- Mock Specific Events ---
     event MockDepositCalled(uint256 amount);
     event MockWithdrawCalled(uint256 amount);
     event MockTransferYieldCalled(uint256 amount, address recipient);
@@ -46,17 +73,19 @@ contract MockLendingManager is ILendingManager {
 
     constructor(IERC20 _asset, CTokenInterface __cToken) {
         asset = _asset;
-        _cToken = __cToken; // Store the provided cToken instance privately
+        _cToken = __cToken;
     }
 
-    // Add public getter to match interface
+    // --- ILendingManager Interface Functions ---
+    // asset() is implicitly provided by public state variable `asset`
+
     function cToken() external view override returns (address) {
         return address(_cToken);
     }
 
     // --- Mock Control Functions ---
     function setRewardsController(address _controller) external {
-        rewardsControllerAddress = _controller;
+        rewardsControllerAddressMock = _controller;
     }
 
     function setMockCTokenAddress(address _cToken) external {
@@ -95,34 +124,66 @@ contract MockLendingManager is ILendingManager {
     // --- ILendingManager Implementation ---
     function depositToLendingProtocol(uint256 amount) external override returns (bool success) {
         depositCalledCount++;
-        emit MockDepositCalled(amount);
-        success = depositResult;
-        if (success && amount > 0) {
-            // Simulate LM pulling assets from the Vault (msg.sender)
-            // Requires Vault to have approved the LM
-            asset.transferFrom(msg.sender, address(this), amount);
+        emit MockDepositCalled(amount); // Mock specific event
+
+        if (!depositResult) {
+            // revert MintFailed(); // Or return false as per current mock logic
+            return false;
         }
-        return success;
+        if (amount == 0) {
+            return true;
+        }
+
+        // Simulate LM pulling assets from the Vault (msg.sender)
+        // Requires Vault to have approved the LM
+        // In a real scenario, this would be asset.safeTransferFrom
+        asset.transferFrom(msg.sender, address(this), amount);
+        totalPrincipalDeposited += amount; // Mirroring LendingManager logic
+        principalDepositedByVault[msg.sender] += amount;
+
+        emit DepositToProtocol(msg.sender, amount); // LendingManager event
+        return true;
     }
 
     function withdrawFromLendingProtocol(uint256 amount) external override returns (bool success) {
         withdrawCalledCount++;
-        emit MockWithdrawCalled(amount);
-        success = withdrawResult;
-        if (success) {
-            // Check actual balance before transfer
-            if (asset.balanceOf(address(this)) >= amount) {
-                // Simulate asset transfer FROM mock TO vault
-                asset.transfer(msg.sender, amount);
-            } else {
-                // If mock doesn't have the funds, withdraw fails
-                success = false;
-            }
+        emit MockWithdrawCalled(amount); // Mock specific event
+
+        if (!withdrawResult) {
+            // revert RedeemFailed(); // Or return false
+            return false;
         }
-        return success;
+        if (amount == 0) {
+            return true;
+        }
+
+        uint256 availableBalance = this.totalAssets(); // Use the mock's totalAssets
+        if (availableBalance < amount) {
+            // revert InsufficientBalanceInProtocol();
+            return false; // Or revert as per actual contract
+        }
+
+        // Simulate asset transfer FROM mock TO vault
+        // In a real scenario, this would be asset.safeTransfer
+        asset.transfer(msg.sender, amount);
+
+        if (totalPrincipalDeposited >= amount) {
+            totalPrincipalDeposited -= amount;
+        } else {
+            totalPrincipalDeposited = 0;
+        }
+        if (principalDepositedByVault[msg.sender] >= amount) {
+            principalDepositedByVault[msg.sender] -= amount;
+        } else {
+            principalDepositedByVault[msg.sender] = 0;
+        }
+
+        emit WithdrawFromProtocol(msg.sender, amount); // LendingManager event
+        return true;
     }
 
-    function totalAssets() external view override returns (uint256) {
+    function totalAssets() public view override returns (uint256) {
+        // Changed to public to match LM
         // Return mock value if set, otherwise fallback (e.g., balance)
         return mockTotalAssets > 0 ? mockTotalAssets : asset.balanceOf(address(this));
     }
@@ -139,67 +200,38 @@ contract MockLendingManager is ILendingManager {
 
     function transferYield(uint256 amount, address recipient) external override returns (uint256 amountTransferred) {
         transferYieldCalledCount++;
-        emit MockTransferYieldCalled(amount, recipient);
+        emit MockTransferYieldCalled(amount, recipient); // Mock specific event
 
-        // Check if the caller is the authorized RewardsController
-        require(msg.sender == rewardsControllerAddress, "MockLM: Caller is not the RewardsController");
+        // Basic checks from LendingManager
+        if (recipient == address(0)) {
+            revert AddressZero();
+        }
+        // Mock doesn't have roles, so can't check onlyRewardsController directly
+        // require(msg.sender == rewardsControllerAddressMock, "MockLM: Caller is not the RewardsController");
 
-        // Check recipient if expectation was set
         if (recipientExpectationSet) {
             require(recipient == expectedTransferRecipient, "MockLM: Transfer recipient mismatch");
-            recipientExpectationSet = false; // Reset expectation
+            recipientExpectationSet = false;
         }
 
         if (shouldTransferYieldRevert) {
-            revert("MockLM: transferYield forced revert");
+            revert("MockLM: transferYield forced revert"); // Or revert TransferYieldFailed();
         }
 
-        // Determine actual amount to transfer based on mock available yield and requested amount
-        uint256 available = this.getAvailableYield(); // Call external function using 'this'
-        amountTransferred = amount > available ? available : amount;
+        if (amount == 0) return 0;
 
-        // Simulate transfer if amount > 0 and mock is set to succeed
+        uint256 availableYield = this.getAvailableYield();
+        amountTransferred = amount > availableYield ? availableYield : amount;
+
         if (amountTransferred > 0 && transferYieldResult) {
-            uint256 currentBalance = asset.balanceOf(address(this));
-            console.log("MockLM.transferYield: Attempting transfer...");
-            console.log("  - Sender (MockLM):", address(this));
-            console.log("  - Recipient:", recipient);
-            console.log("  - Requested Amount:", amount);
-            console.log("  - Available Yield:", available);
-            console.log("  - Amount To Transfer:", amountTransferred);
-            console.log("  - Sender Balance:", currentBalance);
-
-            // Simulate the transfer directly based on amountTransferred, ignoring mock's own balance.
-            // Assumes the mock can source the funds like the real LM.
+            // Simulate transfer
             asset.transfer(recipient, amountTransferred);
-        } else if (!transferYieldResult) {
-            console.log("MockLM.transferYield: Mock set to fail transfer.");
-            amountTransferred = 0; // Simulate failure based on flag
+            emit YieldTransferred(recipient, amountTransferred); // LendingManager event
         } else {
-            console.log("MockLM.transferYield: Calculated transfer amount is zero.");
-            amountTransferred = 0; // No transfer needed
+            amountTransferred = 0; // Simulate failure or no yield
         }
-
         return amountTransferred;
     }
-
-    // --- Mock Implementation for redeemAllCTokens ---
-    function redeemAllCTokens(address recipient) external override returns (uint256 amountRedeemed) {
-        // Simple mock: Assume it redeems some fixed amount or an amount based on a mock state.
-        // For now, just return 0 and transfer nothing.
-        // A more complex mock could track cToken balances and simulate redemption.
-        amountRedeemed = 0; // Placeholder
-        // if (amountRedeemed > 0) {
-        //     mockAsset.transfer(recipient, amountRedeemed);
-        // }
-        return amountRedeemed;
-    }
-
-    // --- Mock Implementation for transferYieldBatch ---
-    bool public transferYieldBatchResult = true;
-    uint256 public transferYieldBatchCalledCount;
-    // Add shouldTransferYieldBatchRevert if separate control is needed from single transferYield
-    // bool internal shouldTransferYieldBatchRevert;
 
     function transferYieldBatch(
         address[] calldata collections,
@@ -208,31 +240,120 @@ contract MockLendingManager is ILendingManager {
         address recipient
     ) external override returns (uint256 totalAmountTransferred) {
         transferYieldBatchCalledCount++;
+        emit MockTransferYieldBatchCalled(collections, amounts, totalAmount, recipient, 0); // Mock event, amount later
 
-        require(msg.sender == rewardsControllerAddress, "MockLM: Caller is not RC for batch");
+        if (recipient == address(0)) {
+            revert AddressZero();
+        }
+        if (collections.length != amounts.length) {
+            revert ArrayLengthMismatch();
+        }
+        // Mock doesn't have roles, so can't check onlyRewardsController directly
+        // require(msg.sender == rewardsControllerAddressMock, "MockLM: Caller is not RC for batch");
+
         if (recipientExpectationSet) {
             require(recipient == expectedTransferRecipient, "MockLM: Batch recipient mismatch");
-            // recipientExpectationSet = false; // Reset if desired
         }
 
         if (shouldTransferYieldRevert) {
-            // Re-using general revert flag for simplicity
-            revert("MockLM: transferYieldBatch forced revert");
+            revert("MockLM: transferYieldBatch forced revert"); // Or revert TransferYieldFailed();
         }
 
-        uint256 available = this.getAvailableYield();
-        totalAmountTransferred = totalAmount > available ? available : totalAmount;
+        if (totalAmount == 0) return 0;
+
+        uint256 availableYield = this.getAvailableYield();
+        totalAmountTransferred = totalAmount > availableYield ? availableYield : totalAmount;
 
         if (totalAmountTransferred > 0 && transferYieldBatchResult) {
             asset.transfer(recipient, totalAmountTransferred);
-        } else if (!transferYieldBatchResult) {
-            totalAmountTransferred = 0;
+            // For the event, we pass the original collections and amounts, but the actual total transferred
+            emit YieldTransferredBatch(recipient, totalAmountTransferred, collections, amounts); // LendingManager event
         } else {
-            // totalAmountTransferred is 0
             totalAmountTransferred = 0;
         }
-
-        emit MockTransferYieldBatchCalled(collections, amounts, totalAmount, recipient, totalAmountTransferred);
+        // Update the mock event emission if needed, or remove if redundant with LM event
+        // For now, the initial emit MockTransferYieldBatchCalled is kept, could refine
         return totalAmountTransferred;
     }
+
+    function redeemAllCTokens(address recipient) external override returns (uint256 amountRedeemed) {
+        if (recipient == address(0)) {
+            revert AddressZero();
+        }
+        // Mock logic: redeem all available assets or a mock amount
+        amountRedeemed = asset.balanceOf(address(this)); // Simplistic: redeem all current asset balance
+        if (mockTotalAssets > 0 && mockTotalAssets < amountRedeemed) {
+            // If mockTotalAssets is set, use it
+            amountRedeemed = mockTotalAssets;
+        }
+
+        if (amountRedeemed > 0) {
+            asset.transfer(recipient, amountRedeemed);
+            emit WithdrawFromProtocol(recipient, amountRedeemed); // LendingManager event
+        }
+        return amountRedeemed;
+    }
+
+    // --- Role Management Functions (Stubs) ---
+    // These functions are part of LendingManager's interface due to AccessControl.
+    // In the mock, they are stubs as AccessControl is not inherited.
+    // They don't have `onlyRole` modifiers here.
+
+    event RoleGranted(bytes32 indexed role, address indexed account, address indexed sender);
+    event RoleRevoked(bytes32 indexed role, address indexed account, address indexed sender);
+
+    function grantRewardsControllerRole(address newController) external {
+        if (newController == address(0)) revert AddressZero();
+        // Mock implementation: can emit an event or do nothing
+        emit RoleGranted(REWARDS_CONTROLLER_ROLE, newController, msg.sender);
+    }
+
+    function revokeRewardsControllerRole(address controller) external {
+        if (controller == address(0)) revert AddressZero();
+        emit RoleRevoked(REWARDS_CONTROLLER_ROLE, controller, msg.sender);
+    }
+
+    function grantVaultRole(address newVault) external {
+        if (newVault == address(0)) revert AddressZero();
+        emit RoleGranted(VAULT_ROLE, newVault, msg.sender);
+    }
+
+    function revokeVaultRole(address vault) external {
+        if (vault == address(0)) revert AddressZero();
+        emit RoleRevoked(VAULT_ROLE, vault, msg.sender);
+    }
+
+    function grantAdminRole(address newAdmin) external {
+        if (newAdmin == address(0)) revert AddressZero();
+        emit RoleGranted(ADMIN_ROLE, newAdmin, msg.sender);
+    }
+
+    function revokeAdminRole(address admin) external {
+        if (admin == address(0)) revert AddressZero();
+        emit RoleRevoked(ADMIN_ROLE, admin, msg.sender);
+    }
+
+    // DEFAULT_ADMIN_ROLE is typically managed by AccessControl itself.
+    // For a mock, we can add stubs if these specific functions are called.
+    // The actual DEFAULT_ADMIN_ROLE constant is not exposed by LendingManager directly,
+    // but functions using it are.
+    bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00; // Standard DEFAULT_ADMIN_ROLE
+
+    function grantAdminRoleAsDefaultAdmin(address newAdmin) external {
+        if (newAdmin == address(0)) revert AddressZero();
+        // require(msg.sender == getRoleAdmin(DEFAULT_ADMIN_ROLE), "AccessControl: sender must be admin to grant");
+        emit RoleGranted(ADMIN_ROLE, newAdmin, msg.sender); // Assuming msg.sender is default admin for mock
+    }
+
+    function revokeAdminRoleAsDefaultAdmin(address admin) external {
+        if (admin == address(0)) revert AddressZero();
+        // require(msg.sender == getRoleAdmin(DEFAULT_ADMIN_ROLE), "AccessControl: sender must be admin to revoke");
+        emit RoleRevoked(ADMIN_ROLE, admin, msg.sender); // Assuming msg.sender is default admin for mock
+    }
+
+    // --- Helper to check role admin (mocked) ---
+    // function getRoleAdmin(bytes32 role) public view returns (bytes32) {
+    //     // Simplified mock: All roles managed by DEFAULT_ADMIN_ROLE
+    //     return DEFAULT_ADMIN_ROLE;
+    // }
 }

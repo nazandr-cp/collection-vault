@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
-import {MockERC20} from "../../mocks/MockERC20.sol";
+import {MockERC20} from "../../../src/mocks/MockERC20.sol";
 import {LendingManager} from "../../../src/LendingManager.sol";
 import {RewardsController} from "../../../src/RewardsController.sol";
 import {IRewardsController} from "../../../src/interfaces/IRewardsController.sol";

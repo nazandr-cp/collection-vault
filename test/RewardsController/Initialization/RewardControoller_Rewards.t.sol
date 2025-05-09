@@ -86,14 +86,23 @@ contract RewardsController_Rewards is RewardsController_Test_Base {
         IRewardsController.UserCollectionTracking[] memory initialTracking =
             rewardsController.getUserCollectionTracking(USER_A, collectionsToTrack);
         uint256 startIndex = initialTracking[0].lastUserRewardIndex;
+        console.log("test_PreviewRewards_BasicAccrual: USER_A initial lastUserRewardIndex (startIndex): %s", startIndex);
 
         vm.roll(block.number + 100); // Accrue time
         // mockCToken.accrueInterest(); // REMOVED: Accrue interest - The claim call below will handle accrual via _calculateAndUpdateGlobalIndex
         // Update globalRewardIndex in the controller by making a claim for a different user/collection
+        console.log(
+            "test_PreviewRewards_BasicAccrual: globalRewardIndex BEFORE USER_B claim: %s",
+            rewardsController.globalRewardIndex()
+        );
         IRewardsController.BalanceUpdateData[] memory noSimUpdatesForClaim;
         vm.prank(USER_B);
         rewardsController.claimRewardsForCollection(address(mockERC721_alt), noSimUpdatesForClaim);
         vm.prank(address(this)); // Revert prank
+        console.log(
+            "test_PreviewRewards_BasicAccrual: globalRewardIndex AFTER USER_B claim: %s",
+            rewardsController.globalRewardIndex()
+        );
 
         address[] memory collections = new address[](1);
         collections[0] = address(mockERC721);
@@ -101,9 +110,15 @@ contract RewardsController_Rewards is RewardsController_Test_Base {
 
         // --- Manual Calculation ---
         // Simulate the single accrual that previewRewards will perform
-        // Using the constant accrualIncrement value (1e24) from MockCToken.sol
-        uint256 endIndexSimulated = startIndex + 1e24;
+        // Using the constant accrualIncrement value (2e25) from MockCToken.sol
+        uint256 endIndexSimulated = startIndex + 2e25;
         uint256 indexDelta = endIndexSimulated - startIndex; // Should be 1e24
+        console.log(
+            "test_PreviewRewards_BasicAccrual: Manual Calc: startIndex=%s, endIndexSimulated=%s, indexDelta=%s",
+            startIndex,
+            endIndexSimulated,
+            indexDelta
+        );
         uint256 yieldReward = (balance * indexDelta) / startIndex;
         uint256 share = rewardsController.getCollectionRewardSharePercentage(address(mockERC721));
         uint256 allocatedYield = (yieldReward * share) / MAX_REWARD_SHARE_PERCENTAGE;
@@ -113,6 +128,8 @@ contract RewardsController_Rewards is RewardsController_Test_Base {
         uint256 expected = allocatedYield + bonus; // Should be 3.25e16
 
         uint256 preview = rewardsController.previewRewards(USER_A, collections, noSimUpdates);
+        console.log("test_PreviewRewards_BasicAccrual: Preview value: %s", preview);
+        console.log("test_PreviewRewards_BasicAccrual: Expected value: %s", expected);
 
         assertTrue(preview > 0, "Preview should be > 0 after accrual");
 

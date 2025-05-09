@@ -2,7 +2,7 @@
 pragma solidity ^0.8.13;
 
 import {RewardsController_Test_Base} from "../RewardsController_Test_Base.sol";
-import {MockERC20} from "../../mocks/MockERC20.sol";
+import {MockERC20} from "../../../src/mocks/MockERC20.sol";
 import {IRewardsController} from "../../../src/interfaces/IRewardsController.sol";
 
 contract RewardsController_Gas_BalanceUpdates_Test is RewardsController_Test_Base {
