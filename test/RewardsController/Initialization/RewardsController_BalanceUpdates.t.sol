@@ -575,4 +575,54 @@ contract RewardsController_Balance_Updates is RewardsController_Test_Base {
 
         assertEq(rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER), nonce + 1);
     }
+
+    function test_Revert_ProcessBalanceUpdates_BatchTooLarge() public {
+        uint256 nonce = rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER);
+        uint256 batchSize = rewardsController.MAX_BATCH_UPDATES() + 1;
+
+        address[] memory users = new address[](batchSize);
+        address[] memory collections = new address[](batchSize);
+        uint256[] memory blockNumbers = new uint256[](batchSize);
+        int256[] memory nftDeltas = new int256[](batchSize);
+        int256[] memory balanceDeltas = new int256[](batchSize);
+
+        for (uint256 i = 0; i < batchSize; i++) {
+            users[i] = address(uint160(uint256(keccak256(abi.encodePacked("user", i)))));
+            collections[i] = address(mockERC721);
+            blockNumbers[i] = block.number + i + 1;
+            nftDeltas[i] = 1;
+            balanceDeltas[i] = 1 ether;
+        }
+        vm.roll(block.number + batchSize);
+
+        bytes memory sig = _signBalanceUpdatesArrays(
+            users, collections, blockNumbers, nftDeltas, balanceDeltas, nonce, UPDATER_PRIVATE_KEY
+        );
+
+        vm.expectRevert(bytes("BATCH_TOO_LARGE"));
+        rewardsController.processBalanceUpdates(
+            AUTHORIZED_UPDATER, users, collections, blockNumbers, nftDeltas, balanceDeltas, sig
+        );
+    }
+
+    function test_Revert_ProcessUserBalanceUpdates_BatchTooLarge() public {
+        uint256 nonce = rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER);
+        uint256 batchSize = rewardsController.MAX_BATCH_UPDATES() + 1;
+
+        IRewardsController.BalanceUpdateData[] memory updates = new IRewardsController.BalanceUpdateData[](batchSize);
+        for (uint256 i = 0; i < batchSize; i++) {
+            updates[i] = IRewardsController.BalanceUpdateData({
+                collection: address(mockERC721),
+                blockNumber: block.number + i + 1,
+                nftDelta: 1,
+                balanceDelta: 1 ether
+            });
+        }
+        vm.roll(block.number + batchSize);
+
+        bytes memory sig = _signUserBalanceUpdates(USER_A, updates, nonce, UPDATER_PRIVATE_KEY);
+
+        vm.expectRevert(bytes("BATCH_TOO_LARGE"));
+        rewardsController.processUserBalanceUpdates(AUTHORIZED_UPDATER, USER_A, updates, sig);
+    }
 }

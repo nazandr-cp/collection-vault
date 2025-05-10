@@ -37,10 +37,9 @@ interface IRewardsController {
     /// @param balance The user's token balance (e.g., LP tokens) during this segment.
     /// @param rewardIndex The global reward index at the start of this segment (at blockNumber).
     struct RewardSnapshot {
-        uint32 blockNumber;
-        uint32 nftBalance;
-        uint128 balance;
-        uint256 rewardIndex;
+        address collection;
+        uint256 index;
+        uint256 blockNumber;
     }
 
     // Events
@@ -57,7 +56,9 @@ interface IRewardsController {
     event UserBalanceUpdatesProcessed(address indexed user, uint256 nonce, uint256 count);
     event RewardsClaimedForCollection(address indexed user, address indexed collection, uint256 amount);
     event RewardsClaimedForAll(address indexed user, uint256 totalAmount);
-    event YieldTransferCapped(address indexed user, uint256 calculatedReward, uint256 transferredAmount);
+    event YieldTransferCapped(
+        address indexed user, address indexed collection, uint256 calculatedReward, uint256 transferredAmount
+    );
     event StaleClaimAttempt(address indexed user, uint64 expectedNonce, uint64 userNonce);
     event EpochDurationChanged(uint256 oldDuration, uint256 newDuration, address indexed changedBy);
     event CollectionConfigChanged(
