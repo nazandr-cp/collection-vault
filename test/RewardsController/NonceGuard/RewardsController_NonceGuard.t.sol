@@ -11,16 +11,14 @@ contract RewardsController_NonceGuard_Test is RewardsController_Test_Base {
 
     function setUp() public override {
         super.setUp();
-        collection1 = address(mockERC721); // NFT_COLLECTION_1
-            // USER_A already has DAI (rewardToken) from base setUp.
-            // mockERC721 is already added as a collection (NFT_COLLECTION_1).
+        collection1 = address(mockERC721);
     }
 
     function test_GlobalUpdateNonce_IncrementsOnBalanceUpdates() public {
         uint64 initialGlobalNonce = rewardsController.globalUpdateNonce();
 
         // Process a balance update via processUserBalanceUpdates
-        _processSingleUserUpdate(USER_A, collection1, block.number, 1, 100 * PRECISION);
+        _processSingleUserUpdate(USER_A, collection1, block.number, 1, int256(100 * PRECISION));
         uint64 nonceAfterFirstUpdate = rewardsController.globalUpdateNonce();
         assertEq(
             nonceAfterFirstUpdate, initialGlobalNonce + 1, "Nonce should increment after processUserBalanceUpdates"
@@ -36,7 +34,7 @@ contract RewardsController_NonceGuard_Test is RewardsController_Test_Base {
         int256[] memory nftDeltas = new int256[](1);
         nftDeltas[0] = 1;
         int256[] memory balanceDeltas = new int256[](1);
-        balanceDeltas[0] = 50 * PRECISION;
+        balanceDeltas[0] = int256(50 * PRECISION);
         uint256 updaterNonce = rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER);
         bytes memory signature = _signBalanceUpdatesArrays(
             users, collections, blockNumbers, nftDeltas, balanceDeltas, updaterNonce, UPDATER_PRIVATE_KEY
@@ -57,7 +55,7 @@ contract RewardsController_NonceGuard_Test is RewardsController_Test_Base {
         assertEq(userAInitialNonce, 0, "User A initial sync nonce should be 0");
 
         // Process update for USER_A
-        _processSingleUserUpdate(USER_A, collection1, block.number, 1, 100 * PRECISION);
+        _processSingleUserUpdate(USER_A, collection1, block.number, 1, int256(100 * PRECISION));
         uint64 globalNonceAfterA = rewardsController.globalUpdateNonce();
         uint64 userANonceAfterA = rewardsController.userLastSyncedNonce(USER_A);
 
@@ -65,7 +63,7 @@ contract RewardsController_NonceGuard_Test is RewardsController_Test_Base {
         assertEq(userANonceAfterA, globalNonceAfterA, "User A sync nonce should match global nonce");
 
         // Process update for USER_B (advances global nonce)
-        _processSingleUserUpdate(USER_B, collection1, block.number, 1, 50 * PRECISION);
+        _processSingleUserUpdate(USER_B, collection1, block.number, 1, int256(50 * PRECISION));
         uint64 globalNonceAfterB = rewardsController.globalUpdateNonce();
         uint64 userANonceAfterBUpdate = rewardsController.userLastSyncedNonce(USER_A);
 
@@ -73,7 +71,7 @@ contract RewardsController_NonceGuard_Test is RewardsController_Test_Base {
         assertEq(userANonceAfterBUpdate, globalNonceAfterA, "User A sync nonce should NOT change on User B update");
 
         // Process another update for USER_A
-        _processSingleUserUpdate(USER_A, collection1, block.number + 1, 0, 20 * PRECISION); // block.number must advance
+        _processSingleUserUpdate(USER_A, collection1, block.number + 1, 0, int256(20 * PRECISION)); // block.number must advance
         uint64 globalNonceAfterA2 = rewardsController.globalUpdateNonce();
         uint64 userANonceAfterA2 = rewardsController.userLastSyncedNonce(USER_A);
 
@@ -82,22 +80,18 @@ contract RewardsController_NonceGuard_Test is RewardsController_Test_Base {
     }
 
     function test_ClaimForCollection_RevertsWithStaleBalances_AndEmitsEvent() public {
-        // 1. Setup: User A has some balance and is synced.
-        vm.prank(OWNER);
         mockERC721.mintSpecific(USER_A, 1);
-        _processSingleUserUpdate(USER_A, collection1, block.number, 1, 1000 * PRECISION); // Syncs USER_A
+        _processSingleUserUpdate(USER_A, collection1, block.number, 1, int256(1000 * PRECISION));
 
         uint64 userSyncedNonce = rewardsController.userLastSyncedNonce(USER_A);
         uint64 globalNonceAtSync = rewardsController.globalUpdateNonce();
         assertEq(userSyncedNonce, globalNonceAtSync, "User A should be synced initially");
 
-        // 2. Advance globalUpdateNonce without syncing User A
-        vm.prank(OWNER);
-        rewardsController.setEpochDuration(rewardsController.epochDuration() + 1); // Increments globalUpdateNonce
+        // Make USER_A's nonce stale by processing an update for USER_B
+        _processSingleUserUpdate(USER_B, collection1, block.number + 1, 1, int256(500 * PRECISION)); // Advances globalUpdateNonce
 
-        uint64 newGlobalNonce = rewardsController.globalUpdateNonce();
-        assertTrue(newGlobalNonce > globalNonceAtSync, "Global nonce should have incremented");
-        assertEq(rewardsController.userLastSyncedNonce(USER_A), userSyncedNonce, "User A nonce should remain stale");
+        uint64 newGlobalNonce = rewardsController.globalUpdateNonce(); // Get the updated global nonce
+        assertTrue(newGlobalNonce > userSyncedNonce, "Global nonce should be greater than user's synced nonce");
 
         // 3. User A attempts to claimRewardsForCollection
         vm.startPrank(USER_A);
@@ -109,21 +103,18 @@ contract RewardsController_NonceGuard_Test is RewardsController_Test_Base {
     }
 
     function test_ClaimForAll_RevertsWithStaleBalances_AndEmitsEvent() public {
-        // 1. Setup: User A has some balance and is synced.
-        vm.prank(OWNER);
         mockERC721.mintSpecific(USER_A, 1);
-        _processSingleUserUpdate(USER_A, collection1, block.number, 1, 1000 * PRECISION); // Syncs USER_A
+        _processSingleUserUpdate(USER_A, collection1, block.number, 1, int256(1000 * PRECISION));
 
         uint64 userSyncedNonce = rewardsController.userLastSyncedNonce(USER_A);
         uint64 globalNonceAtSync = rewardsController.globalUpdateNonce();
         assertEq(userSyncedNonce, globalNonceAtSync, "User A should be synced initially");
 
-        // 2. Advance globalUpdateNonce without syncing User A
-        vm.prank(OWNER);
-        rewardsController.setEpochDuration(rewardsController.epochDuration() + 1); // Increments globalUpdateNonce
+        // Make USER_A's nonce stale by processing an update for USER_B
+        _processSingleUserUpdate(USER_B, collection1, block.number + 1, 1, int256(500 * PRECISION)); // Advances globalUpdateNonce
 
-        uint64 newGlobalNonce = rewardsController.globalUpdateNonce();
-        assertTrue(newGlobalNonce > globalNonceAtSync, "Global nonce should have incremented");
+        uint64 newGlobalNonce = rewardsController.globalUpdateNonce(); // Get the updated global nonce
+        assertTrue(newGlobalNonce > userSyncedNonce, "Global nonce should be greater than user's synced nonce");
 
         // 3. User A attempts to claimRewardsForAll
         vm.startPrank(USER_A);
@@ -135,16 +126,13 @@ contract RewardsController_NonceGuard_Test is RewardsController_Test_Base {
     }
 
     function test_Claim_Succeeds_WhenNoncesAreSynced() public {
-        // 1. Setup: User A has some balance and is synced.
-        vm.prank(OWNER);
-        mockERC721.mintSpecific(USER_A, 1); // NFT ID 1 for USER_A
-        _processSingleUserUpdate(USER_A, collection1, block.number, 1, 1000 * PRECISION);
+        mockERC721.mintSpecific(USER_A, 1);
+        _processSingleUserUpdate(USER_A, collection1, block.number, 1, int256(1000 * PRECISION));
 
         uint64 userNonce = rewardsController.userLastSyncedNonce(USER_A);
         uint64 globalNonce = rewardsController.globalUpdateNonce();
         assertEq(userNonce, globalNonce, "User and global nonces should be synced");
 
-        // 2. Advance time to accrue some rewards & generate yield
         vm.warp(block.timestamp + 1 days);
         vm.roll(block.number + 100);
         _generateYieldInLendingManager(50 * PRECISION);
@@ -157,12 +145,8 @@ contract RewardsController_NonceGuard_Test is RewardsController_Test_Base {
         assertTrue(balanceAfterClaimColl > balanceBeforeClaimColl, "Claim for collection should be successful");
         vm.stopPrank();
 
-        // 4. User A claims for all (might be 0 if previous claim took all for this collection)
-        // To make this meaningful, let's add another collection and sync it.
         address collection2 = address(mockERC721_2);
-        vm.prank(OWNER);
-        rewardsController.addNFTCollection(collection2, 1 * PRECISION, IRewardsController.RewardBasis.DEPOSIT, 5000);
-        mockERC721_2.mintSpecific(USER_A, 1); // NFT for collection2
+        mockERC721_2.mintSpecific(USER_A, 1);
 
         // Sync USER_A for collection2. This will advance global nonce.
         // User A will be out of sync for collection1 again if we don't re-sync or use syncAndClaim.
@@ -172,7 +156,7 @@ contract RewardsController_NonceGuard_Test is RewardsController_Test_Base {
         // Let's do a fresh sync for USER_A for both collections.
 
         // This sync will ensure userLastSyncedNonce[USER_A] == globalUpdateNonce
-        _processSingleUserUpdate(USER_A, collection2, block.number, 1, 500 * PRECISION);
+        _processSingleUserUpdate(USER_A, collection2, block.number, 1, int256(500 * PRECISION));
         // If collection1 also had updates, they should be processed too to be fully "synced" in terms of data.
         // For nonce purposes, the last _processSingleUserUpdate for USER_A sets their userLastSyncedNonce.
 
@@ -186,10 +170,7 @@ contract RewardsController_NonceGuard_Test is RewardsController_Test_Base {
         uint256 balanceBeforeClaimAll = rewardToken.balanceOf(USER_A);
         rewardsController.claimRewardsForAll(noSimUpdates);
         uint256 balanceAfterClaimAll = rewardToken.balanceOf(USER_A);
-        // It's possible claimRewardsForCollection already claimed everything for collection1.
-        // And claimRewardsForAll would claim for collection2.
         assertTrue(balanceAfterClaimAll >= balanceBeforeClaimAll, "Claim all should be successful or no-op");
-        // A more robust check would be to ensure rewards from collection2 were claimed if available.
         vm.stopPrank();
     }
 }

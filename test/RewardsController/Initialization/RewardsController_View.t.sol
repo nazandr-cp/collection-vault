@@ -127,7 +127,7 @@ contract RewardsController_View is RewardsController_Test_Base {
         assertTrue(initialFoundCAlt, "Initial Collection Alt not found");
 
         // Add another (NFT_COLLECTION_3)
-        vm.startPrank(OWNER);
+        vm.startPrank(ADMIN);
         rewardsController.addNFTCollection(
             NFT_COLLECTION_3, BETA_1, IRewardsController.RewardBasis.BORROW, VALID_REWARD_SHARE_PERCENTAGE
         );
@@ -153,13 +153,6 @@ contract RewardsController_View is RewardsController_Test_Base {
         vm.roll(block1);
         _processSingleUserUpdate(USER_A, address(mockERC721), block1, 2, 100 ether); // Use mock address
 
-        // (
-        //     uint256 lastRewardIndex,
-        //     uint256 accruedReward,
-        //     uint256 lastNFTBalance,
-        //     uint256 lastBalance,
-        //     uint256 lastUpdateBlock
-        // ) = rewardsController.userNFTData(USER_A, address(mockERC721)); // Use mock address
         RewardsController.UserRewardState memory state =
             rewardsController.getUserRewardState(USER_A, address(mockERC721));
 

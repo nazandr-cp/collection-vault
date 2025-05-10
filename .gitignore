@@ -20,4 +20,5 @@ docs/
 /dependencies
 .DS_Store
 .roomodes
+.roo
 broadcast

@@ -97,20 +97,18 @@ contract RewardsController_Rewards is RewardsController_Test_Base {
         );
         IRewardsController.BalanceUpdateData[] memory emptyUpdates; // For syncing USER_B
         IRewardsController.BalanceUpdateData[] memory noSimUpdatesForClaim; // For USER_B's claim part of syncAndClaim
-        vm.prank(USER_B);
+
+        // Fetch nonce first
+        uint256 nonceForUserBClaim = rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER);
+        // Then sign
+        bytes memory signatureForUserBClaim =
+            _signUserBalanceUpdates(USER_B, emptyUpdates, nonceForUserBClaim, UPDATER_PRIVATE_KEY);
+
         // USER_B syncs (with empty updates) and then claims for mockERC721_alt.
         // This updates USER_B's nonce and also updates the globalRewardIndex.
-        // Assuming _signBalanceUpdates is available from RewardsController_Test_Base.sol
-        // and 'address(this)' is the authorizedUpdater in the test setup.
-        rewardsController.syncAndClaim(
-            AUTHORIZED_UPDATER,
-            emptyUpdates,
-            _signUserBalanceUpdates(
-                USER_B, emptyUpdates, rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER), UPDATER_PRIVATE_KEY
-            ),
-            noSimUpdatesForClaim
-        );
-        vm.prank(address(this)); // Revert prank
+        vm.prank(USER_B);
+        rewardsController.syncAndClaim(AUTHORIZED_UPDATER, emptyUpdates, signatureForUserBClaim, noSimUpdatesForClaim);
+        vm.stopPrank(); // Revert prank
         console.log(
             "test_PreviewRewards_BasicAccrual: globalRewardIndex AFTER USER_B claim: %s",
             rewardsController.globalRewardIndex()
@@ -163,16 +161,16 @@ contract RewardsController_Rewards is RewardsController_Test_Base {
         // Update globalRewardIndex in the controller
         IRewardsController.BalanceUpdateData[] memory emptyUpdates; // For syncing USER_B
         IRewardsController.BalanceUpdateData[] memory noSimUpdatesForClaim; // For USER_B's claim part of syncAndClaim
+
+        // Fetch nonce first
+        uint256 nonceForUserBClaim = rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER);
+        // Then sign
+        bytes memory signatureForUserBClaim =
+            _signUserBalanceUpdates(USER_B, emptyUpdates, nonceForUserBClaim, UPDATER_PRIVATE_KEY);
+
         vm.prank(USER_B);
-        rewardsController.syncAndClaim(
-            AUTHORIZED_UPDATER,
-            emptyUpdates,
-            _signUserBalanceUpdates(
-                USER_B, emptyUpdates, rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER), UPDATER_PRIVATE_KEY
-            ),
-            noSimUpdatesForClaim
-        );
-        vm.prank(address(this)); // Revert prank
+        rewardsController.syncAndClaim(AUTHORIZED_UPDATER, emptyUpdates, signatureForUserBClaim, noSimUpdatesForClaim);
+        vm.stopPrank(); // Revert prank
 
         IRewardsController.BalanceUpdateData[] memory simUpdates = new IRewardsController.BalanceUpdateData[](1);
         simUpdates[0] = IRewardsController.BalanceUpdateData({
@@ -214,16 +212,16 @@ contract RewardsController_Rewards is RewardsController_Test_Base {
         // Update globalRewardIndex in the controller
         IRewardsController.BalanceUpdateData[] memory emptyUpdates; // For syncing USER_B
         IRewardsController.BalanceUpdateData[] memory noSimUpdatesForClaim; // For USER_B's claim part of syncAndClaim
+
+        // Fetch nonce first
+        uint256 nonceForUserBClaim = rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER);
+        // Then sign
+        bytes memory signatureForUserBClaim =
+            _signUserBalanceUpdates(USER_B, emptyUpdates, nonceForUserBClaim, UPDATER_PRIVATE_KEY);
+
         vm.prank(USER_B);
-        rewardsController.syncAndClaim(
-            AUTHORIZED_UPDATER,
-            emptyUpdates,
-            _signUserBalanceUpdates(
-                USER_B, emptyUpdates, rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER), UPDATER_PRIVATE_KEY
-            ),
-            noSimUpdatesForClaim
-        );
-        vm.prank(address(this)); // Revert prank
+        rewardsController.syncAndClaim(AUTHORIZED_UPDATER, emptyUpdates, signatureForUserBClaim, noSimUpdatesForClaim);
+        vm.stopPrank(); // Revert prank
 
         IRewardsController.BalanceUpdateData[] memory simUpdates = new IRewardsController.BalanceUpdateData[](1);
         simUpdates[0] = IRewardsController.BalanceUpdateData({

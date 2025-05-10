@@ -24,19 +24,23 @@ interface IRewardsController {
         int256 balanceDelta;
     }
 
-    struct UserBalanceUpdateData {
-        address user;
-        address collection;
-        uint256 blockNumber;
-        int256 nftDelta;
-        int256 balanceDelta;
-    }
-
     struct UserCollectionTracking {
         uint256 lastUpdateBlock;
         uint256 lastNFTBalance;
         uint256 lastBalance;
         uint256 lastUserRewardIndex;
+    }
+
+    /// @notice Represents a snapshot of a user's reward-relevant state at a specific point in time (blockNumber and rewardIndex).
+    /// @param blockNumber The block number when this state segment began.
+    /// @param nftBalance The user's NFT balance during this segment.
+    /// @param balance The user's token balance (e.g., LP tokens) during this segment.
+    /// @param rewardIndex The global reward index at the start of this segment (at blockNumber).
+    struct RewardSnapshot {
+        uint32 blockNumber;
+        uint32 nftBalance;
+        uint128 balance;
+        uint256 rewardIndex;
     }
 
     // Events
@@ -55,6 +59,7 @@ interface IRewardsController {
     event RewardsClaimedForAll(address indexed user, uint256 totalAmount);
     event YieldTransferCapped(address indexed user, uint256 calculatedReward, uint256 transferredAmount);
     event StaleClaimAttempt(address indexed user, uint64 expectedNonce, uint64 userNonce);
+    event EpochDurationChanged(uint256 oldDuration, uint256 newDuration, address indexed changedBy);
     event CollectionConfigChanged(
         address indexed collection,
         uint96 oldBeta,
@@ -141,6 +146,7 @@ interface IRewardsController {
     ) external returns (uint256 pendingReward);
     function isCollectionWhitelisted(address collection) external view returns (bool);
     function getWhitelistedCollections() external view returns (address[] memory collections);
+    function getUserSnapshotsLength(address user, address collection) external view returns (uint256);
 
     // Claiming Functions
     function claimRewardsForCollection(address nftCollection, BalanceUpdateData[] calldata simulatedUpdates) external;

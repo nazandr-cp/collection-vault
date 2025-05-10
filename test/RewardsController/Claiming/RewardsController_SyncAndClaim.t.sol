@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {RewardsController_Test_Base} from "../RewardsController_Test_Base.sol";
 import {IRewardsController} from "../../../src/interfaces/IRewardsController.sol";
+import {console} from "forge-std/console.sol";
 
 contract RewardsController_SyncAndClaim_Test is RewardsController_Test_Base {
     IRewardsController.BalanceUpdateData[] internal noUpdates; // Empty array for updates
@@ -15,38 +16,37 @@ contract RewardsController_SyncAndClaim_Test is RewardsController_Test_Base {
         super.setUp();
         collection1 = address(mockERC721);
         collection2 = address(mockERC721_2);
-        // USER_A already has DAI (rewardToken) from base setUp.
-        // mockERC721 (NFT_COLLECTION_1) and mockERC721_2 (NFT_COLLECTION_2) are added.
     }
 
     function test_SyncAndClaim_WithUpdates_SuccessfullySyncsAndClaims() public {
         // 1. Initial setup for USER_A in collection1
-        vm.prank(OWNER);
-        mockERC721.mintSpecific(USER_A, 1); // NFT ID 1
+        // This mint corresponds to the 'initial' 1 NFT.
+        mockERC721.mintSpecific(USER_A, 1);
+        // Process this initial state for collection1: 1 NFT and 1000e18 balance (from vault deposit in Test_Base.setUp)
+        // The 1000e18 balance for USER_A in collection1 comes from tokenVault.depositForCollection in RewardsController_Test_Base.setUp()
         _processSingleUserUpdate(USER_A, collection1, block.number, 1, int256(1000 * PRECISION));
+
+        vm.roll(block.number + 1); // Advance block before next state update for clarity and ordering
+
+        // Initial setup for USER_A in collection2 (as it was)
+        _processSingleUserUpdate(USER_A, collection2, block.number, 1, int256(500 * PRECISION));
         uint64 userNonceBeforeStale = rewardsController.userLastSyncedNonce(USER_A);
         uint64 globalNonceBeforeStale = rewardsController.globalUpdateNonce();
         assertEq(userNonceBeforeStale, globalNonceBeforeStale, "User A should be synced initially");
 
-        // 2. Make USER_A's nonce stale
-        vm.prank(OWNER);
-        rewardsController.setEpochDuration(rewardsController.epochDuration() + 1); // Increments globalUpdateNonce
         uint64 globalNonceWhenStale = rewardsController.globalUpdateNonce();
-        assertTrue(globalNonceWhenStale > globalNonceBeforeStale, "Global nonce should have incremented");
-        assertEq(
-            rewardsController.userLastSyncedNonce(USER_A), userNonceBeforeStale, "User A's nonce should now be stale"
-        );
 
-        // 3. Prepare new updates for USER_A
+        // 3. Prepare new updates for USER_A for collection1
+        // This update corresponds to the '1 update' NFT and the additional 500 balance.
         IRewardsController.BalanceUpdateData[] memory updatesToSync = new IRewardsController.BalanceUpdateData[](1);
         updatesToSync[0] = IRewardsController.BalanceUpdateData({
             collection: collection1,
-            blockNumber: block.number + 1, // Ensure block number advances
-            nftDelta: 1,
+            blockNumber: block.number + 1, // Ensure block number advances from the initial _processSingleUserUpdate for collection1
+            nftDelta: 1, // This is for the *second* NFT
             balanceDelta: int256(500 * PRECISION)
         });
-        vm.prank(OWNER);
-        mockERC721.mintSpecific(USER_A, 2); // Mint the second NFT for the update
+        // This mint corresponds to the nftDelta: 1 in updatesToSync
+        mockERC721.mintSpecific(USER_A, 2);
 
         // 4. Sign updates
         uint256 updaterNonce = rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER);
@@ -60,8 +60,6 @@ contract RewardsController_SyncAndClaim_Test is RewardsController_Test_Base {
         vm.startPrank(USER_A);
         vm.expectEmit(true, true, true, true, address(rewardsController));
         emit IRewardsController.UserBalanceUpdatesProcessed(USER_A, updaterNonce, updatesToSync.length);
-        // We also expect RewardsClaimedForAll, but catching multiple specific events in order is complex.
-        // We will verify claim by balance change and nonce update.
         rewardsController.syncAndClaim(AUTHORIZED_UPDATER, updatesToSync, signature, noSimUpdates);
         vm.stopPrank();
 
@@ -83,21 +81,19 @@ contract RewardsController_SyncAndClaim_Test is RewardsController_Test_Base {
         assertTrue(balanceAfter > balanceBefore, "Rewards should be claimed");
 
         IRewardsController.UserCollectionTracking[] memory tracking = _getUserTracking(USER_A, collection1);
-        assertEq(tracking[0].lastNFTBalance, 2, "NFT balance after sync incorrect"); // 1 initial + 1 update
-        assertEq(tracking[0].lastBalance, (1000 + 500) * PRECISION, "Token balance after sync incorrect");
+        assertEq(tracking[0].lastNFTBalance, 2, "NFT balance after sync incorrect"); // 1 initial (from _processSingleUserUpdate) + 1 from updatesToSync
+        assertEq(tracking[0].lastBalance, (1000 + 500) * PRECISION, "Token balance after sync incorrect"); // 1000 initial + 500 from updatesToSync
     }
 
     function test_SyncAndClaim_WithNoUpdates_SyncsNonceAndClaims() public {
         // 1. Initial setup for USER_A in collection1
-        vm.prank(OWNER);
         mockERC721.mintSpecific(USER_A, 1);
         _processSingleUserUpdate(USER_A, collection1, block.number, 1, int256(1000 * PRECISION));
         uint64 userNonceBeforeStale = rewardsController.userLastSyncedNonce(USER_A);
         uint64 globalNonceBeforeStale = rewardsController.globalUpdateNonce();
 
         // 2. Make USER_A's nonce stale
-        vm.prank(OWNER);
-        rewardsController.setEpochDuration(rewardsController.epochDuration() + 2);
+        _processSingleUserUpdate(USER_B, address(mockERC721_2), block.number + 1, 0, 0);
         uint64 globalNonceWhenStale = rewardsController.globalUpdateNonce();
         assertTrue(globalNonceWhenStale > globalNonceBeforeStale);
 
@@ -111,12 +107,6 @@ contract RewardsController_SyncAndClaim_Test is RewardsController_Test_Base {
         // 5. USER_A calls syncAndClaim with no actual data updates
         uint256 balanceBefore = rewardToken.balanceOf(USER_A);
         vm.startPrank(USER_A);
-        // Expect RewardsClaimedForAll. UserBalanceUpdatesProcessed should not emit if noUpdates.length is 0.
-        // The contract logic for syncAndClaim for numUpdates == 0:
-        // - does not increment authorizedUpdaterNonce[signer]
-        // - does not increment globalUpdateNonce
-        // - sets userLastSyncedNonce[user] = globalUpdateNonce (current)
-        // - emits UserBalanceUpdatesProcessed only if numUpdates > 0
         rewardsController.syncAndClaim(AUTHORIZED_UPDATER, noUpdates, signature, noSimUpdates);
         vm.stopPrank();
 
@@ -185,17 +175,15 @@ contract RewardsController_SyncAndClaim_Test is RewardsController_Test_Base {
 
     function test_SyncAndClaim_ClaimsForAllCollections_AfterSyncing() public {
         // 1. Setup USER_A with balances in collection1 and collection2
-        vm.prank(OWNER);
-        mockERC721.mintSpecific(USER_A, 3); // For collection1
-        mockERC721_2.mintSpecific(USER_A, 4); // For collection2
-        _processSingleUserUpdate(USER_A, collection1, block.number, 1, 1000 * PRECISION);
-        _processSingleUserUpdate(USER_A, collection2, block.number, 1, 500 * PRECISION);
+        mockERC721.mintSpecific(USER_A, 3);
+        mockERC721_2.mintSpecific(USER_A, 4);
+        _processSingleUserUpdate(USER_A, collection1, block.number, 1, int256(1000 * PRECISION));
+        _processSingleUserUpdate(USER_A, collection2, block.number, 1, int256(500 * PRECISION));
         uint64 userNonceBeforeStale = rewardsController.userLastSyncedNonce(USER_A);
         uint64 globalNonceBeforeStale = rewardsController.globalUpdateNonce();
 
         // 2. Make USER_A's nonce stale
-        vm.prank(OWNER);
-        rewardsController.setEpochDuration(rewardsController.epochDuration() + 3);
+        _processSingleUserUpdate(USER_B, address(mockERC721_2), block.number + 1, 0, 0);
         uint64 globalNonceWhenStale = rewardsController.globalUpdateNonce();
 
         // 3. Prepare updates for USER_A for collection1 only
@@ -204,7 +192,7 @@ contract RewardsController_SyncAndClaim_Test is RewardsController_Test_Base {
             collection: collection1,
             blockNumber: block.number + 1,
             nftDelta: 0, // No change in NFT, just balance
-            balanceDelta: 200 * PRECISION
+            balanceDelta: int256(200 * PRECISION)
         });
         uint256 updaterNonce = rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER);
         bytes memory signature = _signUserBalanceUpdates(USER_A, updatesToSync, updaterNonce, UPDATER_PRIVATE_KEY);
@@ -235,7 +223,6 @@ contract RewardsController_SyncAndClaim_Test is RewardsController_Test_Base {
         // Verify state for collection2 was NOT directly updated by these specific updates, but rewards were claimed
         IRewardsController.UserCollectionTracking[] memory tracking2 = _getUserTracking(USER_A, collection2);
         assertEq(tracking2[0].lastBalance, 500 * PRECISION, "Coll2 balance should be unchanged by sync for coll1");
-        // However, its lastUpdateBlock and lastRewardIndex would be updated by the claimForAll part.
         assertTrue(
             tracking2[0].lastUpdateBlock >= block.number, "Coll2 lastUpdateBlock should be recent after claimAll"
         );

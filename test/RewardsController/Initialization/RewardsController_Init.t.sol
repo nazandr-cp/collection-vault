@@ -9,11 +9,11 @@ import {RewardsController} from "../../../src/RewardsController.sol";
 import {IRewardsController} from "../../../src/interfaces/IRewardsController.sol";
 import {RewardsController_Test_Base} from "../RewardsController_Test_Base.sol";
 import {ERC4626Vault} from "../../../src/ERC4626Vault.sol";
-import {MockCToken} from "../../../src/mocks/MockCToken.sol"; // Add import
+import {MockCToken} from "../../../src/mocks/MockCToken.sol";
 
 contract RewardsController_Init is RewardsController_Test_Base {
     function test_Initialize_CorrectState() public view {
-        assertEq(rewardsController.owner(), OWNER);
+        assertEq(rewardsController.owner(), ADMIN);
         assertEq(address(rewardsController.lendingManager()), address(lendingManager));
         assertEq(address(rewardsController.vault()), address(tokenVault));
         assertEq(rewardsController.authorizedUpdater(), AUTHORIZED_UPDATER);

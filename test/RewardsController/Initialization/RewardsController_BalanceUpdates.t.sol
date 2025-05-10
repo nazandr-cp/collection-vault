@@ -8,6 +8,15 @@ import {RewardsController} from "../../../src/RewardsController.sol";
 import {RewardsController_Test_Base} from "../RewardsController_Test_Base.sol";
 
 contract RewardsController_Balance_Updates is RewardsController_Test_Base {
+    // Define local struct to replace the removed IRewardsController.UserBalanceUpdateData
+    struct _LocalUserBalanceUpdateData {
+        address user;
+        address collection;
+        uint256 blockNumber;
+        int256 nftDelta;
+        int256 balanceDelta;
+    }
+
     // --- Balance Update Tests ---
 
     // --- _processSingleUpdate (Internal Logic via Public Functions) ---
@@ -502,16 +511,15 @@ contract RewardsController_Balance_Updates is RewardsController_Test_Base {
         uint256 block2 = block.number + 2;
         vm.roll(block2);
 
-        IRewardsController.UserBalanceUpdateData[] memory updatesStruct =
-            new IRewardsController.UserBalanceUpdateData[](2);
-        updatesStruct[0] = IRewardsController.UserBalanceUpdateData({
+        _LocalUserBalanceUpdateData[] memory updatesStruct = new _LocalUserBalanceUpdateData[](2);
+        updatesStruct[0] = _LocalUserBalanceUpdateData({
             user: USER_A,
             collection: address(mockERC721),
             blockNumber: block1,
             nftDelta: 1,
             balanceDelta: 100 ether
         });
-        updatesStruct[1] = IRewardsController.UserBalanceUpdateData({
+        updatesStruct[1] = _LocalUserBalanceUpdateData({
             user: USER_B,
             collection: address(mockERC721_2),
             blockNumber: block2,

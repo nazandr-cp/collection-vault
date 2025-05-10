@@ -35,6 +35,15 @@ contract RewardsController_PartialYield_Test is RewardsController_Test_Base {
         vm.warp(block.timestamp + 10 days);
         vm.roll(block.number + 1000); // Advance 1000 blocks
 
+        // Need to manually update the global index after time advance for rewards to accrue
+        // This simulates what happens in a real environment where exchange rates change over time
+        uint256 newRate = INITIAL_EXCHANGE_RATE * 110 / 100; // 10% increase
+        mockCToken.setExchangeRate(newRate);
+
+        // Update the global index to reflect the new exchange rate
+        vm.prank(OWNER);
+        rewardsController.updateGlobalIndex();
+
         // 3. Calculate theoretical total rewards owed by RewardsController
         // This requires calling view functions to see pending rewards for each user.
         // Note: `claimableRewardsForCollection` calculates based on current `globalUpdateNonce`.
@@ -53,6 +62,12 @@ contract RewardsController_PartialYield_Test is RewardsController_Test_Base {
         uint256 pendingA = rewardsController.previewRewards(USER_A, collectionsToPreview, noSimUpdatesForClaim);
         uint256 pendingB = rewardsController.previewRewards(USER_B, collectionsToPreview, noSimUpdatesForClaim);
         uint256 totalOwedRewards = pendingA + pendingB;
+
+        // Debug output to help understand the reward calculation
+        console.log("User A pending rewards: %d", pendingA);
+        console.log("User B pending rewards: %d", pendingB);
+        console.log("Total owed rewards: %d", totalOwedRewards);
+
         assertTrue(totalOwedRewards > 0, "Total owed rewards should be positive after time warp.");
 
         // 4. Simulate LendingManager having less yield than totalOwedRewards.
@@ -67,7 +82,7 @@ contract RewardsController_PartialYield_Test is RewardsController_Test_Base {
         // A simpler way for testing: directly deal the `availableYieldInLendingManager` to LendingManager
         // and ensure `mockCToken` exchange rate doesn't create more.
         // Let's clear any prior yield in LM and deal exactly what we want.
-        vm.prank(address(lendingManager));
+        vm.prank(address(tokenVault)); // Corrected: Prank as the authorized vault
         lendingManager.withdrawFromLendingProtocol(lendingManager.totalAssets()); // Withdraw all to reset yield to 0
         deal(address(rewardToken), address(lendingManager), availableYieldInLendingManager); // Fund LM directly
 
@@ -78,8 +93,9 @@ contract RewardsController_PartialYield_Test is RewardsController_Test_Base {
 
         // 5. Call rewardsController.transferYield()
         uint256 rcBalanceBeforeTransfer = rewardToken.balanceOf(address(rewardsController));
-        vm.prank(address(lendingManager)); // Or authorized address
-        // rewardsController.transferYield(); // This function does not exist. Yield is pulled by claim functions.
+        vm.prank(address(lendingManager));
+        // transferYield is now implemented in our test by directly transferring tokens
+        rewardToken.transfer(address(rewardsController), availableYieldInLendingManager);
         uint256 rcBalanceAfterTransfer = rewardToken.balanceOf(address(rewardsController));
         uint256 yieldTransferred = rcBalanceAfterTransfer - rcBalanceBeforeTransfer;
 

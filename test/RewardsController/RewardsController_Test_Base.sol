@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 pragma solidity ^0.8.20;
 
-import {console} from "forge-std/console.sol";
+import "forge-std/console.sol";
 import {Test, Vm} from "forge-std/Test.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {RewardsController} from "../../src/RewardsController.sol";
@@ -25,9 +25,6 @@ import {MockCToken} from "../../src/mocks/MockCToken.sol";
 contract RewardsController_Test_Base is Test {
     using Strings for uint256;
 
-    bytes32 public constant USER_BALANCE_UPDATE_DATA_TYPEHASH_OLD = keccak256(
-        "UserBalanceUpdateData(address user,address collection,uint256 blockNumber,int256 nftDelta,int256 balanceDelta)"
-    );
     bytes32 public constant BALANCE_UPDATES_ARRAYS_TYPEHASH = keccak256(
         "BalanceUpdates(address[] users,address[] collections,uint256[] blockNumbers,int256[] nftDeltas,int256[] balanceDeltas,uint256 nonce)"
     );
@@ -103,10 +100,10 @@ contract RewardsController_Test_Base is Test {
         proxyAdmin = new ProxyAdmin(ADMIN);
         vm.stopPrank();
 
-        vm.startPrank(OWNER);
+        vm.startPrank(ADMIN); // Changed OWNER to ADMIN for RC deployment and ownership
         bytes memory initData = abi.encodeWithSelector(
             RewardsController.initialize.selector,
-            OWNER,
+            ADMIN, // RewardsController owner is ADMIN
             address(lendingManager),
             address(tokenVault),
             AUTHORIZED_UPDATER
@@ -114,10 +111,16 @@ contract RewardsController_Test_Base is Test {
         TransparentUpgradeableProxy proxy =
             new TransparentUpgradeableProxy(address(rewardsControllerImpl), address(proxyAdmin), initData);
         rewardsController = RewardsController(address(proxy));
+        vm.stopPrank(); // Stop pranking as ADMIN
 
+        // LendingManager roles are managed by OWNER (who has ADMIN_ROLE on LendingManager)
+        vm.startPrank(OWNER);
         lendingManager.revokeRewardsControllerRole(address(this));
         lendingManager.grantRewardsControllerRole(address(rewardsController));
+        vm.stopPrank();
 
+        // RewardsController onlyOwner functions are called by ADMIN
+        vm.startPrank(ADMIN);
         rewardsController.addNFTCollection(
             address(mockERC721), BETA_1, IRewardsController.RewardBasis.BORROW, VALID_REWARD_SHARE_PERCENTAGE
         );
@@ -127,8 +130,7 @@ contract RewardsController_Test_Base is Test {
         rewardsController.addNFTCollection(
             address(mockERC721_alt), BETA_1, IRewardsController.RewardBasis.DEPOSIT, VALID_REWARD_SHARE_PERCENTAGE
         );
-
-        vm.stopPrank();
+        vm.stopPrank(); // Stop pranking as ADMIN
 
         uint256 initialFunding = 1_000_000 ether;
         uint256 userFunding = 10_000 ether;
@@ -206,20 +208,29 @@ contract RewardsController_Test_Base is Test {
         uint256 privateKey
     ) internal view returns (bytes memory signature) {
         bytes32 updatesHash = _hashBalanceUpdates(updates);
-        console.logBytes32(updatesHash);
         bytes32 structHash = keccak256(abi.encode(USER_BALANCE_UPDATES_TYPEHASH, user, updatesHash, nonce));
-        console.log("TestBase._signUserBalanceUpdates: user =");
-        console.log(user);
-        console.log("TestBase._signUserBalanceUpdates: nonce =");
-        console.log(nonce);
-        console.log("TestBase._signUserBalanceUpdates: structHash =");
-        console.logBytes32(structHash);
         bytes32 domainSeparator = _buildDomainSeparator();
-        console.log("TestBase._signUserBalanceUpdates: domainSeparator =");
-        console.logBytes32(domainSeparator);
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
-        console.log("TestBase._signUserBalanceUpdates: final digest for signing =");
-        console.logBytes32(digest);
+
+        // Minimal logging for USER_B's signature in relevant tests
+        if (user == USER_B && nonce == 1) {
+            // Conditions specific to the failing scenario
+            console.log("--- Test Sig Gen (USER_B, nonce 1) ---");
+            console.log("_signUserBalanceUpdates: user (param):");
+            console.logAddress(user);
+            console.log("_signUserBalanceUpdates: nonce_for_struct:");
+            console.logUint(nonce);
+            console.log("_signUserBalanceUpdates: updatesHash_for_struct:");
+            console.logBytes32(updatesHash);
+            console.log("_signUserBalanceUpdates: structHash:");
+            console.logBytes32(structHash);
+            console.log("_signUserBalanceUpdates: domainSeparator:");
+            console.logBytes32(domainSeparator);
+            console.log("_signUserBalanceUpdates: digest:");
+            console.logBytes32(digest);
+            console.log("--------------------------------------");
+        }
+
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
         signature = abi.encodePacked(r, s, v);
     }
@@ -250,25 +261,25 @@ contract RewardsController_Test_Base is Test {
         signature = abi.encodePacked(r, s, v);
     }
 
-    function _hashUserBalanceUpdates_OLD(IRewardsController.UserBalanceUpdateData[] memory updates)
-        internal
-        pure
-        returns (bytes32)
-    {
-        bytes32[] memory dataHashes = new bytes32[](updates.length);
-        for (uint256 i = 0; i < updates.length; i++) {
-            dataHashes[i] = keccak256(
-                abi.encode(
-                    USER_BALANCE_UPDATE_DATA_TYPEHASH_OLD,
-                    updates[i].user,
-                    updates[i].collection,
-                    updates[i].blockNumber,
-                    updates[i].nftDelta,
-                    updates[i].balanceDelta
-                )
-            );
-        }
-        return keccak256(abi.encodePacked(dataHashes));
+    function _callProcessUserBalanceUpdates_WithNonce(
+        address user,
+        address collectionToUpdate, // Renamed for clarity in new function
+        uint256 updateBlockNumber, // Renamed for clarity in new function
+        int256 nftDelta,
+        int256 balanceDelta,
+        uint256 nonceToUse
+    ) internal {
+        IRewardsController.BalanceUpdateData[] memory updates = new IRewardsController.BalanceUpdateData[](1);
+        updates[0] = IRewardsController.BalanceUpdateData({
+            collection: collectionToUpdate,
+            blockNumber: updateBlockNumber,
+            nftDelta: nftDelta,
+            balanceDelta: balanceDelta
+        });
+
+        bytes memory signature = _signUserBalanceUpdates(user, updates, nonceToUse, UPDATER_PRIVATE_KEY);
+
+        rewardsController.processUserBalanceUpdates(AUTHORIZED_UPDATER, user, updates, signature);
     }
 
     function _processSingleUserUpdate(
@@ -279,15 +290,7 @@ contract RewardsController_Test_Base is Test {
         int256 balanceDelta
     ) internal {
         uint256 nonce = rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER);
-        IRewardsController.BalanceUpdateData[] memory updates = new IRewardsController.BalanceUpdateData[](1);
-        updates[0] = IRewardsController.BalanceUpdateData({
-            collection: collection,
-            blockNumber: blockNum,
-            nftDelta: nftDelta,
-            balanceDelta: balanceDelta
-        });
-        bytes memory sig = _signUserBalanceUpdates(user, updates, nonce, UPDATER_PRIVATE_KEY);
-        rewardsController.processUserBalanceUpdates(AUTHORIZED_UPDATER, user, updates, sig);
+        _callProcessUserBalanceUpdates_WithNonce(user, collection, blockNum, nftDelta, balanceDelta, nonce);
     }
 
     function _assertRewardsClaimedForCollectionLog(
@@ -367,14 +370,9 @@ contract RewardsController_Test_Base is Test {
     }
 
     function _generateYieldInLendingManager(uint256 targetYield) internal {
-        console.log("--- _generateYieldInLendingManager ---");
-        console.log("Target Yield to Generate: %d", targetYield);
-
         uint256 currentPrincipal = lendingManager.totalPrincipalDeposited();
-        console.log("Current Principal in LM (before any new deposit): %d", currentPrincipal);
         if (currentPrincipal == 0) {
             uint256 principalAmount = 100 ether;
-            console.log("No principal found, depositing: %d", principalAmount);
             vm.startPrank(DAI_WHALE);
             rewardToken.transfer(address(tokenVault), principalAmount);
             vm.stopPrank();
@@ -384,55 +382,35 @@ contract RewardsController_Test_Base is Test {
             lendingManager.depositToLendingProtocol(principalAmount);
             vm.stopPrank();
             currentPrincipal = lendingManager.totalPrincipalDeposited();
-            console.log("Deposited Principal now: %d", currentPrincipal);
         }
 
         uint256 cTokenBalanceOfLM = mockCToken.balanceOf(address(lendingManager));
-        console.log("cToken Balance of LM: %d", cTokenBalanceOfLM);
         uint256 exchangeRateToSetInitially;
 
         if (cTokenBalanceOfLM == 0) {
-            if (targetYield > 0) {
-                console.log("Warning: LM cToken balance is 0, but targetYield > 0. Cannot use exchange rate for yield.");
-            }
+            if (targetYield > 0) {}
             exchangeRateToSetInitially = mockCToken.exchangeRateStored();
-            console.log("LM cToken balance is 0. Keeping current ER: %d", exchangeRateToSetInitially);
         } else {
             uint256 finalTargetTotalUnderlying = currentPrincipal + targetYield;
-            console.log("Final Target Total Underlying (Principal + TargetYield): %d", finalTargetTotalUnderlying);
 
             uint256 finalTargetExchangeRate = (finalTargetTotalUnderlying * 1e18) / cTokenBalanceOfLM;
-            console.log("Calculated Final Target Exchange Rate (ER_final): %d", finalTargetExchangeRate);
 
             uint256 increment = mockCToken.accrualIncrement();
-            console.log("MockCToken Accrual Increment: %d", increment);
 
             if (finalTargetExchangeRate > increment) {
                 exchangeRateToSetInitially = finalTargetExchangeRate - increment;
             } else {
                 exchangeRateToSetInitially = finalTargetExchangeRate;
-                if (finalTargetExchangeRate > 0 && finalTargetExchangeRate <= increment) {
-                    console.log(
-                        "Log: ER_final (%d) <= increment (%d). Setting ER_initial to ER_final.",
-                        finalTargetExchangeRate,
-                        increment
-                    );
-                }
+                if (finalTargetExchangeRate > 0 && finalTargetExchangeRate <= increment) {}
             }
             if (exchangeRateToSetInitially == 0 && (currentPrincipal > 0 || targetYield > 0)) {
                 exchangeRateToSetInitially = 1;
-                console.log("ER_initial was calculated as 0, set to 1.");
             }
-            console.log("Exchange Rate to Set Initially in MockCToken (ER_initial): %d", exchangeRateToSetInitially);
             mockCToken.setExchangeRate(exchangeRateToSetInitially);
-            console.log(
-                "MockCToken ER after setExchangeRate (should be ER_initial): %d", mockCToken.exchangeRateStored()
-            );
         }
 
         vm.startPrank(DAI_WHALE);
         uint256 fundingForMockCToken = targetYield > 0 ? targetYield * 5 : (100 ether / 2);
-        console.log("Funding MockCToken with underlying: %d", fundingForMockCToken);
         rewardToken.transfer(address(mockCToken), fundingForMockCToken);
         vm.stopPrank();
 
@@ -440,19 +418,10 @@ contract RewardsController_Test_Base is Test {
         uint256 lmAvailableYieldBeforeImplicitAccrual = lmTotalAssetsBeforeImplicitAccrual > currentPrincipal
             ? lmTotalAssetsBeforeImplicitAccrual - currentPrincipal
             : 0;
-        console.log(
-            "LM availableYield (using ER_initial, BEFORE claim's accrual): %d (Assets: %d, Principal: %d)",
-            lmAvailableYieldBeforeImplicitAccrual,
-            lmTotalAssetsBeforeImplicitAccrual,
-            currentPrincipal
-        );
 
         if (targetYield > 0) {
-            console.log("Dealing %d rewardToken to LendingManager contract", targetYield);
             deal(address(rewardToken), address(lendingManager), targetYield);
         }
-
-        console.log("--- End _generateYieldInLendingManager ---");
     }
 
     function _calculateRewardsManually(
@@ -470,12 +439,9 @@ contract RewardsController_Test_Base is Test {
         }
 
         uint256 indexDelta = endIndex - startIndex;
-        (
-            uint96 betaLocal,
-            uint16 rewardSharePercentageLocal,
-            IRewardsController.RewardBasis, /*rewardBasis*/
-            bool /*isWhitelisted*/
-        ) = rewardsController.collectionConfigs(collection);
+        (uint96 betaLocal, uint16 rewardSharePercentageLocal) = rewardsController.collectionConfigs(collection);
+        IRewardsController.RewardBasis rewardBasisLocal = rewardsController.collectionRewardBasis(collection);
+        bool isWhitelisted = rewardsController.isCollectionWhitelisted(collection);
         uint256 rewardSharePercentage = rewardSharePercentageLocal;
 
         // Simplified replication of RewardsController._calculateRewardsWithDelta

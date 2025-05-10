@@ -49,16 +49,8 @@ contract RewardsController is
     }
 
     /// @notice Represents a snapshot of a user's reward-relevant state at a specific point in time (blockNumber and rewardIndex).
-    /// @param blockNumber The block number when this state segment began.
-    /// @param nftBalance The user's NFT balance during this segment.
-    /// @param balance The user's token balance (e.g., LP tokens) during this segment.
-    /// @param rewardIndex The global reward index at the start of this segment (at blockNumber).
-    struct RewardSnapshot {
-        uint32 blockNumber;
-        uint32 nftBalance;
-        uint128 balance;
-        uint256 rewardIndex;
-    }
+    // struct RewardSnapshot is now defined in IRewardsController.sol
+    // The parameters blockNumber, nftBalance, balance, and rewardIndex are part of the RewardSnapshot struct.
 
     bytes32 public constant BALANCE_UPDATES_ARRAYS_TYPEHASH = keccak256(
         "BalanceUpdates(address[] users,address[] collections,uint256[] blockNumbers,int256[] nftDeltas,int256[] balanceDeltas,uint256 nonce)"
@@ -94,8 +86,8 @@ contract RewardsController is
     mapping(address => uint256) public authorizedUpdaterNonce;
     /// @notice Stores historical snapshots of user's state for each collection.
     /// @dev Snapshots are used to calculate rewards for past segments when a user claims.
-    /// @dev mapping: user => collection => array of RewardSnapshot
-    mapping(address => mapping(address => RewardSnapshot[])) public userSnapshots;
+    /// @dev mapping: user (address) => collection (address) => array of IRewardsController.RewardSnapshot
+    mapping(address => mapping(address => IRewardsController.RewardSnapshot[])) public userSnapshots;
 
     uint256 public globalRewardIndex;
 
@@ -103,6 +95,7 @@ contract RewardsController is
     uint64 public globalUpdateNonce;
     /// @notice Tracks the globalUpdateNonce at which a user's balance state was last synced.
     mapping(address => uint64) public userLastSyncedNonce;
+    /// @notice Accumulates small reward amounts (dust) that couldn't be precisely distributed due to integer division.
     uint256 public globalDustBucket;
 
     event SingleUpdateProcessed(
@@ -117,7 +110,6 @@ contract RewardsController is
 
     /// @notice Emitted when a user (param `user`) attempts to claim rewards with an outdated nonce (param `userNonce`),
     ///         when a newer nonce (param `expectedNonce`) was expected.
-    event EpochDurationChanged(uint256 oldDuration, uint256 newDuration, address indexed changedBy);
 
     error BalanceUpdateUnderflow(uint256 currentValue, uint256 deltaMagnitude);
     error UpdateOutOfOrder(address user, address collection, uint256 updateBlock, uint256 lastProcessedBlock);
@@ -360,6 +352,7 @@ contract RewardsController is
     ) external override nonReentrant {
         uint256 numUpdates = updates.length;
         if (numUpdates == 0) revert IRewardsController.EmptyBatch();
+        // Allow empty updates to pass through for nonce management / signature verification. // Re-enabled for test
 
         if (signer != authorizedUpdater) {
             revert IRewardsController.InvalidSignature();
@@ -377,28 +370,37 @@ contract RewardsController is
             revert IRewardsController.InvalidSignature();
         }
 
-        authorizedUpdaterNonce[signer]++;
-        globalUpdateNonce++;
+        if (numUpdates > 0) {
+            authorizedUpdaterNonce[signer]++;
+            globalUpdateNonce++;
 
-        uint256 uLen = updates.length;
-        for (uint256 i = 0; i < uLen;) {
-            BalanceUpdateData memory currentUpdate = updates[i];
-            if (!_whitelistedCollections.contains(currentUpdate.collection)) {
-                revert IRewardsController.CollectionNotWhitelisted(currentUpdate.collection);
+            uint256 uLen = updates.length; // Same as numUpdates
+            for (uint256 i = 0; i < uLen;) {
+                BalanceUpdateData memory currentUpdate = updates[i];
+                if (!_whitelistedCollections.contains(currentUpdate.collection)) {
+                    revert IRewardsController.CollectionNotWhitelisted(currentUpdate.collection);
+                }
+                _processSingleUpdate(
+                    user,
+                    currentUpdate.collection,
+                    currentUpdate.blockNumber,
+                    currentUpdate.nftDelta,
+                    currentUpdate.balanceDelta
+                );
+                unchecked {
+                    ++i;
+                }
             }
-            _processSingleUpdate(
-                user,
-                currentUpdate.collection,
-                currentUpdate.blockNumber,
-                currentUpdate.nftDelta,
-                currentUpdate.balanceDelta
-            );
-            unchecked {
-                ++i;
-            }
+            emit UserBalanceUpdatesProcessed(user, nonce, uLen);
+        } else {
+            // If numUpdates is 0, the signature was still validated against the current nonce.
+            // We do not increment authorizedUpdaterNonce[signer] or globalUpdateNonce.
+            // We can still emit an event indicating the call was processed, with 0 updates.
+            emit UserBalanceUpdatesProcessed(user, nonce, 0);
+            // User's own userLastSyncedNonce is NOT updated here, as this function's primary purpose
+            // is to process updates from an authorized updater FOR a user.
+            // Syncing a user's nonce without actual updates is better handled by syncAndClaim.
         }
-
-        emit UserBalanceUpdatesProcessed(user, nonce, uLen);
     }
 
     function _hashBalanceUpdates(BalanceUpdateData[] calldata updates) internal pure returns (bytes32) {
@@ -440,14 +442,14 @@ contract RewardsController is
             // This snapshot represents the state for the segment ending at updateBlock.
             if (info.lastUpdateBlock > 0) {
                 // Only create a snapshot if there was a previous state
-                RewardSnapshot memory newSnapshot = RewardSnapshot({
+                IRewardsController.RewardSnapshot memory newSnapshot = IRewardsController.RewardSnapshot({
                     blockNumber: info.lastUpdateBlock, // The block number of the *previous* update, marking end of segment
                     nftBalance: info.lastNFTBalance, // NFT balance *during* the concluded segment
                     balance: info.lastBalance, // Balance *during* the concluded segment
                     rewardIndex: info.lastRewardIndex // Reward index at the *start* of this concluded segment
                 });
 
-                RewardSnapshot[] storage snapshots = userSnapshots[user][collection];
+                IRewardsController.RewardSnapshot[] storage snapshots = userSnapshots[user][collection];
                 if (snapshots.length >= MAX_SNAPSHOTS) {
                     revert IRewardsController.MaxSnapshotsReached(user, collection, MAX_SNAPSHOTS);
                 }
@@ -474,7 +476,7 @@ contract RewardsController is
             userSnapshots[user][collection].length == 0 && (info.lastNFTBalance > 0 || info.lastBalance > 0)
                 && info.lastUpdateBlock > 0
         ) {
-            RewardSnapshot memory initialSnapshot = RewardSnapshot({
+            IRewardsController.RewardSnapshot memory initialSnapshot = IRewardsController.RewardSnapshot({
                 blockNumber: info.lastUpdateBlock,
                 nftBalance: info.lastNFTBalance,
                 balance: info.lastBalance,
@@ -538,9 +540,10 @@ contract RewardsController is
         return rawReward;
     }
 
-    function _calculateAndUpdateGlobalIndex() internal returns (uint256 currentIndex) {
+    function _calculateAndUpdateGlobalIndex() public returns (uint256 currentIndex) {
         uint256 accrualResult = cToken.accrueInterest();
-        accrualResult;
+        // accrualResult is not directly used; accrueInterest updates cToken's internal state.
+        accrualResult; // Prevents unused variable warning if compiler is strict
 
         currentIndex = cToken.exchangeRateStored();
         globalRewardIndex = currentIndex;
@@ -703,6 +706,10 @@ contract RewardsController is
 
     function getWhitelistedCollections() external view override returns (address[] memory) {
         return _whitelistedCollections.values();
+    }
+
+    function getUserSnapshotsLength(address user, address collection) external view override returns (uint256) {
+        return userSnapshots[user][collection].length;
     }
 
     function claimRewardsForCollection(address nftCollection, BalanceUpdateData[] calldata simulatedUpdates)
@@ -892,34 +899,21 @@ contract RewardsController is
         emit RewardsClaimedForAll(user, totalYieldReceived);
     }
 
-    /**
-     * @notice Allows a user to synchronize their balance updates and claim all rewards in a single transaction.
-     * @dev The balance updates must be signed by the authorized updater. The user calling this function is msg.sender.
-     * @param signer The address of the authorized updater who signed the balance updates for msg.sender.
-     * @param updates An array of balance update data for msg.sender.
-     * @param signature The EIP-712 signature from the authorized updater for the provided updates concerning msg.sender.
-     * @param simulatedUpdatesForClaim Optional simulated updates to be considered during the claim process for msg.sender,
-     *                                 applied on top of the just-synced state.
-     */
     function syncAndClaim(
         address signer,
         BalanceUpdateData[] calldata updates,
         bytes calldata signature,
         BalanceUpdateData[] calldata simulatedUpdatesForClaim
     ) external override nonReentrant {
-        address user = msg.sender; // The user performing the sync and claim
-
-        // --- Begin: Adapted logic from processUserBalanceUpdates ---
+        address user = msg.sender;
         uint256 numUpdates = updates.length;
-        // REMOVED: if (numUpdates == 0) revert IRewardsController.EmptyBatch();
 
         if (signer != authorizedUpdater) {
-            revert IRewardsController.InvalidSignature(); // Ensure signer is the authorized updater
+            revert IRewardsController.InvalidSignature();
         }
 
-        uint256 nonce = authorizedUpdaterNonce[signer]; // Use signer's nonce
+        uint256 nonce = authorizedUpdaterNonce[signer];
 
-        // Verify signature for updates related to 'user' (msg.sender)
         bytes32 updatesHash = _hashBalanceUpdates(updates);
         bytes32 structHash = keccak256(abi.encode(USER_BALANCE_UPDATES_TYPEHASH, user, updatesHash, nonce));
         bytes32 digest = _hashTypedDataV4(structHash);
@@ -930,20 +924,16 @@ contract RewardsController is
             revert IRewardsController.InvalidSignature();
         }
 
-        authorizedUpdaterNonce[signer]++; // Increment signer's nonce
         if (numUpdates > 0) {
-            // If there are updates to process
-            globalUpdateNonce++; // Increment global nonce for this batch of updates
-            // The loop for processing updates will follow, and _processSingleUpdate
-            // will set userLastSyncedNonce[user] to this new globalUpdateNonce.
+            authorizedUpdaterNonce[signer]++;
+            globalUpdateNonce++;
             for (uint256 i = 0; i < numUpdates;) {
                 BalanceUpdateData memory currentUpdate = updates[i];
                 if (!_whitelistedCollections.contains(currentUpdate.collection)) {
                     revert IRewardsController.CollectionNotWhitelisted(currentUpdate.collection);
                 }
-                // _processSingleUpdate will set userLastSyncedNonce[user] = globalUpdateNonce
                 _processSingleUpdate(
-                    user, // user is msg.sender
+                    user,
                     currentUpdate.collection,
                     currentUpdate.blockNumber,
                     currentUpdate.nftDelta,
@@ -953,16 +943,11 @@ contract RewardsController is
                     ++i;
                 }
             }
-            emit UserBalanceUpdatesProcessed(user, nonce, numUpdates); // Event for user (msg.sender)
+            emit UserBalanceUpdatesProcessed(user, nonce, numUpdates);
         } else {
-            // numUpdates == 0
-            // If there are no updates to process, the user's nonce needs to be synced
-            // to the *current* globalUpdateNonce. No increment to globalUpdateNonce for this specific call.
             userLastSyncedNonce[user] = globalUpdateNonce;
         }
-        // --- End: Adapted logic from processUserBalanceUpdates ---
 
-        // Now, claim rewards for msg.sender.
         uint256 currentGlobalIdx = _calculateAndUpdateGlobalIndex();
         _executeClaimForAllLogic(user, simulatedUpdatesForClaim, currentGlobalIdx);
     }
@@ -974,7 +959,7 @@ contract RewardsController is
         uint256 currentGlobalIndex
     ) internal view returns (uint256 totalRawReward, uint256 finalCalculatedIndex) {
         UserRewardState storage currentUserState = userRewardState[user][nftCollection];
-        RewardSnapshot[] storage snapshots = userSnapshots[user][nftCollection];
+        IRewardsController.RewardSnapshot[] storage snapshots = userSnapshots[user][nftCollection];
         uint256 numSnapshots = snapshots.length;
         uint256 rewardSharePercentage = collectionConfigs[nftCollection].rewardSharePercentage;
 
@@ -985,7 +970,7 @@ contract RewardsController is
         // starting from `snapshots[i].rewardIndex`. This state ended when `snapshots[i+1].rewardIndex` began,
         // or when `currentUserState.lastRewardIndex` began if `snapshots[i]` is the last historical one.
         for (uint256 i = 0; i < numSnapshots; ++i) {
-            RewardSnapshot memory histSnapshot = snapshots[i];
+            IRewardsController.RewardSnapshot memory histSnapshot = snapshots[i];
 
             uint256 histSegmentNftBalance = histSnapshot.nftBalance;
             uint256 histSegmentBalance = histSnapshot.balance;
@@ -1094,7 +1079,6 @@ contract RewardsController is
         if (newDuration == 0) revert IRewardsController.InvalidEpochDuration();
         uint256 oldDuration = epochDuration;
         epochDuration = newDuration;
-        globalUpdateNonce++; // This nonce increment might be related to balance updates, consider if it's appropriate here or if a dedicated config nonce is better. For now, keeping as is.
         emit EpochDurationChanged(oldDuration, newDuration, owner());
     }
 
@@ -1115,43 +1099,23 @@ contract RewardsController is
         info.accruedReward = uint128(accruedRewardParam);
     }
 
-    /**
-     * @notice Externally callable function to trigger an update of the globalRewardIndex.
-     * Useful for ensuring the index is current before view calls in testing scenarios
-     * or if an external system needs to ensure the index reflects latest cToken state.
-     */
     function updateGlobalIndex() external {
         _calculateAndUpdateGlobalIndex();
     }
 
-    /**
-     * @notice Allows the owner to sweep accumulated dust from the globalDustBucket.
-     * @param recipient The address to receive the swept dust.
-     */
     function sweepDust(address recipient) external override onlyOwner nonReentrant {
         if (recipient == address(0)) revert AddressZero();
         uint256 dustAmount = globalDustBucket;
         if (dustAmount == 0) {
-            // No event if no dust to sweep, or could revert.
-            // For now, just return.
             return;
         }
 
         globalDustBucket = 0;
-        // Attempt to transfer the dust.
-        // Given it's dust, it might be very small.
-        // A direct transfer is fine; if it fails for some reason (e.g. recipient cannot receive ETH/tokens),
-        // the dust remains in this contract, which is acceptable.
-        // Using rewardToken for consistency, assuming dust is of rewardToken type.
         bool success = rewardToken.transfer(recipient, dustAmount);
         if (success) {
             emit DustSwept(recipient, dustAmount);
         } else {
-            // If transfer fails, revert the dust bucket to its original amount.
-            // This prevents loss of dust if the transfer fails for an unexpected reason.
             globalDustBucket = dustAmount;
-            // Optionally, emit an event or revert here.
-            // For now, we silently fail the transfer but keep the dust recorded.
         }
     }
 

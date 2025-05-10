@@ -6,6 +6,15 @@ import {MockERC20} from "../../../src/mocks/MockERC20.sol";
 import {IRewardsController} from "../../../src/interfaces/IRewardsController.sol";
 
 contract RewardsController_Gas_BalanceUpdates_Test is RewardsController_Test_Base {
+    // Define local struct to replace the removed IRewardsController.UserBalanceUpdateData
+    struct _LocalUserBalanceUpdateData {
+        address user;
+        address collection;
+        uint256 blockNumber;
+        int256 nftDelta;
+        int256 balanceDelta;
+    }
+
     uint256 constant BATCH_SIZE_10 = 10;
     uint256 constant BATCH_SIZE_50 = 50;
     uint256 constant BATCH_SIZE_100 = 100;
@@ -82,7 +91,7 @@ contract RewardsController_Gas_BalanceUpdates_Test is RewardsController_Test_Bas
         // Collection (mockERC721) is already whitelisted in RewardsController_Test_Base.setUp()
 
         // Prepare multi-user batch updates
-        IRewardsController.UserBalanceUpdateData[] memory updatesStruct =
+        _LocalUserBalanceUpdateData[] memory updatesStruct =
             _prepareBalanceUpdates(address(mockERC721), BATCH_SIZE_10, block.number);
 
         address[] memory users = new address[](BATCH_SIZE_10);
@@ -114,7 +123,7 @@ contract RewardsController_Gas_BalanceUpdates_Test is RewardsController_Test_Bas
         // Collection (mockERC721) is already whitelisted in RewardsController_Test_Base.setUp()
 
         // Prepare multi-user batch updates
-        IRewardsController.UserBalanceUpdateData[] memory updatesStruct =
+        _LocalUserBalanceUpdateData[] memory updatesStruct =
             _prepareBalanceUpdates(address(mockERC721), BATCH_SIZE_50, block.number);
 
         address[] memory users = new address[](BATCH_SIZE_50);
@@ -146,7 +155,7 @@ contract RewardsController_Gas_BalanceUpdates_Test is RewardsController_Test_Bas
         // Collection (mockERC721) is already whitelisted in RewardsController_Test_Base.setUp()
 
         // Prepare multi-user batch updates
-        IRewardsController.UserBalanceUpdateData[] memory updatesStruct =
+        _LocalUserBalanceUpdateData[] memory updatesStruct =
             _prepareBalanceUpdates(address(mockERC721), BATCH_SIZE_100, block.number);
 
         address[] memory users = new address[](BATCH_SIZE_100);
@@ -194,13 +203,13 @@ contract RewardsController_Gas_BalanceUpdates_Test is RewardsController_Test_Bas
 
     function _prepareBalanceUpdates(address collection, uint256 count, uint256 currentBlockNumber)
         internal
-        returns (IRewardsController.UserBalanceUpdateData[] memory updates)
+        returns (_LocalUserBalanceUpdateData[] memory updates)
     {
-        updates = new IRewardsController.UserBalanceUpdateData[](count);
+        updates = new _LocalUserBalanceUpdateData[](count);
         for (uint256 i = 0; i < count; i++) {
             // Use different users for multi-user updates
             address user = address(uint160(uint256(keccak256(abi.encodePacked("user", i + 1)))));
-            updates[i] = IRewardsController.UserBalanceUpdateData({
+            updates[i] = _LocalUserBalanceUpdateData({
                 user: user,
                 collection: collection,
                 blockNumber: currentBlockNumber,

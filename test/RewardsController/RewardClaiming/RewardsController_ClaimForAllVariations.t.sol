@@ -6,9 +6,9 @@ import {IRewardsController} from "src/interfaces/IRewardsController.sol";
 import {ILendingManager} from "src/interfaces/ILendingManager.sol";
 import {RewardsController} from "src/RewardsController.sol"; // <-- Import RewardsController
 import {Vm} from "forge-std/Vm.sol";
+import {console} from "forge-std/console.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {LendingManager} from "src/LendingManager.sol"; // Using real LendingManager
-import {console} from "forge-std/console.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol"; // Import Math
 
 contract RewardsController_ClaimForAllVariations_Test is RewardsController_Test_Base {
@@ -18,7 +18,7 @@ contract RewardsController_ClaimForAllVariations_Test is RewardsController_Test_
     }
 
     /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
-    /*                   CLAIM FORALL VARIATIONS                  */
+    /*                   CLAIM FOR ALL VARIATIONS                 */
     /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:°.´*.´•*.•°.•°:°.´+˚.*°.˚:*.´+°.•*/
 
     /**
@@ -114,8 +114,6 @@ contract RewardsController_ClaimForAllVariations_Test is RewardsController_Test_
         // --- Verification ---
         // 1. Correct amount transferred
         uint256 actualClaimed = balanceAfter - balanceBefore;
-        console.log("Expected reward: %d", expectedTotalReward);
-        console.log("Actual claimed: %d", actualClaimed);
         assertEq(actualClaimed, expectedTotalReward, "Transferred amount mismatch");
 
         // 2. Event emitted
@@ -135,9 +133,6 @@ contract RewardsController_ClaimForAllVariations_Test is RewardsController_Test_
         RewardsController.UserRewardState memory stateB = rewardsController.getUserRewardState(user, collectionB);
 
         // Debug outputs
-        console.log("Block number at claim time: %d", claimBlock);
-        console.log("Collection A lastUpdateBlock: %d", stateA.lastUpdateBlock);
-        console.log("Collection B lastUpdateBlock: %d", stateB.lastUpdateBlock);
 
         assertTrue(stateA.lastRewardIndex > 0, "C1 lastRewardIndex should update");
         assertTrue(stateB.lastRewardIndex > 0, "C2 lastRewardIndex should update");
@@ -188,6 +183,11 @@ contract RewardsController_ClaimForAllVariations_Test is RewardsController_Test_
         // Update globalRewardIndex in the controller by making a claim for a different user/collection
         // This ensures the subsequent previews are based on an up-to-date global index.
         IRewardsController.BalanceUpdateData[] memory noSimUpdatesForClaimHelper;
+
+        // Sync USER_B before they claim to ensure their nonce is up-to-date
+        // This processes a no-op update for USER_B on mockERC721_alt
+        _processSingleUserUpdate(USER_B, address(mockERC721_alt), block.number, 0, 0);
+
         vm.prank(USER_B); // Use a different user to avoid interfering with USER_A's state
         // Use a collection that USER_A is not using in this specific test to avoid state interference,
         // or ensure USER_B has no stake in mockERC721_alt if it's used by USER_A elsewhere.
@@ -219,16 +219,44 @@ contract RewardsController_ClaimForAllVariations_Test is RewardsController_Test_
         // --- Action ---
         mockCToken.setAccrueInterestEnabled(false); // Prevent rate change during claim
         vm.startPrank(USER_A);
-        uint256 balanceBefore = rewardToken.balanceOf(USER_A);
-        vm.recordLogs();
-        rewardsController.claimRewardsForAll(emptyUpdates);
 
-        // Since we mocked transferYield(), we need to manually adjust the user's balance
-        // to simulate what would happen in the real execution
+        // Prepare for syncAndClaim
+        IRewardsController.BalanceUpdateData[] memory noDataUpdatesForSync; // Empty for sync part of syncAndClaim
+        IRewardsController.BalanceUpdateData[] memory noDataUpdatesForClaim; // Empty for claim part (claim all)
+
+        uint256 balanceBefore = rewardToken.balanceOf(USER_A);
+
+        // --- Debug logs before syncAndClaim ---
+        console.log("--- Debug: Before syncAndClaim in PartialCapping ---");
+        console.log("USER_A:", USER_A);
+        // userLastSyncedNonce[USER_A] should be 2 (from initial _processSingleUserUpdate for USER_A)
+        console.log("userLastSyncedNonce[USER_A] (before syncAndClaim):", rewardsController.userLastSyncedNonce(USER_A));
+        // globalUpdateNonce should be 3 (USER_A updates (2) + USER_B sync (1))
+        console.log("globalUpdateNonce (before syncAndClaim):", rewardsController.globalUpdateNonce());
+        // authorizedUpdaterNonce should be 3 (USER_A updates (2) + USER_B sync (1))
+        console.log(
+            "authorizedUpdaterNonce (before syncAndClaim):",
+            rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER)
+        );
+
+        vm.recordLogs(); // Start recording logs for syncAndClaim
+
+        uint256 updaterNonceForSyncAndClaim = rewardsController.authorizedUpdaterNonce(AUTHORIZED_UPDATER);
+        bytes memory syncAndClaimSignature =
+            _signUserBalanceUpdates(USER_A, noDataUpdatesForSync, updaterNonceForSyncAndClaim, UPDATER_PRIVATE_KEY);
+
+        rewardsController.syncAndClaim(
+            AUTHORIZED_UPDATER,
+            noDataUpdatesForSync, // balance updates to process before claim (for sync part)
+            syncAndClaimSignature, // signature for these balance updates
+            noDataUpdatesForClaim // specific collections to claim (empty means all for claim part)
+        );
+
+        // Manually adjust balance as transferYieldBatch is mocked
         deal(address(rewardToken), USER_A, balanceBefore + availableYieldCapY);
 
         uint256 balanceAfter = rewardToken.balanceOf(USER_A);
-        Vm.Log[] memory entries = vm.getRecordedLogs();
+        Vm.Log[] memory entries = vm.getRecordedLogs(); // Get logs from syncAndClaim
         vm.stopPrank();
 
         // Clear the mock after use
