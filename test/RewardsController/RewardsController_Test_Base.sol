@@ -79,7 +79,7 @@ contract RewardsController_Test_Base is Test {
 
         vm.startPrank(OWNER);
 
-        mockERC20 = new MockERC20("Mock Token", "MOCK", 18);
+        mockERC20 = new MockERC20("Mock Token", "MOCK", 18, 0); // Added initialSupply
         mockERC721 = new MockERC721("Mock NFT 1", "MNFT1");
         mockERC721_2 = new MockERC721("Mock NFT 2", "MNFT2");
         mockERC721_alt = new MockERC721("Mock NFT Alt", "MNFTA");

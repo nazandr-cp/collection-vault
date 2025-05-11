@@ -40,6 +40,8 @@ interface IRewardsController {
         address collection;
         uint256 index;
         uint256 blockNumber;
+        uint32 nftBalance; // User's NFT balance during this segment
+        uint128 balance; // User's token balance during this segment
     }
 
     // Events
@@ -55,11 +57,12 @@ interface IRewardsController {
     event BalanceUpdatesProcessed(address indexed signer, uint256 nonce, uint256 count);
     event UserBalanceUpdatesProcessed(address indexed user, uint256 nonce, uint256 count);
     event RewardsClaimedForCollection(address indexed user, address indexed collection, uint256 amount);
-    event RewardsClaimedForAll(address indexed user, uint256 totalAmount);
+    // RewardsClaimedForAll event removed as claimRewardsForAllCollections will emit RewardsClaimedForCollection for each.
     event YieldTransferCapped(
         address indexed user, address indexed collection, uint256 calculatedReward, uint256 transferredAmount
     );
     event StaleClaimAttempt(address indexed user, uint64 expectedNonce, uint64 userNonce);
+    event SnapshotUpdated(address indexed user, address indexed collection, uint256 newBalance, uint256 newSnapshotId);
     event EpochDurationChanged(uint256 oldDuration, uint256 newDuration, address indexed changedBy);
     event CollectionConfigChanged(
         address indexed collection,
@@ -153,7 +156,6 @@ interface IRewardsController {
     function claimRewardsForCollection(address nftCollection, BalanceUpdateData[] calldata simulatedUpdates) external;
     function claimRewardsForAll(BalanceUpdateData[] calldata simulatedUpdates) external;
     function syncAndClaim(
-        address signer,
         BalanceUpdateData[] calldata updates,
         bytes calldata signature,
         BalanceUpdateData[] calldata simulatedUpdatesForClaim

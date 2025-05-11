@@ -119,15 +119,6 @@ contract RewardsController_ClaimForAllVariations_Test is RewardsController_Test_
         // 2. Event emitted
         _assertRewardsClaimedForAllLog(entries, user, actualClaimed, actualClaimed / 1000 + 1);
 
-        // Since our tests are using a mock environment, the lastUpdateBlock might not update correctly
-        // Use the RewardsController.updateUserRewardStateForTesting function to manually ensure
-        // the state is updated to what we expect
-        uint256 globalRewardIndex = rewardsController.globalRewardIndex();
-
-        // Force update the state for both collections to use the current block and clear any rewards
-        rewardsController.updateUserRewardStateForTesting(user, collectionA, claimBlock, globalRewardIndex, 0);
-        rewardsController.updateUserRewardStateForTesting(user, collectionB, claimBlock, globalRewardIndex, 0);
-
         // 3. User state updated for BOTH collections - should be current block after claim
         RewardsController.UserRewardState memory stateA = rewardsController.getUserRewardState(user, collectionA);
         RewardsController.UserRewardState memory stateB = rewardsController.getUserRewardState(user, collectionB);

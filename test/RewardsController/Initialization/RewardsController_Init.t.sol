@@ -61,7 +61,7 @@ contract RewardsController_Init is RewardsController_Test_Base {
     }
 
     function test_Revert_Initialize_VaultAssetMismatch() public {
-        MockERC20 mockAsset = new MockERC20("Mock Asset", "MOCK", 18);
+        MockERC20 mockAsset = new MockERC20("Mock Asset", "MOCK", 18, 0); // Added initialSupply
         // Create a mock cToken for the mock asset
         MockCToken mockCT = new MockCToken(address(mockAsset));
 
@@ -100,5 +100,12 @@ contract RewardsController_Init is RewardsController_Test_Base {
         vm.expectRevert(Initializable.InvalidInitialization.selector);
         rewardsController.initialize(OWNER, address(lendingManager), address(tokenVault), AUTHORIZED_UPDATER);
         vm.stopPrank();
+    }
+
+    function test_Revert_Initialize_OnImplementationContract() public {
+        RewardsController newImpl = new RewardsController();
+        // Attempt to initialize the implementation contract directly
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        newImpl.initialize(OWNER, address(lendingManager), address(tokenVault), AUTHORIZED_UPDATER);
     }
 }

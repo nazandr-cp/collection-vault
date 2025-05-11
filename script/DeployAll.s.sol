@@ -127,7 +127,7 @@ contract DeployAll is Script {
     function deployMocksAndTokens() internal {
         if (REWARD_TOKEN_ADDRESS == address(0)) {
             console.log("Deploying Mock Reward Token (MDAI)...");
-            MockERC20 mockDai = new MockERC20("Mock DAI", "MDAI", 18);
+            MockERC20 mockDai = new MockERC20("Mock DAI", "MDAI", 18, 0); // Added initialSupply
             REWARD_TOKEN_ADDRESS = address(mockDai);
             mockDai.mint(DEPLOYER_ADDRESS, 1_000_000_000 ether); // Mint some for deployer
             console.log("Mock Reward Token (MDAI) deployed at: %s", REWARD_TOKEN_ADDRESS);

@@ -29,8 +29,22 @@ contract MockCToken is
 
     mapping(address => uint256) public cTokenBalances;
 
-    uint256 public mintResult = 0;
-    uint256 public redeemResult = 0;
+    // --- State for Programmable Reverts/Errors ---
+    // For mint
+    mapping(address => uint256) public cTokenMintErrorCodeToReturn;
+    mapping(address => string) public cTokenMintRevertReason;
+    mapping(address => bytes) public cTokenMintRevertBytes;
+
+    // For redeem
+    mapping(address => uint256) public cTokenRedeemErrorCodeToReturn;
+    mapping(address => string) public cTokenRedeemRevertReason;
+    mapping(address => bytes) public cTokenRedeemRevertBytes;
+
+    // For redeemUnderlying
+    mapping(address => uint256) public cTokenRedeemUnderlyingErrorCodeToReturn;
+    mapping(address => string) public cTokenRedeemUnderlyingRevertReason;
+    mapping(address => bytes) public cTokenRedeemUnderlyingRevertBytes;
+    // --- End State for Programmable Reverts/Errors ---
 
     uint256 public exchangeRateMantissa; // Example: 2 * 10^(18 + underlyingDecimals - 8)
     uint256 public constant accrualIncrement = 2e25; // Increased increment significantly
@@ -53,13 +67,52 @@ contract MockCToken is
         exchangeRateMantissa = _rate;
     }
 
-    function setMintResult(uint256 _result) external {
-        mintResult = _result;
+    // --- Mock Control Functions for Reverts/Errors ---
+    function setMintRevertConfig(address caller, uint256 errorCode, string calldata reason, bytes calldata data)
+        external
+    {
+        cTokenMintErrorCodeToReturn[caller] = errorCode;
+        cTokenMintRevertReason[caller] = reason;
+        cTokenMintRevertBytes[caller] = data;
     }
 
-    function setRedeemResult(uint256 _result) external {
-        redeemResult = _result;
+    function clearMintRevertConfig(address caller) external {
+        delete cTokenMintErrorCodeToReturn[caller];
+        delete cTokenMintRevertReason[caller];
+        delete cTokenMintRevertBytes[caller];
     }
+
+    function setRedeemRevertConfig(address caller, uint256 errorCode, string calldata reason, bytes calldata data)
+        external
+    {
+        cTokenRedeemErrorCodeToReturn[caller] = errorCode;
+        cTokenRedeemRevertReason[caller] = reason;
+        cTokenRedeemRevertBytes[caller] = data;
+    }
+
+    function clearRedeemRevertConfig(address caller) external {
+        delete cTokenRedeemErrorCodeToReturn[caller];
+        delete cTokenRedeemRevertReason[caller];
+        delete cTokenRedeemRevertBytes[caller];
+    }
+
+    function setRedeemUnderlyingRevertConfig(
+        address caller,
+        uint256 errorCode,
+        string calldata reason,
+        bytes calldata data
+    ) external {
+        cTokenRedeemUnderlyingErrorCodeToReturn[caller] = errorCode;
+        cTokenRedeemUnderlyingRevertReason[caller] = reason;
+        cTokenRedeemUnderlyingRevertBytes[caller] = data;
+    }
+
+    function clearRedeemUnderlyingRevertConfig(address caller) external {
+        delete cTokenRedeemUnderlyingErrorCodeToReturn[caller];
+        delete cTokenRedeemUnderlyingRevertReason[caller];
+        delete cTokenRedeemUnderlyingRevertBytes[caller];
+    }
+    // --- End Mock Control Functions for Reverts/Errors ---
 
     function setReentrancyTarget(address _target) external {
         reentrancyTarget = _target;
@@ -68,7 +121,20 @@ contract MockCToken is
     // --- MinimalCTokenInterface Implementation ---
     function mint(uint256 mintAmount) external override(CErc20Interface) returns (uint256) {
         // Added override specifier
-        if (mintResult != 0) return mintResult;
+
+        // Handle programmable reverts/errors
+        if (bytes(cTokenMintRevertReason[msg.sender]).length > 0) {
+            revert(cTokenMintRevertReason[msg.sender]);
+        }
+        if (cTokenMintRevertBytes[msg.sender].length > 0) {
+            bytes memory revertData = cTokenMintRevertBytes[msg.sender];
+            assembly {
+                revert(add(revertData, 0x20), mload(revertData))
+            }
+        }
+        if (cTokenMintErrorCodeToReturn[msg.sender] != 0) {
+            return cTokenMintErrorCodeToReturn[msg.sender];
+        }
 
         // Simulate transfer from caller (LendingManager) to this mock cToken
         IERC20(underlying).transferFrom(msg.sender, address(this), mintAmount);
@@ -91,7 +157,20 @@ contract MockCToken is
 
     function redeemUnderlying(uint256 redeemUnderlyingAmount) external override(CErc20Interface) returns (uint256) {
         // Added override specifier
-        if (redeemResult != 0) return redeemResult;
+
+        // Handle programmable reverts/errors
+        if (bytes(cTokenRedeemUnderlyingRevertReason[msg.sender]).length > 0) {
+            revert(cTokenRedeemUnderlyingRevertReason[msg.sender]);
+        }
+        if (cTokenRedeemUnderlyingRevertBytes[msg.sender].length > 0) {
+            bytes memory revertData = cTokenRedeemUnderlyingRevertBytes[msg.sender];
+            assembly {
+                revert(add(revertData, 0x20), mload(revertData))
+            }
+        }
+        if (cTokenRedeemUnderlyingErrorCodeToReturn[msg.sender] != 0) {
+            return cTokenRedeemUnderlyingErrorCodeToReturn[msg.sender];
+        }
 
         // Calculate required cTokens using scaled rate: cTokens = underlying * scale / rate
         uint256 rate = this.exchangeRateCurrent(); // Use current (potentially accrued) rate
@@ -155,6 +234,21 @@ contract MockCToken is
     // --- ADDED: Mock Implementation for redeem --- //
     function redeem(uint256 redeemTokens) external override(CErc20Interface) returns (uint256) {
         // Added override specifier
+
+        // Handle programmable reverts/errors
+        if (bytes(cTokenRedeemRevertReason[msg.sender]).length > 0) {
+            revert(cTokenRedeemRevertReason[msg.sender]);
+        }
+        if (cTokenRedeemRevertBytes[msg.sender].length > 0) {
+            bytes memory revertData = cTokenRedeemRevertBytes[msg.sender];
+            assembly {
+                revert(add(revertData, 0x20), mload(revertData))
+            }
+        }
+        if (cTokenRedeemErrorCodeToReturn[msg.sender] != 0) {
+            return cTokenRedeemErrorCodeToReturn[msg.sender];
+        }
+
         // Calculate underlying amount based on tokens and rate
         uint256 rate = this.exchangeRateCurrent(); // Use current (potentially accrued) rate
         require(rate > 0, "MockCToken: Exchange rate cannot be zero");

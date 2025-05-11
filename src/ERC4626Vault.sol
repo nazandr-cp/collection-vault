@@ -7,11 +7,12 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
 
-contract ERC4626Vault is ERC4626, AccessControl, ReentrancyGuard {
+contract ERC4626Vault is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
     using Math for uint256;
 
@@ -60,17 +61,18 @@ contract ERC4626Vault is ERC4626, AccessControl, ReentrancyGuard {
         if (address(lendingManager.asset()) != address(_asset)) revert LendingManagerMismatch();
         _grantRole(DEFAULT_ADMIN_ROLE, initialAdmin);
         _grantRole(ADMIN_ROLE, initialAdmin);
-        IERC20(asset()).approve(_lendingManagerAddress, type(uint256).max);
+        // IERC20(asset()).approve(_lendingManagerAddress, type(uint256).max); // Removed for H-3
     }
 
-    function setLendingManager(address _lendingManagerAddress) external onlyRole(ADMIN_ROLE) {
+    function setLendingManager(address _lendingManagerAddress) external onlyRole(ADMIN_ROLE) whenNotPaused {
         if (_lendingManagerAddress == address(0)) revert AddressZero();
         address oldLendingManagerAddress = address(lendingManager);
         lendingManager = ILendingManager(_lendingManagerAddress);
         if (address(lendingManager.asset()) != address(asset())) revert LendingManagerMismatch();
 
-        IERC20(asset()).approve(address(oldLendingManagerAddress), 0); // Revoke approval from old
-        IERC20(asset()).approve(_lendingManagerAddress, type(uint256).max); // Approve new
+        IERC20 assetToken = IERC20(asset());
+        assetToken.forceApprove(address(oldLendingManagerAddress), 0); // Revoke approval from old
+        assetToken.forceApprove(_lendingManagerAddress, type(uint256).max); // Approve new
 
         emit LendingManagerChanged(oldLendingManagerAddress, _lendingManagerAddress, _msgSender());
     }
@@ -87,6 +89,7 @@ contract ERC4626Vault is ERC4626, AccessControl, ReentrancyGuard {
         public
         virtual
         nonReentrant
+        whenNotPaused
         returns (uint256 shares)
     {
         shares = previewDeposit(assets);
@@ -104,6 +107,7 @@ contract ERC4626Vault is ERC4626, AccessControl, ReentrancyGuard {
         public
         virtual
         nonReentrant
+        whenNotPaused
         returns (uint256 assets)
     {
         assets = previewMint(shares);
@@ -121,6 +125,7 @@ contract ERC4626Vault is ERC4626, AccessControl, ReentrancyGuard {
         public
         virtual
         nonReentrant
+        whenNotPaused
         returns (uint256 shares)
     {
         uint256 collectionBalance = collectionTotalAssetsDeposited[collectionAddress];
@@ -142,6 +147,7 @@ contract ERC4626Vault is ERC4626, AccessControl, ReentrancyGuard {
         public
         virtual
         nonReentrant
+        whenNotPaused
         returns (uint256 assets)
     {
         uint256 _totalSupply = totalSupply();
@@ -172,7 +178,10 @@ contract ERC4626Vault is ERC4626, AccessControl, ReentrancyGuard {
 
     function _hookDeposit(uint256 assets) internal virtual {
         if (assets > 0) {
+            IERC20 assetToken = IERC20(asset());
+            assetToken.forceApprove(address(lendingManager), assets);
             bool success = lendingManager.depositToLendingProtocol(assets);
+            assetToken.forceApprove(address(lendingManager), 0);
             if (!success) revert LendingManagerDepositFailed();
         }
     }
@@ -193,5 +202,25 @@ contract ERC4626Vault is ERC4626, AccessControl, ReentrancyGuard {
                 }
             }
         }
+    }
+
+    // --- Pausable Functions ---
+
+    /**
+     * @notice Pauses the contract.
+     * @dev This function can only be called by an address with the ADMIN_ROLE.
+     * All pausable functions will revert when the contract is paused.
+     */
+    function pause() external onlyRole(ADMIN_ROLE) {
+        _pause();
+    }
+
+    /**
+     * @notice Unpauses the contract.
+     * @dev This function can only be called by an address with the ADMIN_ROLE.
+     * All pausable functions will resume normal operation when unpaused.
+     */
+    function unpause() external onlyRole(ADMIN_ROLE) {
+        _unpause();
     }
 }

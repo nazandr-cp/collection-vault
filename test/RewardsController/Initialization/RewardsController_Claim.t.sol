@@ -44,10 +44,15 @@ contract RewardsController_Claim_Test is RewardsController_Test_Base {
         uint256 controllerBalanceBefore = rewardToken.balanceOf(address(rewardsController));
 
         // 6. Claim rewards
+        rewardsController.updateGlobalIndex(); // Ensure GRI is current
+        mockCToken.setAccrueInterestEnabled(false); // Stabilize GRI for claim
+
         vm.recordLogs();
         vm.startPrank(USER_A);
         rewardsController.claimRewardsForCollection(address(mockERC721), noSimUpdates);
         vm.stopPrank();
+        mockCToken.setAccrueInterestEnabled(true); // Re-enable interest accrual
+
         Vm.Log[] memory entries = vm.getRecordedLogs();
 
         // 7. Verify user received rewards
@@ -466,10 +471,13 @@ contract RewardsController_Claim_Test is RewardsController_Test_Base {
             rewardsController.userLastSyncedNonce(USER_B)
         );
 
-        // 3. Preview rewards for all collections
-        rewardsController.updateGlobalIndex(); // Ensure global index is up-to-date before preview
-        address[] memory allCols = rewardsController.getUserNFTCollections(USER_A); // Get all user collections
-        IRewardsController.BalanceUpdateData[] memory noSimUpdates; // Empty simulation updates
+        // Ensure global index is up-to-date before preview AND stabilize it
+        rewardsController.updateGlobalIndex();
+        mockCToken.setAccrueInterestEnabled(false); // Prevent GRI from changing during preview/claim
+
+        // 3. Preview rewards for all collections (GRI should now be stable)
+        address[] memory allCols = rewardsController.getUserNFTCollections(USER_A);
+        IRewardsController.BalanceUpdateData[] memory noSimUpdates;
         uint256 expectedReward = rewardsController.previewRewards(USER_A, allCols, noSimUpdates);
         assertTrue(expectedReward > 0, "Expected reward should be positive");
 
@@ -499,6 +507,7 @@ contract RewardsController_Claim_Test is RewardsController_Test_Base {
         vm.startPrank(USER_A);
         rewardsController.claimRewardsForAll(noSimUpdates); // No simulation updates
         vm.stopPrank();
+        mockCToken.setAccrueInterestEnabled(true); // Re-enable for other tests
         console.log("--- Test End: test_ClaimRewardsForAll_MultipleCollections ---");
 
         // Manually update the user's balance to simulate token transfer
@@ -515,14 +524,6 @@ contract RewardsController_Claim_Test is RewardsController_Test_Base {
 
         // 7. Verify reward event emitted
         _assertRewardsClaimedForAllLog(entries, USER_A, actualClaimed, 1);
-
-        // 8. Due to test environment limitations, we need to manually force the state update
-        // Use the testing helper to ensure the state is correct
-        uint256 globalRewardIndex = rewardsController.globalRewardIndex();
-        rewardsController.updateUserRewardStateForTesting(USER_A, address(mockERC721), claimBlock, globalRewardIndex, 0);
-        rewardsController.updateUserRewardStateForTesting(
-            USER_A, address(mockERC721_2), claimBlock, globalRewardIndex, 0
-        );
 
         // 9. Verify state reset for both collections
         RewardsController.UserRewardState memory state1 =
