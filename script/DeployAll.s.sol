@@ -10,13 +10,13 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 // Project contracts
 import {RewardsController} from "../src/RewardsController.sol";
 import {LendingManager} from "../src/LendingManager.sol";
-import {ERC4626Vault} from "../src/ERC4626Vault.sol";
+import {CollectionsVault} from "../src/CollectionsVault.sol"; // Updated from ERC4626Vault
 import {IRewardsController} from "../src/interfaces/IRewardsController.sol"; // For RewardBasis enum
 
 // Mocks (if deploying them, otherwise use interfaces for existing ones)
 import {MockERC20} from "../src/mocks/MockERC20.sol";
 import {MockERC721} from "../src/mocks/MockERC721.sol";
-import {MockCToken} from "../src/mocks/MockCToken.sol";
+import {SimpleMockCToken} from "../src/mocks/SimpleMockCToken.sol"; // Updated import
 import {CTokenInterface} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol";
 
 contract DeployAll is Script {
@@ -48,7 +48,7 @@ contract DeployAll is Script {
     RewardsController public rewardsControllerImpl;
     RewardsController public rewardsControllerProxy;
     LendingManager public lendingManager;
-    ERC4626Vault public tokenVault;
+    CollectionsVault public tokenVault; // Updated from ERC4626Vault
     IERC20 public rewardToken;
     CTokenInterface public cToken; // Use interface for flexibility
 
@@ -137,8 +137,18 @@ contract DeployAll is Script {
 
         if (C_TOKEN_ADDRESS == address(0)) {
             console.log("Deploying Mock CToken for asset: %s", address(rewardToken));
-            MockCToken mockCT = new MockCToken(address(rewardToken));
-            mockCT.setExchangeRate(INITIAL_C_TOKEN_EXCHANGE_RATE);
+            // Assuming mock/placeholder values for Comptroller and InterestRateModel
+            // and using DEPLOYER_ADDRESS as admin for the mock CToken
+            SimpleMockCToken mockCT = new SimpleMockCToken(
+                address(rewardToken), // underlyingAddress_
+                CTokenInterface(payable(address(0x0000000000000000000000000000000000000001))).comptroller(), // mock ComptrollerInterface
+                CTokenInterface(payable(address(0x0000000000000000000000000000000000000002))).interestRateModel(), // mock InterestRateModel
+                INITIAL_C_TOKEN_EXCHANGE_RATE, // initialExchangeRateMantissa_
+                "Mock cToken", // name_
+                "mcTOK", // symbol_
+                18, // decimals_
+                payable(DEPLOYER_ADDRESS) // admin_
+            );
             C_TOKEN_ADDRESS = address(mockCT);
             console.log("Mock CToken deployed at: %s", C_TOKEN_ADDRESS);
         }
@@ -185,16 +195,16 @@ contract DeployAll is Script {
 
         // 3. Deploy or assign ERC4626Vault (TokenVault)
         if (EXISTING_TOKEN_VAULT_ADDRESS != address(0)) {
-            console.log("Using existing ERC4626Vault (TokenVault) at: %s", EXISTING_TOKEN_VAULT_ADDRESS);
-            tokenVault = ERC4626Vault(payable(EXISTING_TOKEN_VAULT_ADDRESS));
+            console.log("Using existing CollectionsVault (TokenVault) at: %s", EXISTING_TOKEN_VAULT_ADDRESS); // Updated comment
+            tokenVault = CollectionsVault(payable(EXISTING_TOKEN_VAULT_ADDRESS)); // Updated type
         } else {
-            console.log("Deploying ERC4626Vault (TokenVault)...");
+            console.log("Deploying CollectionsVault (TokenVault)..."); // Updated comment
             string memory vaultNameKey = "VAULT_NAME";
             string memory defaultVaultName = "Vaulted Asset";
             string memory vaultSymbolKey = "VAULT_SYMBOL";
             string memory defaultVaultSymbol = "vAST";
 
-            tokenVault = new ERC4626Vault(
+            tokenVault = new CollectionsVault( // Updated type
                 rewardToken,
                 vm.envOr(vaultNameKey, defaultVaultName),
                 vm.envOr(vaultSymbolKey, defaultVaultSymbol),

@@ -15,17 +15,24 @@ import {CErc20Interface, CTokenInterface} from "compound-protocol-2.8.1/contract
  * @title LendingManager (Compound V2 Fork Adapter)
  * @notice Manages deposits and withdrawals to a specific Compound V2 fork cToken market.
  */
-contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyGuard, Pausable {
+contract LendingManager is
+    ILendingManager,
+    AccessControlEnumerable,
+    ReentrancyGuard,
+    Pausable
+{
     using SafeERC20 for IERC20;
 
     bytes32 public constant VAULT_ROLE = keccak256("VAULT_ROLE");
 
-    bytes32 public constant REWARDS_CONTROLLER_ROLE = keccak256("REWARDS_CONTROLLER_ROLE");
+    bytes32 public constant REWARDS_CONTROLLER_ROLE =
+        keccak256("REWARDS_CONTROLLER_ROLE");
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
     IERC20 private immutable _asset;
     uint8 private immutable underlyingDecimals;
     uint8 private immutable cTokenDecimals;
+    CErc20Interface internal immutable _cToken;
 
     /**
      * @notice Get the underlying ERC20 asset managed by the lending manager.
@@ -34,8 +41,6 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
     function asset() external view override returns (IERC20) {
         return _asset;
     }
-
-    CErc20Interface internal immutable _cToken;
 
     /**
      * @notice Get the cToken address associated with the underlying asset.
@@ -55,41 +60,6 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
     uint256 public totalPrincipalDeposited;
     uint256 public constant MAX_BATCH_SIZE = 50;
 
-    event YieldTransferred(address indexed recipient, uint256 amount);
-    event YieldTransferredBatch(
-        address indexed recipient, uint256 totalAmount, address[] collections, uint256[] amounts
-    );
-    event DepositToProtocol(address indexed caller, uint256 amount);
-    event WithdrawFromProtocol(address indexed caller, uint256 amount);
-    event PrincipalReset(uint256 oldValue, address indexed trigger);
-
-    // --- Generic cToken interaction errors (kept for backward compatibility / general cases) ---
-    error MintFailed(); // To be replaced by more specific errors below
-    error RedeemFailed(); // To be replaced by more specific errors below
-    // --- End Generic cToken interaction errors ---
-
-    // --- Specific cToken interaction errors ---
-    error LendingManagerCTokenMintFailed(uint256 errorCode);
-    error LendingManagerCTokenMintFailedReason(string reason);
-    error LendingManagerCTokenMintFailedBytes(bytes data);
-
-    error LendingManagerCTokenRedeemFailed(uint256 errorCode);
-    error LendingManagerCTokenRedeemFailedReason(string reason);
-    error LendingManagerCTokenRedeemFailedBytes(bytes data);
-
-    error LendingManagerCTokenRedeemUnderlyingFailed(uint256 errorCode);
-    error LendingManagerCTokenRedeemUnderlyingFailedReason(string reason);
-    error LendingManagerCTokenRedeemUnderlyingFailedBytes(bytes data);
-    // --- End Specific cToken interaction errors ---
-
-    error TransferYieldFailed();
-    error AddressZero();
-    error InsufficientBalanceInProtocol();
-    error LM_CallerNotVault(address caller);
-    error LM_CallerNotRewardsController(address caller);
-    error CannotRemoveLastAdmin(bytes32 role);
-    error LendingManager__BalanceCheckFailed(string reason, uint256 expected, uint256 actual);
-
     constructor(
         address initialAdmin,
         address vaultAddress,
@@ -98,8 +68,11 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         address _cTokenAddress
     ) {
         if (
-            initialAdmin == address(0) || vaultAddress == address(0) || rewardsControllerAddress == address(0)
-                || _assetAddress == address(0) || _cTokenAddress == address(0)
+            initialAdmin == address(0) ||
+            vaultAddress == address(0) ||
+            rewardsControllerAddress == address(0) ||
+            _assetAddress == address(0) ||
+            _cTokenAddress == address(0)
         ) {
             revert AddressZero();
         }
@@ -133,7 +106,9 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         _;
     }
 
-    function depositToLendingProtocol(uint256 amount)
+    function depositToLendingProtocol(
+        uint256 amount
+    )
         external
         override
         onlyVault
@@ -150,15 +125,13 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         uint256 balanceAfterTransfer = _asset.balanceOf(address(this));
         if (balanceAfterTransfer != balanceBeforeTransfer + amount) {
             revert LendingManager__BalanceCheckFailed(
-                "LM: deposit asset receipt mismatch", balanceBeforeTransfer + amount, balanceAfterTransfer
+                "LM: deposit asset receipt mismatch",
+                balanceBeforeTransfer + amount,
+                balanceAfterTransfer
             );
         }
 
         uint256 balanceBeforeMint = _asset.balanceOf(address(this));
-        // uint256 mintResult = _cToken.mint(amount); // amount is assetsToSupply
-        // if (mintResult != 0) {
-        //     revert MintFailed(); // Old generic error
-        // }
         try _cToken.mint(amount) returns (uint256 mintResult) {
             if (mintResult != 0) {
                 revert LendingManagerCTokenMintFailed(mintResult);
@@ -172,7 +145,9 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         uint256 balanceAfterMint = _asset.balanceOf(address(this));
         if (balanceAfterMint != balanceBeforeMint - amount) {
             revert LendingManager__BalanceCheckFailed(
-                "LM: deposit cToken.mint supply mismatch", balanceBeforeMint - amount, balanceAfterMint
+                "LM: deposit cToken.mint supply mismatch",
+                balanceBeforeMint - amount,
+                balanceAfterMint
             );
         }
 
@@ -182,7 +157,9 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         return true;
     }
 
-    function withdrawFromLendingProtocol(uint256 amount)
+    function withdrawFromLendingProtocol(
+        uint256 amount
+    )
         external
         override
         onlyVault
@@ -192,7 +169,8 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
     {
         if (amount == 0) return true;
 
-        uint256 accrualResult = CTokenInterface(address(_cToken)).accrueInterest();
+        uint256 accrualResult = CTokenInterface(address(_cToken))
+            .accrueInterest();
         require(accrualResult == 0, "Accrue interest failed");
 
         uint256 availableBalance = totalAssets();
@@ -201,10 +179,6 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         }
 
         uint256 balanceBeforeRedeem = _asset.balanceOf(address(this));
-        // uint256 redeemResult = _cToken.redeemUnderlying(amount); // amount is underlyingToRedeem
-        // if (redeemResult != 0) {
-        //     revert RedeemFailed(); // Old generic error
-        // }
         try _cToken.redeemUnderlying(amount) returns (uint256 redeemResult) {
             if (redeemResult != 0) {
                 revert LendingManagerCTokenRedeemUnderlyingFailed(redeemResult);
@@ -229,7 +203,9 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         uint256 balanceAfterTransfer = _asset.balanceOf(address(this));
         if (balanceAfterTransfer != balanceBeforeTransfer - amount) {
             revert LendingManager__BalanceCheckFailed(
-                "LM: withdraw asset send mismatch", balanceBeforeTransfer - amount, balanceAfterTransfer
+                "LM: withdraw asset send mismatch",
+                balanceBeforeTransfer - amount,
+                balanceAfterTransfer
             );
         }
         if (totalPrincipalDeposited >= amount) {
@@ -244,11 +220,16 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
     }
 
     function totalAssets() public view override returns (uint256) {
-        uint256 cTokenBalance = CTokenInterface(address(_cToken)).balanceOf(address(this));
-        uint256 currentExchangeRate = CTokenInterface(address(_cToken)).exchangeRateStored();
+        uint256 cTokenBalance = CTokenInterface(address(_cToken)).balanceOf(
+            address(this)
+        );
+        uint256 currentExchangeRate = CTokenInterface(address(_cToken))
+            .exchangeRateStored();
         uint256 underlyingBalanceInCToken;
         if (cTokenBalance > 0 && currentExchangeRate > 0) {
-            underlyingBalanceInCToken = (cTokenBalance * currentExchangeRate) / EXCHANGE_RATE_DENOMINATOR;
+            underlyingBalanceInCToken =
+                (cTokenBalance * currentExchangeRate) /
+                EXCHANGE_RATE_DENOMINATOR;
         }
         return underlyingBalanceInCToken;
     }
@@ -258,249 +239,73 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         if (currentTotalAssets == 0) {
             return 0;
         }
-        return (currentTotalAssets * R0_BASIS_POINTS) / BASIS_POINTS_DENOMINATOR;
+        return
+            (currentTotalAssets * R0_BASIS_POINTS) / BASIS_POINTS_DENOMINATOR;
     }
 
-    function transferYield(uint256 amount, address recipient)
-        external
-        override
-        onlyRewardsController
-        nonReentrant
-        whenNotPaused
-        returns (uint256 amountTransferred)
-    {
-        if (amount == 0) return 0;
-        if (recipient == address(0)) revert AddressZero();
-
-        uint256 accrualResult = CTokenInterface(address(_cToken)).accrueInterest();
-        accrualResult;
-
-        uint256 availableBalance = totalAssets();
-        uint256 availableYield =
-            availableBalance > totalPrincipalDeposited ? availableBalance - totalPrincipalDeposited : 0;
-
-        if (amount > availableYield) {
-            amountTransferred = availableYield;
-        } else {
-            amountTransferred = amount;
-        }
-
-        if (amountTransferred == 0) return 0;
-
-        uint256 exchangeRate = CTokenInterface(address(_cToken)).exchangeRateStored();
-        if (exchangeRate == 0) return 0;
-        uint256 cTokensToRedeem = (amountTransferred * EXCHANGE_RATE_DENOMINATOR) / exchangeRate;
-
-        if (cTokensToRedeem == 0 && amountTransferred > 0) {
-            return 0;
-        }
-        if (cTokensToRedeem == 0 && amountTransferred > 0) {
-            return 0;
-        }
-        if (cTokensToRedeem == 0) {
-            return 0;
-        }
-
-        // Calculate the expected amount of underlying tokens to receive *before* redemption.
-        // This is `amountTransferred` because we are redeeming cTokens equivalent to this underlying amount.
-        uint256 expectedUnderlyingToReceive = amountTransferred;
-
-        uint256 balanceBeforeRedeem = _asset.balanceOf(address(this));
-        // uint256 redeemResult = _cToken.redeem(cTokensToRedeem);
-        // if (redeemResult != 0) {
-        //     revert RedeemFailed(); // Old generic error
-        // }
-        try _cToken.redeem(cTokensToRedeem) returns (uint256 redeemResult) {
-            if (redeemResult != 0) {
-                revert LendingManagerCTokenRedeemFailed(redeemResult);
-            }
-        } catch Error(string memory reason) {
-            revert LendingManagerCTokenRedeemFailedReason(reason);
-        } catch (bytes memory data) {
-            revert LendingManagerCTokenRedeemFailedBytes(data);
-        }
-        uint256 balanceAfterRedeem = _asset.balanceOf(address(this));
-        uint256 actualAmountReceived = balanceAfterRedeem - balanceBeforeRedeem;
-
-        // Check if the actual amount received matches the expected amount (pre-fee).
-        // If there's a fee on transfer when cToken sends underlying to LendingManager,
-        // actualAmountReceived will be less than expectedUnderlyingToReceive.
-        if (actualAmountReceived != expectedUnderlyingToReceive) {
-            revert LendingManager__BalanceCheckFailed(
-                "LM: transferYield cToken.redeem receipt mismatch", expectedUnderlyingToReceive, actualAmountReceived
-            );
-        }
-
-        if (actualAmountReceived > 0) {
-            uint256 balanceBeforeSend = _asset.balanceOf(address(this));
-            _asset.safeTransfer(recipient, actualAmountReceived);
-            uint256 balanceAfterSend = _asset.balanceOf(address(this));
-            if (balanceAfterSend != balanceBeforeSend - actualAmountReceived) {
-                revert LendingManager__BalanceCheckFailed(
-                    "LM: transferYield asset send mismatch", balanceBeforeSend - actualAmountReceived, balanceAfterSend
-                );
-            }
-        }
-
-        emit YieldTransferred(recipient, actualAmountReceived);
-        return actualAmountReceived;
-    }
-
-    function transferYieldBatch(
-        address[] calldata collections,
-        uint256[] calldata amounts,
-        uint256 totalAmount,
-        address recipient
-    )
-        external
-        override
-        onlyRewardsController
-        nonReentrant
-        whenNotPaused
-        returns (uint256 totalAmountTransferredOutput)
-    {
-        require(collections.length <= MAX_BATCH_SIZE, "Batch size exceeds maximum");
-        if (totalAmount == 0) return 0;
-        if (recipient == address(0)) revert AddressZero();
-        if (collections.length != amounts.length) revert("Array length mismatch");
-
-        uint256 accrualResult = CTokenInterface(address(_cToken)).accrueInterest();
-        accrualResult;
-
-        uint256 availableBalance = totalAssets();
-        uint256 availableYield =
-            availableBalance > totalPrincipalDeposited ? availableBalance - totalPrincipalDeposited : 0;
-
-        uint256 cappedTotalAmountToAttempt;
-        if (totalAmount > availableYield) {
-            cappedTotalAmountToAttempt = availableYield;
-        } else {
-            cappedTotalAmountToAttempt = totalAmount;
-        }
-
-        if (cappedTotalAmountToAttempt == 0) return 0;
-
-        uint256 exchangeRate = CTokenInterface(address(_cToken)).exchangeRateStored();
-        if (exchangeRate == 0) return 0;
-        uint256 cTokensToRedeem = (cappedTotalAmountToAttempt * EXCHANGE_RATE_DENOMINATOR) / exchangeRate;
-
-        if (cTokensToRedeem == 0 && cappedTotalAmountToAttempt > 0) {
-            return 0;
-        }
-        if (cTokensToRedeem == 0 && cappedTotalAmountToAttempt > 0) {
-            return 0;
-        }
-        if (cTokensToRedeem == 0) {
-            return 0;
-        }
-
-        // Calculate the expected amount of underlying tokens to receive *before* redemption.
-        // This is `cappedTotalAmountToAttempt` because we are redeeming cTokens equivalent to this underlying amount.
-        uint256 expectedUnderlyingToReceive = cappedTotalAmountToAttempt;
-
-        uint256 balanceBeforeRedeem = _asset.balanceOf(address(this));
-        // uint256 redeemResult = _cToken.redeem(cTokensToRedeem);
-        // if (redeemResult != 0) {
-        //     revert RedeemFailed(); // Old generic error
-        // }
-        try _cToken.redeem(cTokensToRedeem) returns (uint256 redeemResult) {
-            if (redeemResult != 0) {
-                revert LendingManagerCTokenRedeemFailed(redeemResult);
-            }
-        } catch Error(string memory reason) {
-            revert LendingManagerCTokenRedeemFailedReason(reason);
-        } catch (bytes memory data) {
-            revert LendingManagerCTokenRedeemFailedBytes(data);
-        }
-        uint256 balanceAfterRedeem = _asset.balanceOf(address(this));
-        uint256 actualAmountReceived = balanceAfterRedeem - balanceBeforeRedeem;
-
-        // Check if the actual amount received matches the expected amount (pre-fee).
-        if (actualAmountReceived != expectedUnderlyingToReceive) {
-            revert LendingManager__BalanceCheckFailed(
-                "LM: transferYieldBatch cToken.redeem receipt mismatch",
-                expectedUnderlyingToReceive,
-                actualAmountReceived
-            );
-        }
-
-        if (actualAmountReceived > 0) {
-            uint256 balanceBeforeSend = _asset.balanceOf(address(this));
-            _asset.safeTransfer(recipient, actualAmountReceived);
-            uint256 balanceAfterSend = _asset.balanceOf(address(this));
-            if (balanceAfterSend != balanceBeforeSend - actualAmountReceived) {
-                revert LendingManager__BalanceCheckFailed(
-                    "LM: transferYieldBatch asset send mismatch",
-                    balanceBeforeSend - actualAmountReceived,
-                    balanceAfterSend
-                );
-            }
-        }
-
-        emit YieldTransferredBatch(recipient, actualAmountReceived, collections, amounts);
-        return actualAmountReceived;
-    }
-
-    function grantRewardsControllerRole(address newController)
-        external
-        onlyRole(ADMIN_ROLE)
-        nonReentrant
-        whenNotPaused
-    {
+    function grantRewardsControllerRole(
+        address newController
+    ) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
         if (newController == address(0)) revert AddressZero();
         _grantRole(REWARDS_CONTROLLER_ROLE, newController);
     }
 
-    function revokeRewardsControllerRole(address controller) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
+    function revokeRewardsControllerRole(
+        address controller
+    ) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
         if (controller == address(0)) revert AddressZero();
         _revokeRole(REWARDS_CONTROLLER_ROLE, controller);
     }
 
     // --- Administrative Functions for Role Management ---
 
-    function grantVaultRole(address newVault) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
+    function grantVaultRole(
+        address newVault
+    ) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
         if (newVault == address(0)) revert AddressZero();
         _grantRole(VAULT_ROLE, newVault);
     }
 
-    function revokeVaultRole(address vault) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
+    function revokeVaultRole(
+        address vault
+    ) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
         if (vault == address(0)) revert AddressZero();
         _revokeRole(VAULT_ROLE, vault);
     }
 
-    function grantAdminRole(address newAdmin) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
+    function grantAdminRole(
+        address newAdmin
+    ) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
         if (newAdmin == address(0)) revert AddressZero();
         _grantRole(ADMIN_ROLE, newAdmin);
     }
 
-    function revokeAdminRole(address admin) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
+    function revokeAdminRole(
+        address admin
+    ) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
         if (admin == address(0)) revert AddressZero();
         require(getRoleMemberCount(ADMIN_ROLE) > 1, "Cannot remove last admin");
         _revokeRole(ADMIN_ROLE, admin);
     }
 
-    function grantAdminRoleAsDefaultAdmin(address newAdmin)
-        external
-        onlyRole(DEFAULT_ADMIN_ROLE)
-        nonReentrant
-        whenNotPaused
-    {
+    function grantAdminRoleAsDefaultAdmin(
+        address newAdmin
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant whenNotPaused {
         if (newAdmin == address(0)) revert AddressZero();
         _grantRole(ADMIN_ROLE, newAdmin);
     }
 
-    function revokeAdminRoleAsDefaultAdmin(address admin)
-        external
-        onlyRole(DEFAULT_ADMIN_ROLE)
-        nonReentrant
-        whenNotPaused
-    {
+    function revokeAdminRoleAsDefaultAdmin(
+        address admin
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant whenNotPaused {
         if (admin == address(0)) revert AddressZero();
         require(getRoleMemberCount(ADMIN_ROLE) > 1, "Cannot remove last admin");
         _revokeRole(ADMIN_ROLE, admin);
     }
 
-    function redeemAllCTokens(address recipient)
+    function redeemAllCTokens(
+        address recipient
+    )
         external
         override
         onlyVault
@@ -510,23 +315,32 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
     {
         if (recipient == address(0)) revert AddressZero();
 
-        uint256 cTokenBalance = CTokenInterface(address(_cToken)).balanceOf(address(this));
+        uint256 cTokenBalance = CTokenInterface(address(_cToken)).balanceOf(
+            address(this)
+        );
         if (cTokenBalance == 0) {
             return 0;
         }
 
-        uint256 accrualResult = CTokenInterface(address(_cToken)).accrueInterest();
+        uint256 accrualResult = CTokenInterface(address(_cToken))
+            .accrueInterest();
         accrualResult; // Consume accrualResult to avoid unused variable warning
 
         // Calculate the expected amount of underlying tokens to receive *before* redemption.
-        uint256 exchangeRate = CTokenInterface(address(_cToken)).exchangeRateStored();
+        uint256 exchangeRate = CTokenInterface(address(_cToken))
+            .exchangeRateStored();
         // This check is important because if exchangeRate is 0, the multiplication below would be 0.
         // While cTokenBalance > 0, if exchangeRate is 0, it implies an issue or no value.
         if (exchangeRate == 0 && cTokenBalance > 0) {
             // This case should ideally not happen if cTokens are held, but as a safeguard.
-            revert LendingManager__BalanceCheckFailed("LM: redeemAll cToken.redeem exchange rate is zero", 1, 0);
+            revert LendingManager__BalanceCheckFailed(
+                "LM: redeemAll cToken.redeem exchange rate is zero",
+                1,
+                0
+            );
         }
-        uint256 expectedUnderlyingToReceive = (cTokenBalance * exchangeRate) / EXCHANGE_RATE_DENOMINATOR;
+        uint256 expectedUnderlyingToReceive = (cTokenBalance * exchangeRate) /
+            EXCHANGE_RATE_DENOMINATOR;
 
         uint256 balanceBeforeRedeem = _asset.balanceOf(address(this));
         // uint256 redeemResult = _cToken.redeem(cTokenBalance); // Redeem all cTokens
@@ -548,7 +362,9 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         // Check if the actual amount received matches the expected amount (pre-fee).
         if (amountRedeemed != expectedUnderlyingToReceive) {
             revert LendingManager__BalanceCheckFailed(
-                "LM: redeemAll cToken.redeem receipt mismatch", expectedUnderlyingToReceive, amountRedeemed
+                "LM: redeemAll cToken.redeem receipt mismatch",
+                expectedUnderlyingToReceive,
+                amountRedeemed
             );
         }
 
@@ -558,7 +374,9 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
             uint256 balanceAfterSend = _asset.balanceOf(address(this));
             if (balanceAfterSend != balanceBeforeSend - amountRedeemed) {
                 revert LendingManager__BalanceCheckFailed(
-                    "LM: redeemAll asset send mismatch", balanceBeforeSend - amountRedeemed, balanceAfterSend
+                    "LM: redeemAll asset send mismatch",
+                    balanceBeforeSend - amountRedeemed,
+                    balanceAfterSend
                 );
             }
         }
@@ -572,7 +390,12 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
      * @dev This function is restricted to ADMIN_ROLE.
      * It emits a PrincipalReset event.
      */
-    function resetTotalPrincipalDeposited() external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
+    function resetTotalPrincipalDeposited()
+        external
+        onlyRole(ADMIN_ROLE)
+        nonReentrant
+        whenNotPaused
+    {
         uint256 oldValue = totalPrincipalDeposited;
         totalPrincipalDeposited = 0;
         emit PrincipalReset(oldValue, msg.sender);

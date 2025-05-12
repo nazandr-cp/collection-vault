@@ -8,6 +8,43 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
  * @notice Interface for managing asset allocation into a lending protocol.
  */
 interface ILendingManager {
+    // Events
+    event YieldTransferred(address indexed recipient, uint256 amount);
+    event YieldTransferredBatch(
+        address indexed recipient,
+        uint256 totalAmount,
+        address[] collections,
+        uint256[] amounts
+    );
+    event DepositToProtocol(address indexed caller, uint256 amount);
+    event WithdrawFromProtocol(address indexed caller, uint256 amount);
+    event PrincipalReset(uint256 oldValue, address indexed trigger);
+
+    // --- Specific cToken interaction errors ---
+    error LendingManagerCTokenMintFailed(uint256 errorCode);
+    error LendingManagerCTokenMintFailedReason(string reason);
+    error LendingManagerCTokenMintFailedBytes(bytes data);
+
+    error LendingManagerCTokenRedeemFailed(uint256 errorCode);
+    error LendingManagerCTokenRedeemFailedReason(string reason);
+    error LendingManagerCTokenRedeemFailedBytes(bytes data);
+
+    error LendingManagerCTokenRedeemUnderlyingFailed(uint256 errorCode);
+    error LendingManagerCTokenRedeemUnderlyingFailedReason(string reason);
+    error LendingManagerCTokenRedeemUnderlyingFailedBytes(bytes data);
+    // --- End Specific cToken interaction errors ---
+
+    error AddressZero();
+    error InsufficientBalanceInProtocol();
+    error LM_CallerNotVault(address caller);
+    error LM_CallerNotRewardsController(address caller);
+    error CannotRemoveLastAdmin(bytes32 role);
+    error LendingManager__BalanceCheckFailed(
+        string reason,
+        uint256 expected,
+        uint256 actual
+    );
+
     /**
      * @notice Get the underlying ERC20 asset managed by the lending manager.
      * @return ERC20 asset address.
@@ -25,14 +62,18 @@ interface ILendingManager {
      * @param amount Amount to deposit.
      * @return success True if deposit was successful.
      */
-    function depositToLendingProtocol(uint256 amount) external returns (bool success);
+    function depositToLendingProtocol(
+        uint256 amount
+    ) external returns (bool success);
 
     /**
      * @notice Withdraw a specified amount of the asset from the lending protocol.
      * @param amount Amount to withdraw.
      * @return success True if withdrawal was successful.
      */
-    function withdrawFromLendingProtocol(uint256 amount) external returns (bool success);
+    function withdrawFromLendingProtocol(
+        uint256 amount
+    ) external returns (bool success);
 
     /**
      * @notice Get the total amount of assets managed by the lending manager (principal + yield).
@@ -47,35 +88,14 @@ interface ILendingManager {
     function getBaseRewardPerBlock() external view returns (uint256);
 
     /**
-     * @notice Transfer accrued base yield to a recipient (called by RewardsController).
-     * @param amount Amount of yield tokens to transfer.
-     * @param recipient Recipient address.
-     * @return amountTransferred The actual amount of yield transferred (may be less than requested due to capping).
-     */
-    function transferYield(uint256 amount, address recipient) external returns (uint256 amountTransferred);
-
-    /**
-     * @notice Transfer accrued base yield for multiple collections in a single batch to a recipient.
-     * @param collections Array of collection addresses (for logging/tracking, not used in core logic).
-     * @param amounts Array of yield token amounts to transfer per collection.
-     * @param totalAmount The total sum of amounts to transfer.
-     * @param recipient Recipient address.
-     * @return totalAmountTransferred The actual total amount of yield transferred (may be less than requested due to capping).
-     */
-    function transferYieldBatch(
-        address[] calldata collections,
-        uint256[] calldata amounts,
-        uint256 totalAmount,
-        address recipient
-    ) external returns (uint256 totalAmountTransferred);
-
-    /**
      * @notice Redeems the entire cToken balance held by the LendingManager.
      * @dev Used for scenarios like full vault redemption to sweep remaining dust.
      * @param recipient Recipient address.
      * @return amountRedeemed The amount of underlying asset received from redeeming all cTokens.
      */
-    function redeemAllCTokens(address recipient) external returns (uint256 amountRedeemed);
+    function redeemAllCTokens(
+        address recipient
+    ) external returns (uint256 amountRedeemed);
 
     /**
      * @notice Returns the total principal amount deposited by the Vault into the lending protocol.
