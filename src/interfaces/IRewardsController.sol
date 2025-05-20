@@ -1,143 +1,97 @@
-// SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.20;
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
-import {ILendingManager} from "./ILendingManager.sol";
+import {ICollectionsVault} from "./ICollectionsVault.sol";
 
-/**
- * @title IRewardsController Interface
- * @notice Interface for the RewardsController contract, defining its external functions, structs, events, and errors.
- */
 interface IRewardsController {
-    // Enums
     enum RewardBasis {
         DEPOSIT,
         BORROW
     }
 
-    //
-    // Events
-    //
-    event NFTCollectionAdded(
-        address indexed collection, uint256 beta, RewardBasis rewardBasis, uint256 rewardSharePercentage
+    enum WeightFunctionType {
+        LINEAR,
+        EXPONENTIAL
+    }
+
+    struct WeightFunction {
+        WeightFunctionType fnType;
+        int256 p1;
+        int256 p2;
+    }
+
+    struct Claim {
+        address account;
+        address collection;
+        uint256 secondsUser;
+        uint256 nonce;
+        uint256 deadline;
+    }
+
+    //   ========== Events ==========
+    event RewardsClaimedForLazy(
+        address indexed account,
+        address indexed collection,
+        uint256 dueAmount,
+        uint256 nonce,
+        uint256 secondsUser,
+        uint256 secondsColl,
+        uint256 incRPS,
+        uint256 yieldSlice
     );
-    event NFTCollectionRemoved(address indexed collection);
-    event BetaUpdated(address indexed collection, uint256 oldBeta, uint256 newBeta);
+    event NewCollectionWhitelisted(address indexed collection, RewardBasis rewardBasis, uint256 sharePercentage);
+    event WhitelistCollectionRemoved(address indexed collection);
     event CollectionRewardShareUpdated(
         address indexed collection, uint256 oldSharePercentage, uint256 newSharePercentage
     );
-    event RewardsClaimed(address indexed user, address indexed collection, uint256 rewardAmount, uint256 nonce);
-    event RewardsIssued(address indexed user, address indexed collection, uint256 amount, uint256 nonce);
-    event BatchRewardsIssued(address indexed user, address[] collections, uint256[] amounts, uint256 nonce);
     event TrustedSignerUpdated(address oldSigner, address newSigner, address indexed changedBy);
-    event EpochDurationChanged(uint256 oldDuration, uint256 newDuration, address indexed changedBy);
-    event DustSwept(address indexed recipient, uint256 amount);
-    event MaxRewardSharePercentageUpdated(uint256 oldMaxRewardSharePercentage, uint256 newMaxRewardSharePercentage);
+    event BatchRewardsClaimedForLazy(address indexed caller, uint256 totalDue, uint256 numClaims);
+    event WeightFunctionSet(address indexed collection, WeightFunction fn);
 
-    //
-    // Errors
-    //
-    error BalanceUpdateUnderflow(uint256 currentValue, uint256 deltaMagnitude);
-    error UpdateOutOfOrder(address user, address collection, uint256 updateBlock, uint256 lastProcessedBlock);
-    error VaultMismatch();
-    error RewardsControllerInvalidInitialOwner(address owner);
-    error InvalidBetaValue(uint256 beta);
-    error InvalidEpochDuration();
-
+    //  ====== Errors ======
     error AddressZero();
     error CollectionNotWhitelisted(address collection);
     error CollectionAlreadyExists(address collection);
     error InvalidSignature();
-    error InvalidNonce(uint256 providedNonce, uint256 lastClaimedNonce);
+    error ClaimExpired();
+    error InvalidSecondsColl();
+    error InvalidYieldSlice();
+    error InsufficientYield();
     error ArrayLengthMismatch();
-    error InsufficientYieldFromLendingManager();
-    error CollectionsArrayEmpty();
-    error InvalidRewardSharePercentage();
-    error ExcessiveRewardAmount(address collection, uint256 requested, uint256 maxAllowed);
+    error InvalidNonce(uint256 providedNonce, uint256 expectedNonce);
+    error VaultMismatch();
+    error InvalidRewardSharePercentage(uint16 percentage);
 
-    //
-    // State Variable Getters
-    //
-    function lendingManager() external view returns (ILendingManager);
-
-    function vault() external view returns (IERC4626);
-
-    function rewardToken() external view returns (IERC20);
-
-    function trustedSigner() external view returns (address);
-
-    function collectionRewardBasis(address collection) external view returns (RewardBasis rewardBasis);
-
-    function epochDuration() external view returns (uint256 duration);
-
-    function globalUpdateNonce() external view returns (uint64);
-
-    function globalRewardIndex() external view returns (uint256);
-
-    function userLastSyncedNonce(address user) external view returns (uint64);
-
-    function userClaimedNonces(address user, address collection) external view returns (uint256);
-
-    function getUserGlobalNonce(address user) external view returns (uint256);
-
-    function maxRewardSharePercentage() external view returns (uint16);
-
-    //
-    // Admin Functions
-    //
-    function setTrustedSigner(address _newSigner) external;
-
-    function addNFTCollection(address collection, uint256 beta, RewardBasis rewardBasis, uint256 rewardSharePercentage)
+    // ====== Collection Management Functions ======
+    function whitelistCollection(address collectionAddress, RewardBasis rewardBasis, uint256 sharePercentage)
         external;
+    function removeCollection(address collectionAddress) external;
+    function updateCollectionPercentageShare(address collectionAddress, uint256 sharePercentage) external;
+    function setWeightFunction(address collectionAddress, WeightFunction calldata fn) external;
 
-    function removeNFTCollection(address collection) external;
+    // ====== View Functions ======
+    function oracle() external view returns (address);
+    function vault() external view returns (ICollectionsVault);
 
-    function updateBeta(address collection, uint256 newBeta) external;
+    function lastAssets() external view returns (uint256);
+    function yieldLeft() external view returns (uint128);
 
-    function setEpochDuration(uint256 newDuration) external;
+    function coll(address collectionAddress) external view returns (uint128 accRPS, uint128 lastSeconds);
 
-    function setCollectionRewardSharePercentage(address collection, uint256 newSharePercentage) external;
-
-    function sweepDust(address recipient) external;
-
-    //
-    // View Functions
-    //
-    function getCollectionData(address collection)
+    function userNonce(address userAddress) external view returns (uint128 nonce);
+    function userSecondsPaid(address userAddress, address collectionAddress)
         external
         view
-        returns (uint256 beta, RewardBasis rewardBasis, uint256 rewardSharePercentage);
+        returns (uint128 secondsPaid);
 
-    function calculateBoost(uint256 nftBalance, uint256 beta) external pure returns (uint256 boostFactor);
+    // ====== User/Claim Functions ======
+    function previewClaim(Claim[] calldata claims) external view returns (uint256 totalDue);
+    function claimLazy(Claim[] calldata claims, bytes[] calldata signatures) external;
 
-    function getCollectionBeta(address nftCollection) external view returns (uint256);
+    // ====== Admin Functions ======
+    function updateTrustedSigner(address newSigner) external;
 
-    function getCollectionRewardBasis(address nftCollection) external view returns (RewardBasis);
-
-    function getCollectionRewardSharePercentage(address collection) external view returns (uint256);
-
-    function isCollectionWhitelisted(address collection) external view returns (bool);
-
-    function getWhitelistedCollections() external view returns (address[] memory collections);
-
-    //
-    // Claiming Functions
-    //
-    function claimRewardsForCollection(
-        address _collection,
-        address _recipient,
-        uint256 _rewardAmount,
-        uint256 _nonce,
-        bytes calldata _signature
-    ) external;
-
-    function claimRewardsForAllCollections(
-        address _recipient,
-        uint256[] calldata _rewardAmountPerCollection,
-        address[] calldata _collections,
-        uint256 _totalRewardAmount,
-        uint256 _nonce,
-        bytes calldata _signature
-    ) external;
+    function pause() external;
+    function unpause() external;
+    function paused() external view returns (bool);
 }
