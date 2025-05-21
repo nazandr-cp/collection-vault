@@ -446,7 +446,9 @@ contract RewardsController is
     function syncAccount(address user, address collectionAddress) external override(IRewardsController) {
         if (user == address(0)) revert IRewardsController.AddressZero();
         if (address(_vault) == address(0)) revert IRewardsController.VaultMismatch(); // Ensure vault is set
-        if (!_isCollectionWhitelisted[collectionAddress]) revert IRewardsController.CollectionNotWhitelisted(collectionAddress);
+        if (!_isCollectionWhitelisted[collectionAddress]) {
+            revert IRewardsController.CollectionNotWhitelisted(collectionAddress);
+        }
         _updateUserWeightAndAccrueRewards(address(_vault), user, collectionAddress);
     }
 
@@ -562,7 +564,7 @@ contract RewardsController is
             _updateUserWeightAndAccrueRewards(vaultAddress, user, collection);
 
             uint256 amountForThisClaim = account.accrued;
-            
+
             // Always reset accrued rewards to zero when processing a claim, regardless of the amount
             uint256 amountToTransfer = amountForThisClaim;
 

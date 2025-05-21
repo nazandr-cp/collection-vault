@@ -15,18 +15,12 @@ import {CErc20Interface, CTokenInterface} from "compound-protocol-2.8.1/contract
  * @title LendingManager (Compound V2 Fork Adapter)
  * @notice Manages deposits and withdrawals to a specific Compound V2 fork cToken market.
  */
-contract LendingManager is
-    ILendingManager,
-    AccessControlEnumerable,
-    ReentrancyGuard,
-    Pausable
-{
+contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     bytes32 public constant VAULT_ROLE = keccak256("VAULT_ROLE");
 
-    bytes32 public constant REWARDS_CONTROLLER_ROLE =
-        keccak256("REWARDS_CONTROLLER_ROLE");
+    bytes32 public constant REWARDS_CONTROLLER_ROLE = keccak256("REWARDS_CONTROLLER_ROLE");
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
     IERC20 private immutable _asset;
@@ -68,11 +62,8 @@ contract LendingManager is
         address _cTokenAddress
     ) {
         if (
-            initialAdmin == address(0) ||
-            vaultAddress == address(0) ||
-            rewardsControllerAddress == address(0) ||
-            _assetAddress == address(0) ||
-            _cTokenAddress == address(0)
+            initialAdmin == address(0) || vaultAddress == address(0) || rewardsControllerAddress == address(0)
+                || _assetAddress == address(0) || _cTokenAddress == address(0)
         ) {
             revert AddressZero();
         }
@@ -106,9 +97,7 @@ contract LendingManager is
         _;
     }
 
-    function depositToLendingProtocol(
-        uint256 amount
-    )
+    function depositToLendingProtocol(uint256 amount)
         external
         override
         onlyVault
@@ -125,9 +114,7 @@ contract LendingManager is
         uint256 balanceAfterTransfer = _asset.balanceOf(address(this));
         if (balanceAfterTransfer != balanceBeforeTransfer + amount) {
             revert LendingManager__BalanceCheckFailed(
-                "LM: deposit asset receipt mismatch",
-                balanceBeforeTransfer + amount,
-                balanceAfterTransfer
+                "LM: deposit asset receipt mismatch", balanceBeforeTransfer + amount, balanceAfterTransfer
             );
         }
 
@@ -145,9 +132,7 @@ contract LendingManager is
         uint256 balanceAfterMint = _asset.balanceOf(address(this));
         if (balanceAfterMint != balanceBeforeMint - amount) {
             revert LendingManager__BalanceCheckFailed(
-                "LM: deposit cToken.mint supply mismatch",
-                balanceBeforeMint - amount,
-                balanceAfterMint
+                "LM: deposit cToken.mint supply mismatch", balanceBeforeMint - amount, balanceAfterMint
             );
         }
 
@@ -157,9 +142,7 @@ contract LendingManager is
         return true;
     }
 
-    function withdrawFromLendingProtocol(
-        uint256 amount
-    )
+    function withdrawFromLendingProtocol(uint256 amount)
         external
         override
         onlyVault
@@ -169,8 +152,7 @@ contract LendingManager is
     {
         if (amount == 0) return true;
 
-        uint256 accrualResult = CTokenInterface(address(_cToken))
-            .accrueInterest();
+        uint256 accrualResult = CTokenInterface(address(_cToken)).accrueInterest();
         require(accrualResult == 0, "Accrue interest failed");
 
         uint256 availableBalance = totalAssets();
@@ -203,9 +185,7 @@ contract LendingManager is
         uint256 balanceAfterTransfer = _asset.balanceOf(address(this));
         if (balanceAfterTransfer != balanceBeforeTransfer - amount) {
             revert LendingManager__BalanceCheckFailed(
-                "LM: withdraw asset send mismatch",
-                balanceBeforeTransfer - amount,
-                balanceAfterTransfer
+                "LM: withdraw asset send mismatch", balanceBeforeTransfer - amount, balanceAfterTransfer
             );
         }
         if (totalPrincipalDeposited >= amount) {
@@ -220,16 +200,11 @@ contract LendingManager is
     }
 
     function totalAssets() public view override returns (uint256) {
-        uint256 cTokenBalance = CTokenInterface(address(_cToken)).balanceOf(
-            address(this)
-        );
-        uint256 currentExchangeRate = CTokenInterface(address(_cToken))
-            .exchangeRateStored();
+        uint256 cTokenBalance = CTokenInterface(address(_cToken)).balanceOf(address(this));
+        uint256 currentExchangeRate = CTokenInterface(address(_cToken)).exchangeRateStored();
         uint256 underlyingBalanceInCToken;
         if (cTokenBalance > 0 && currentExchangeRate > 0) {
-            underlyingBalanceInCToken =
-                (cTokenBalance * currentExchangeRate) /
-                EXCHANGE_RATE_DENOMINATOR;
+            underlyingBalanceInCToken = (cTokenBalance * currentExchangeRate) / EXCHANGE_RATE_DENOMINATOR;
         }
         return underlyingBalanceInCToken;
     }
@@ -239,73 +214,69 @@ contract LendingManager is
         if (currentTotalAssets == 0) {
             return 0;
         }
-        return
-            (currentTotalAssets * R0_BASIS_POINTS) / BASIS_POINTS_DENOMINATOR;
+        return (currentTotalAssets * R0_BASIS_POINTS) / BASIS_POINTS_DENOMINATOR;
     }
 
-    function grantRewardsControllerRole(
-        address newController
-    ) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
+    function grantRewardsControllerRole(address newController)
+        external
+        onlyRole(ADMIN_ROLE)
+        nonReentrant
+        whenNotPaused
+    {
         if (newController == address(0)) revert AddressZero();
         _grantRole(REWARDS_CONTROLLER_ROLE, newController);
     }
 
-    function revokeRewardsControllerRole(
-        address controller
-    ) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
+    function revokeRewardsControllerRole(address controller) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
         if (controller == address(0)) revert AddressZero();
         _revokeRole(REWARDS_CONTROLLER_ROLE, controller);
     }
 
     // --- Administrative Functions for Role Management ---
 
-    function grantVaultRole(
-        address newVault
-    ) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
+    function grantVaultRole(address newVault) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
         if (newVault == address(0)) revert AddressZero();
         _grantRole(VAULT_ROLE, newVault);
     }
 
-    function revokeVaultRole(
-        address vault
-    ) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
+    function revokeVaultRole(address vault) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
         if (vault == address(0)) revert AddressZero();
         _revokeRole(VAULT_ROLE, vault);
     }
 
-    function grantAdminRole(
-        address newAdmin
-    ) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
+    function grantAdminRole(address newAdmin) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
         if (newAdmin == address(0)) revert AddressZero();
         _grantRole(ADMIN_ROLE, newAdmin);
     }
 
-    function revokeAdminRole(
-        address admin
-    ) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
+    function revokeAdminRole(address admin) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
         if (admin == address(0)) revert AddressZero();
         require(getRoleMemberCount(ADMIN_ROLE) > 1, "Cannot remove last admin");
         _revokeRole(ADMIN_ROLE, admin);
     }
 
-    function grantAdminRoleAsDefaultAdmin(
-        address newAdmin
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant whenNotPaused {
+    function grantAdminRoleAsDefaultAdmin(address newAdmin)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+        nonReentrant
+        whenNotPaused
+    {
         if (newAdmin == address(0)) revert AddressZero();
         _grantRole(ADMIN_ROLE, newAdmin);
     }
 
-    function revokeAdminRoleAsDefaultAdmin(
-        address admin
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant whenNotPaused {
+    function revokeAdminRoleAsDefaultAdmin(address admin)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+        nonReentrant
+        whenNotPaused
+    {
         if (admin == address(0)) revert AddressZero();
         require(getRoleMemberCount(ADMIN_ROLE) > 1, "Cannot remove last admin");
         _revokeRole(ADMIN_ROLE, admin);
     }
 
-    function redeemAllCTokens(
-        address recipient
-    )
+    function redeemAllCTokens(address recipient)
         external
         override
         onlyVault
@@ -315,32 +286,23 @@ contract LendingManager is
     {
         if (recipient == address(0)) revert AddressZero();
 
-        uint256 cTokenBalance = CTokenInterface(address(_cToken)).balanceOf(
-            address(this)
-        );
+        uint256 cTokenBalance = CTokenInterface(address(_cToken)).balanceOf(address(this));
         if (cTokenBalance == 0) {
             return 0;
         }
 
-        uint256 accrualResult = CTokenInterface(address(_cToken))
-            .accrueInterest();
+        uint256 accrualResult = CTokenInterface(address(_cToken)).accrueInterest();
         accrualResult; // Consume accrualResult to avoid unused variable warning
 
         // Calculate the expected amount of underlying tokens to receive *before* redemption.
-        uint256 exchangeRate = CTokenInterface(address(_cToken))
-            .exchangeRateStored();
+        uint256 exchangeRate = CTokenInterface(address(_cToken)).exchangeRateStored();
         // This check is important because if exchangeRate is 0, the multiplication below would be 0.
         // While cTokenBalance > 0, if exchangeRate is 0, it implies an issue or no value.
         if (exchangeRate == 0 && cTokenBalance > 0) {
             // This case should ideally not happen if cTokens are held, but as a safeguard.
-            revert LendingManager__BalanceCheckFailed(
-                "LM: redeemAll cToken.redeem exchange rate is zero",
-                1,
-                0
-            );
+            revert LendingManager__BalanceCheckFailed("LM: redeemAll cToken.redeem exchange rate is zero", 1, 0);
         }
-        uint256 expectedUnderlyingToReceive = (cTokenBalance * exchangeRate) /
-            EXCHANGE_RATE_DENOMINATOR;
+        uint256 expectedUnderlyingToReceive = (cTokenBalance * exchangeRate) / EXCHANGE_RATE_DENOMINATOR;
 
         uint256 balanceBeforeRedeem = _asset.balanceOf(address(this));
         // uint256 redeemResult = _cToken.redeem(cTokenBalance); // Redeem all cTokens
@@ -362,9 +324,7 @@ contract LendingManager is
         // Check if the actual amount received matches the expected amount (pre-fee).
         if (amountRedeemed != expectedUnderlyingToReceive) {
             revert LendingManager__BalanceCheckFailed(
-                "LM: redeemAll cToken.redeem receipt mismatch",
-                expectedUnderlyingToReceive,
-                amountRedeemed
+                "LM: redeemAll cToken.redeem receipt mismatch", expectedUnderlyingToReceive, amountRedeemed
             );
         }
 
@@ -374,9 +334,7 @@ contract LendingManager is
             uint256 balanceAfterSend = _asset.balanceOf(address(this));
             if (balanceAfterSend != balanceBeforeSend - amountRedeemed) {
                 revert LendingManager__BalanceCheckFailed(
-                    "LM: redeemAll asset send mismatch",
-                    balanceBeforeSend - amountRedeemed,
-                    balanceAfterSend
+                    "LM: redeemAll asset send mismatch", balanceBeforeSend - amountRedeemed, balanceAfterSend
                 );
             }
         }
@@ -390,12 +348,7 @@ contract LendingManager is
      * @dev This function is restricted to ADMIN_ROLE.
      * It emits a PrincipalReset event.
      */
-    function resetTotalPrincipalDeposited()
-        external
-        onlyRole(ADMIN_ROLE)
-        nonReentrant
-        whenNotPaused
-    {
+    function resetTotalPrincipalDeposited() external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
         uint256 oldValue = totalPrincipalDeposited;
         totalPrincipalDeposited = 0;
         emit PrincipalReset(oldValue, msg.sender);

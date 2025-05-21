@@ -117,7 +117,7 @@ contract RewardsController_Test_Base is Test {
 
         vm.startPrank(ADMIN);
         proxyAdmin = new ProxyAdmin(ADMIN);
-        
+
         bytes memory initData = abi.encodeWithSelector(
             RewardsController.initialize.selector,
             ADMIN, // RewardsController owner is ADMIN
@@ -138,7 +138,7 @@ contract RewardsController_Test_Base is Test {
             revert("Proxy deployment failed with low-level data");
         }
         rewardsController = RewardsController(address(proxy));
-        
+
         // Grant REWARDS_CONTROLLER_ROLE to rewardsController on the tokenVault
         // This needs to be done by an admin of tokenVault (ADMIN in this case)
         tokenVault.setRewardsControllerRole(address(rewardsController));

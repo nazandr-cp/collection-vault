@@ -35,12 +35,12 @@ contract ViewTest is RewardsController_Test_Base {
         assertEq(accountInfo.accrued, 0, "Accrued should be 0 initially");
 
         _generateYieldInLendingManager(100 ether);
-        
+
         // Transfer some of the yield to the RewardsController to simulate yield accrual
         vm.startPrank(DAI_WHALE);
         rewardToken.transfer(address(rewardsController), 10 ether); // Transfer 10 ether to RewardsController
         vm.stopPrank();
-        
+
         vm.roll(block.number + 1); // Advance block after yield generation
 
         // Refresh rewards; vault totalWeight > 0 from setUp, yield is available
@@ -48,7 +48,7 @@ contract ViewTest is RewardsController_Test_Base {
         vm.roll(block.number + 10); // Advance 10 blocks after refresh for rewards to accrue
 
         // Advance time for rewards to accrue
-        vm.warp(block.timestamp + 100); 
+        vm.warp(block.timestamp + 100);
 
         vm.startPrank(USER_A);
         // Sync again to calculate accrued rewards based on new globalRPW
@@ -56,7 +56,7 @@ contract ViewTest is RewardsController_Test_Base {
         vm.stopPrank();
 
         accountInfo = rewardsController.acc(address(tokenVault), USER_A);
-        
+
         // Add debugging logs
         console.log("Accrued rewards:", accountInfo.accrued);
         console.log("Reward debt:", accountInfo.rewardDebt);
@@ -79,12 +79,12 @@ contract ViewTest is RewardsController_Test_Base {
         uint256 lastUpdateBlockBeforeYield = vaultInfoPreYield.lastUpdateBlock;
 
         _generateYieldInLendingManager(100 ether);
-        
+
         // Transfer some of the yield to the RewardsController to simulate yield accrual
         vm.startPrank(DAI_WHALE);
         rewardToken.transfer(address(rewardsController), 5 ether); // Transfer 5 ether to RewardsController
         vm.stopPrank();
-        
+
         vm.roll(block.number + 1); // Advance block after yield generation
 
         // Now refresh. AccruedYield > 0 from _generateYieldInLendingManager,
@@ -107,7 +107,10 @@ contract ViewTest is RewardsController_Test_Base {
         // We will use mockERC721_2 since mockERC721 is already whitelisted in setUp()
         vm.startPrank(ADMIN);
         rewardsController.whitelistCollection(
-            address(mockERC721_2), IRewardsController.CollectionType.ERC721, IRewardsController.RewardBasis.DEPOSIT, 1000
+            address(mockERC721_2),
+            IRewardsController.CollectionType.ERC721,
+            IRewardsController.RewardBasis.DEPOSIT,
+            1000
         );
         mockERC721_2.mintSpecific(USER_A, 1);
         vm.stopPrank();
@@ -120,12 +123,12 @@ contract ViewTest is RewardsController_Test_Base {
         assertEq(rewardsController.userNonce(address(tokenVault), USER_A), 0, "Nonce should still be 0 after sync");
 
         _generateYieldInLendingManager(100 ether);
-        
+
         // Transfer some of the yield to the RewardsController to simulate yield accrual
         vm.startPrank(DAI_WHALE);
         rewardToken.transfer(address(rewardsController), 10 ether);
         vm.stopPrank();
-        
+
         rewardsController.refreshRewardPerBlock(address(tokenVault));
 
         vm.startPrank(USER_A);
@@ -166,7 +169,10 @@ contract ViewTest is RewardsController_Test_Base {
         // Use mockERC721_alt since mockERC721 is already whitelisted in setUp()
         vm.startPrank(ADMIN);
         rewardsController.whitelistCollection(
-            address(mockERC721_alt), IRewardsController.CollectionType.ERC721, IRewardsController.RewardBasis.DEPOSIT, 1000
+            address(mockERC721_alt),
+            IRewardsController.CollectionType.ERC721,
+            IRewardsController.RewardBasis.DEPOSIT,
+            1000
         );
         mockERC721_alt.mintSpecific(USER_A, 1);
         vm.stopPrank();
@@ -180,12 +186,12 @@ contract ViewTest is RewardsController_Test_Base {
         );
 
         _generateYieldInLendingManager(100 ether);
-        
+
         // Transfer some of the yield to the RewardsController to simulate yield accrual
         vm.startPrank(DAI_WHALE);
         rewardToken.transfer(address(rewardsController), 10 ether);
         vm.stopPrank();
-        
+
         rewardsController.refreshRewardPerBlock(address(tokenVault));
 
         IRewardsController.Claim[] memory claims = new IRewardsController.Claim[](1);

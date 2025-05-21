@@ -11,10 +11,7 @@ interface ILendingManager {
     // Events
     event YieldTransferred(address indexed recipient, uint256 amount);
     event YieldTransferredBatch(
-        address indexed recipient,
-        uint256 totalAmount,
-        address[] collections,
-        uint256[] amounts
+        address indexed recipient, uint256 totalAmount, address[] collections, uint256[] amounts
     );
     event DepositToProtocol(address indexed caller, uint256 amount);
     event WithdrawFromProtocol(address indexed caller, uint256 amount);
@@ -39,11 +36,7 @@ interface ILendingManager {
     error LM_CallerNotVault(address caller);
     error LM_CallerNotRewardsController(address caller);
     error CannotRemoveLastAdmin(bytes32 role);
-    error LendingManager__BalanceCheckFailed(
-        string reason,
-        uint256 expected,
-        uint256 actual
-    );
+    error LendingManager__BalanceCheckFailed(string reason, uint256 expected, uint256 actual);
 
     /**
      * @notice Get the underlying ERC20 asset managed by the lending manager.
@@ -62,18 +55,14 @@ interface ILendingManager {
      * @param amount Amount to deposit.
      * @return success True if deposit was successful.
      */
-    function depositToLendingProtocol(
-        uint256 amount
-    ) external returns (bool success);
+    function depositToLendingProtocol(uint256 amount) external returns (bool success);
 
     /**
      * @notice Withdraw a specified amount of the asset from the lending protocol.
      * @param amount Amount to withdraw.
      * @return success True if withdrawal was successful.
      */
-    function withdrawFromLendingProtocol(
-        uint256 amount
-    ) external returns (bool success);
+    function withdrawFromLendingProtocol(uint256 amount) external returns (bool success);
 
     /**
      * @notice Get the total amount of assets managed by the lending manager (principal + yield).
@@ -93,9 +82,7 @@ interface ILendingManager {
      * @param recipient Recipient address.
      * @return amountRedeemed The amount of underlying asset received from redeeming all cTokens.
      */
-    function redeemAllCTokens(
-        address recipient
-    ) external returns (uint256 amountRedeemed);
+    function redeemAllCTokens(address recipient) external returns (uint256 amountRedeemed);
 
     /**
      * @notice Returns the total principal amount deposited by the Vault into the lending protocol.
