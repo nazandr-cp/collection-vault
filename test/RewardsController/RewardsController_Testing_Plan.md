@@ -101,111 +101,116 @@ This section covers tests for the initial setup, ownership, and core configurati
 
 This section covers tests for the reward calculation mechanisms.
 
-### 2.1. `calculateBoost(uint256 nftBalance, uint96 beta)`
--   Test with `nftBalance` = 0, expected boost = 0.
--   Test with `nftBalance` > 0 and `beta` = 0, expected boost = 0.
--   Test with `nftBalance` > 0 and `beta` > 0, verify correct boost calculation (e.g., `beta` / `BPS_SCALER`).
--   Test with `nftBalance` > 0 and `beta` = `BPS_SCALER`, expected boost = 1 (or 10000 if scaled).
--   Test with large `nftBalance` and `beta` values.
+### 2.1. `_calculateUserWeight(address user, address collectionAddress)` (Internal, tested via `syncAccount`)
+-   Test with `user` or `collectionAddress` as `address(0)`, expected weight = 0.
+-   Test `ERC721` collection type:
+    -   `nftBalanceOf` returns 0, expected weight = 0 (or `PRECISION_FACTOR` if `nValue > 0` and no specific weight function).
+    -   `nftBalanceOf` returns > 0, verify weight calculation based on `WeightFunctionType` (LINEAR, EXPONENTIAL, or default).
+-   Test `ERC1155` collection type:
+    -   `balanceOf(user, 0)` returns 0, expected weight = 0.
+    -   `balanceOf(user, 0)` returns > 0, verify weight calculation.
+-   Test `DEPOSIT` basis:
+    -   `balanceOf(user)` returns 0, expected weight = 0.
+    -   `balanceOf(user)` returns > 0, verify weight calculation.
+-   Test `BORROW` basis:
+    -   Placeholder for borrow balance, currently returns 0. Test that it returns 0.
+-   Test `FIXED_POOL` basis:
+    -   `_fixedPoolCollectionBalances[collectionAddress]` is 0, expected weight = 0.
+    -   `_fixedPoolCollectionBalances[collectionAddress]` is > 0, expected weight = `PRECISION_FACTOR`.
+-   Test `LINEAR` weight function: `g(N) = 1 + k*N`.
+    -   Vary `nValue` and `wf.p1` (k).
+    -   Test edge cases: `nValue` = 0, large `nValue`.
+-   Test `EXPONENTIAL` weight function: `g(N) = (1+r)^N`.
+    -   Vary `nValue` and `wf.p1` (r).
+    -   Test edge cases: `nValue` = 0, large `nValue` (potential overflow).
+-   Test `DEFAULT` weight function: `nValue > 0` gives `PRECISION_FACTOR`, else 0.
+-   Test `weight` capping at `type(uint128).max`.
 
-### 2.2. Internal Reward Calculation (Indirect Testing)
--   Since `_calculateRewardsWithDelta` is internal, its logic will be tested indirectly via `getAccruedRewardsForCollection` and claim functions.
--   Focus on scenarios that trigger different paths within the internal calculation:
-    -   User has NFT balance vs. no NFT balance.
-    -   Collection `rewardBasis` is `DEPOSIT` vs. `BORROW`.
-    -   User has positive deposit/borrow balance vs. zero balance in `CollectionsVault`.
+### 2.2. `_accrueUserRewards(address forVault, address user, address collectionAddress)` (Internal, tested via `_updateUserWeightAndAccrueRewards`)
+-   Verify `account.accrued` is correctly updated based on `account.weight`, `vaultStore.globalRPW`, and `collectionShare`.
+-   Verify `account.rewardDebt` is correctly updated.
+-   Test with zero `account.weight`.
+-   Test with zero `vaultStore.globalRPW`.
+-   Test with zero `collectionShare`.
 
-### 2.3. `getAccruedRewardsForCollection(address user, address collection)`
--   **No Rewards Scenarios:**
-    -   User has no deposit/borrow balance for the collection's `rewardBasis`.
-    -   Collection is not whitelisted.
-    -   `LendingManager` has zero yield for the underlying token.
-    -   User has NFTs, but `beta` is 0 for the collection.
-    -   User has deposit/borrow balance, but `rewardSharePercentage` is 0 for the collection.
--   **Rewards Based on 'DEPOSIT' Basis:**
-    -   User has a deposit balance, has NFTs with `beta` > 0.
-    -   User has a deposit balance, no NFTs.
-    -   User has no deposit balance.
-    -   Vary `rewardSharePercentage` and `beta`.
--   **Rewards Based on 'BORROW' Basis:**
-    -   User has a borrow balance, has NFTs with `beta` > 0.
-    -   User has a borrow balance, no NFTs.
-    -   User has no borrow balance.
-    -   Vary `rewardSharePercentage` and `beta`.
--   **Non-Whitelisted Collection:**
-    -   Verify returns 0 rewards.
--   **User with/without NFTs:**
-    -   Test calculation with `nftBalanceOf(user, collection)` returning 0.
-    -   Test calculation with `nftBalanceOf(user, collection)` returning > 0.
--   **Interaction with `CollectionsVault`:**
-    -   Mock `CollectionsVault` to return various deposit/borrow balances for the user and collection.
--   **Interaction with `LendingManager`:**
-    -   Mock `LendingManager` to return various `getYieldGeneratedNoSideEffects` values.
+### 2.3. `_updateVaultTotalWeight(address forVault, uint128 oldUserWeight, uint128 newUserWeight)` (Internal, tested via `_updateUserWeightAndAccrueRewards`)
+-   Verify `vaultStore.totalWeight` is correctly updated.
+-   Test with `oldUserWeight` = 0, `newUserWeight` > 0.
+-   Test with `oldUserWeight` > 0, `newUserWeight` = 0.
+-   Test with `oldUserWeight` > 0, `newUserWeight` > 0.
 
-### 2.4. `getAccruedRewardsForAllCollections(address user, address[] calldata collections)`
--   User has rewards in multiple specified collections.
--   User has rewards in a single specified collection.
--   User has no rewards in any specified collections.
--   One or more specified collections are not whitelisted.
--   Empty `collections` array.
--   `collections` array with duplicate entries.
--   Verify sum of individual `getAccruedRewardsForCollection` calls matches the result.
+### 2.4. `_updateUserWeightAndAccrueRewards(address forVault, address user, address collectionAddress)` (Internal, tested via `syncAccount`)
+-   Verify that `_accrueUserRewards` is called first.
+-   Verify `account.weight` is updated to `newWeight` calculated by `_calculateUserWeight`.
+-   Verify `vaultStore.totalWeight` is updated via `_updateVaultTotalWeight`.
+-   Verify `account.rewardDebt` is correctly re-calculated based on the `newWeight` and current `globalRPW`.
+-   Test scenarios where `oldWeight == newWeight` (should still accrue, but not update weight/totalWeight).
+
+### 2.5. `syncAccount(address user, address collectionAddress)`
+-   Test successful synchronization:
+    -   Verify `_updateUserWeightAndAccrueRewards` is called.
+    -   Verify `AccountStorageData` for the user and `InternalVaultInfo` for the vault are updated.
+-   Test revert if `_vault` is `address(0)`.
+
+### 2.6. `refreshRewardPerBlock(address forVault)`
+-   Test successful refresh:
+    -   Verify `rewardPerBlock` is calculated based on `currentYield` and `blocksDelta`.
+    -   Verify `globalRPW` is calculated based on `rewardPerBlock` and `totalWeight`.
+    -   Verify `lastUpdateBlock` and `lastAssetsBalance` are updated.
+    -   Verify `RewardPerBlockUpdated` event is emitted.
+-   Test revert if `forVault` is not the main `_vault`.
+-   Test `currentYield` calculation:
+    -   `currentBalance >= vaultStore.lastAssetsBalance`.
+    -   `currentBalance < vaultStore.lastAssetsBalance` (yield should be 0).
+-   Test `blocksDelta`:
+    -   `blocksDelta > 0`: `newRewardPerBlock` is calculated.
+    -   `blocksDelta == 0` (e.g., called twice in the same block): `newRewardPerBlock` should be 0, and it should be a no-op or handle gracefully without reverting.
+-   Test `globalRPW` calculation when `vaultStore.totalWeight == 0`:
+    -   Ensure `globalRPW` is correctly set to 0.
+    -   Ensure no division by zero error occurs.
+-   Test `rewardPerBlock` updates based on yield and `blocksDelta` (or is 0 if `blocksDelta` is 0).
 
 ## 3. Reward Claiming Mechanisms
 
 This section covers tests for the reward claiming functions, including signature verification and event emissions.
 
-### 3.1. `claimRewardsForCollection(address recipient, address collection, uint256 rewardAmount, uint256 nonce, bytes calldata signature)`
+### 3.1. `claimLazy(IRewardsController.Claim[] calldata claims, bytes calldata signature)`
 -   **Successful Claims:**
-    -   Claim with a valid EIP-712 signature from the `authorizedUpdater`.
-    -   Verify `RewardsClaimedForCollection` event is emitted with correct parameters.
-    -   Verify correct amount of reward token is transferred from `LendingManager` to the `recipient`.
-    -   Verify `authorizedUpdaterNonce` for the updater is marked as used (implicitly, by checking `_isNonceUsedOrNext`).
-    -   Claim when `rewardAmount` is 0 (should succeed, no transfer, event emitted).
+    -   Claim with a valid EIP-712 signature from the `_claimSigner`.
+    -   Verify `RewardClaimed` event is emitted with correct parameters for each claim.
+    -   Verify correct total amount of reward token is transferred to `msg.sender`.
+    -   Verify `account.nonce` is incremented after each successful claim item.
+    -   Verify `account.accrued` is reset to 0 after claiming.
+    -   Claim when `amountForThisClaim` is 0 (should succeed, no transfer, event emitted if `amountForThisClaim` was > 0 before reset).
 -   **Revert Conditions:**
     -   Invalid signature (wrong signer, tampered data, wrong nonce).
-    -   Used nonce.
-    -   Signature from an address that is not the current `authorizedUpdater`.
+    -   `recoveredSigner` is `address(0)`.
+    -   `user` in claim is `address(0)`.
+    -   `block.timestamp > currentClaim.deadline`.
+    -   `currentClaim.nonce != account.nonce`.
     -   `collection` is not whitelisted.
-    -   `rewardAmount` in signature does not match `rewardAmount` parameter.
-    -   `recipient` in signature does not match `recipient` parameter.
-    -   `collection` in signature does not match `collection` parameter.
-    -   `LendingManager` has insufficient yield/funds to cover `rewardAmount` (test `YieldTransferCapped` event if applicable).
-    -   `rewardAmount` is greater than the actual accrued rewards (should the signature be for the *claimable* amount or *requested* amount? Assuming signature is for requested amount and contract verifies against actual).
+-   **Fixed Pool Logic:**
+    -   Test claiming from a `FIXED_POOL` collection:
+        -   `amountForThisClaim <= _fixedPoolCollectionBalances[collection]`: full claim, balance decreases.
+        -   `amountForThisClaim > _fixedPoolCollectionBalances[collection]`: claim only available balance, balance becomes 0.
+        -   `_fixedPoolCollectionBalances[collection]` is 0: `amountForThisClaim` becomes 0, no transfer.
+-   **`_updateUserWeightAndAccrueRewards` interaction:**
+    -   Test `claimLazy` scenario: User's underlying position changes, `refreshRewardPerBlock` (keeper) has *not* run since. User calls `claimLazy`. Verify rewards are calculated based *only* on accruals up to the current block of the `claimLazy` transaction, ensuring no unearned/future rewards are paid. This implies `_updateUserWeightAndAccrueRewards` should be called *before* calculating `amountForThisClaim`.
+-   **`nonReentrant` guard:**
+    -   Simulate a re-entrant call from a malicious `_vault` contract during the yield transfer step. Verify transaction reverts.
 -   **Event Emission:**
-    -   `RewardsClaimedForCollection(recipient, collection, rewardToken, actualClaimedAmount)`.
-    -   `YieldTransferCapped(collection, rewardToken, requestedAmount, actualTransferredAmount)` if `LendingManager` cannot fulfill the full `rewardAmount`.
+    -   `RewardClaimed(vaultAddress, user, amountForThisClaim)`.
 -   **Token Transfers and Balance Updates:**
-    -   Verify `LendingManager.transferYield` is called with correct parameters.
-    -   Verify recipient's token balance increases by `actualClaimedAmount`.
--   **Zero Reward Claims:**
-    -   Test claiming 0 rewards successfully (no token transfer, event emitted).
+    -   Verify `IERC20(IERC4626(vaultAddress).asset()).safeTransfer(msg.sender, totalAmountToClaim)` is called.
+    -   Verify `msg.sender`'s token balance increases by `totalAmountToClaim`.
 
-### 3.2. `claimAllRewards(address recipient, address[] calldata collections, uint256[] calldata rewardAmounts, uint256 nonce, bytes calldata signature)`
--   **Successful Claims:**
-    -   Claim for multiple collections with a valid EIP-712 signature.
-    -   Verify `RewardsClaimedForAll` event is emitted.
-    -   Verify multiple `RewardsClaimedForCollection` events are emitted (one for each collection with non-zero reward).
-    -   Verify correct total token transfers.
-    -   Claim when some `rewardAmounts` are 0.
-    -   Claim when all `rewardAmounts` are 0.
--   **Revert Conditions:**
-    -   Invalid signature.
-    -   Used nonce.
-    -   `collections` and `rewardAmounts` array lengths mismatch.
-    -   One or more collections are not whitelisted.
-    -   Signature data mismatch (recipient, collections, amounts).
-    -   Insufficient total yield in `LendingManager` across all claims.
--   **Event Emission:**
-    -   `RewardsClaimedForAll(recipient, totalRewardAmount)`.
-    -   `RewardsClaimedForCollection` for each successfully claimed collection.
-    -   `YieldTransferCapped` if applicable for any collection.
--   **Token Transfers for Multiple Collections:**
-    -   Verify `LendingManager.transferYield` is called appropriately for each collection.
-    -   Verify recipient's balance reflects the sum of all `actualClaimedAmounts`.
--   **Handling of Zero Rewards:**
-    -   Test with some collections having 0 `rewardAmounts` in the input.
-    -   Test with all collections having 0 `rewardAmounts`.
+### 3.2. `updateTrustedSigner(address newSigner)`
+-   Test successful update by the owner.
+-   Verify `_claimSigner` is updated.
+-   Verify `TrustedSignerUpdated` event is emitted.
+-   Test revert if called by a non-owner.
+-   Test revert if `newSigner == address(0)`.
+-   Test behavior if called multiple times with the same `newSigner` (e.g., via multicall) - should succeed idempotently (current design).
 
 ## 4. Signature Verification and Updater Logic
 
@@ -215,63 +220,62 @@ This section focuses on the EIP-712 signature scheme and nonce management.
 -   **`EIP712_DOMAIN_SEPARATOR()`:**
     -   Verify it's correctly computed based on chain ID and contract address.
     -   Test that it changes if the chain ID changes (if feasible in tests).
--   **`CLAIM_REWARD_TYPEHASH`:**
-    -   Verify its value matches the expected EIP-712 typehash for the `ClaimRewardData` struct.
--   **`CLAIM_ALL_REWARDS_TYPEHASH`:**
-    -   Verify its value matches the expected EIP-712 typehash for the `ClaimAllRewardsData` struct.
+-   **`CLAIM_TYPEHASH`:**
+    -   Verify its value matches the expected EIP-712 typehash for the `Claim` struct.
 
-### 4.2. Internal Signature Verification (`_verifySignature`)
--   This is tested implicitly via the `claimRewardsForCollection` and `claimAllRewards` functions.
--   Ensure test cases for claim functions cover:
+### 4.2. Internal Signature Verification (Implicitly tested via `claimLazy`)
+-   Ensure test cases for `claimLazy` cover:
     -   Valid signatures.
     -   Signatures from incorrect signers.
-    -   Signatures with tampered data (recipient, collection(s), amount(s), nonce).
-    -   Signatures with an incorrect nonce (already used, or not the current `authorizedUpdaterNonce`).
+    -   Signatures with tampered data (account, collection, secondsUser, secondsColl, incRPS, yieldSlice, nonce, deadline).
+    -   Signatures with an incorrect nonce (not matching `account.nonce`).
     -   Signatures generated against a different domain separator.
 
-### 4.3. Nonce Management for `authorizedUpdater`
--   **`_isNonceUsedOrNext(address signer, uint256 nonce)`:**
-    -   Test with `nonce` < `authorizedUpdaterNonce[signer]` (should be considered used).
-    -   Test with `nonce` == `authorizedUpdaterNonce[signer]` (should be considered next, valid for current claim).
-    -   Test with `nonce` > `authorizedUpdaterNonce[signer]` (should be invalid for current claim).
--   Verify `authorizedUpdaterNonce` is correctly incremented when `setAuthorizedUpdater` is called.
--   Verify that after a successful claim, the used nonce cannot be reused for the same `authorizedUpdater`.
--   Test nonce behavior when `authorizedUpdater` changes: the nonce for the old updater should remain, and the new updater starts with its own nonce sequence.
+### 4.3. Nonce Management for `AccountStorageData`
+-   Verify `account.nonce` is correctly incremented after a successful claim item in `claimLazy`.
+-   Test that a used nonce cannot be reused for the same account.
 
 ## 5. View Functions and State Variables
 
-This section covers tests for all public view functions and state variable accessors.
+This section covers tests for all public view functions and state variable accessors, reflecting the new storage structures.
 
--   **`collectionConfigs(address collection)`:**
-    -   Verify returns correct `beta`, `rewardBasis`, and `rewardSharePercentage` after `addNFTCollection` and `updateNFTCollection`.
-    -   Verify returns zeroed/default values for non-whitelisted or removed collections.
+-   **`collectionConfigs(address collection)`:** (Removed, replaced by individual mappings)
 -   **`collectionRewardBasis(address collection)`:**
     -   Verify returns correct `RewardBasis` for a whitelisted collection.
     -   Verify returns default/zero for non-whitelisted collection.
 -   **`isCollectionWhitelisted(address collection)`:**
     -   Verify returns `true` for added collections.
     -   Verify returns `false` for non-added or removed collections.
--   **`getLendingManager()`:**
-    -   Verify returns the address set during initialization or `setLendingManager`.
--   **`getTokenVault()`:**
-    -   Verify returns the address set during initialization or `setTokenVault`.
--   **`getAuthorizedUpdater()`:**
-    -   Verify returns the address set during initialization or `setAuthorizedUpdater`.
--   **`getMaxRewardSharePercentage()`:**
-    -   Verify returns the value set during initialization or `setMaxRewardSharePercentage`.
--   **`EIP712_DOMAIN_SEPARATOR()` (already covered in 4.1)**
+-   **`oracle()`:**
+    -   Verify returns the `_priceOracle` address set during construction.
+-   **`vault()`:**
+    -   Verify returns the `_vault` address set during initialization.
+    -   **ABI Compatibility**: Ensure `vault()` signature remains unchanged.
+-   **`userNonce(address vaultAddress, address userAddress)`:**
+    -   Verify returns the correct `nonce` from `_accountStorage[vaultAddress][userAddress].nonce`.
+-   **`userSecondsPaid(address vaultAddress, address userAddress)`:**
+    -   Verify returns the correct `secondsPaid` from `_accountStorage[vaultAddress][userAddress].secondsPaid`.
+-   **`vaults(address vaultAddress)`:**
+    -   Verify returns correct `rewardPerBlock`, `globalRPW`, `totalWeight`, `lastUpdateBlock` from `_vaultsData[vaultAddress]`.
+    -   Verify collection-specific fields (`linK`, `expR`, `useExp`, `cToken`, `nft`, `weightByBorrow`) are returned as default values (0 or false).
+-   **`vaultInfo(address vaultAddress)`:**
+    -   Verify it correctly calls `vaults(vaultAddress)` and returns the same `VaultInfo`.
+-   **`acc(address vaultAddress, address userAddress)`:**
+    -   Verify returns correct `weight`, `rewardDebt`, `accrued` from `_accountStorage[vaultAddress][userAddress]`.
+-   **`paused()`:**
+    -   Verify returns `true` when paused, `false` when unpaused.
 
 ## 6. Access Control
 
 This section ensures that functions requiring specific roles (e.g., `onlyOwner`) are properly protected.
 
 -   **Verification of `onlyOwner` Modifiers:**
-    -   For each function with `onlyOwner` (e.g., `setLendingManager`, `addNFTCollection`, `setAuthorizedUpdater`, `setMaxRewardSharePercentage`, `transferOwnership`, `renounceOwnership`):
+    -   For each function with `onlyOwner` (e.g., `whitelistCollection`, `removeCollection`, `updateCollectionPercentageShare`, `setWeightFunction`, `updateTrustedSigner`, `pause`, `unpause`, `transferOwnership`, `renounceOwnership`):
         -   Test successful execution by the owner.
         -   Test revert when called by a non-owner account.
 -   **Access Control for Signature-Gated Functions:**
-    -   This is implicitly tested via the claim functions (`claimRewardsForCollection`, `claimAllRewards`).
-    -   Ensure tests confirm that only a message signed by the current `authorizedUpdater` (with the correct nonce) can successfully execute these functions.
+    -   This is implicitly tested via the `claimLazy` function.
+    -   Ensure tests confirm that only a message signed by the current `_claimSigner` (with the correct nonce) can successfully execute these functions.
 
 ## 7. Proxy and Upgradeability (Basic Checks)
 
@@ -290,33 +294,30 @@ This section includes basic checks related to the proxy pattern.
 
 This section covers less common scenarios and potential stress points.
 
--   **Interactions with `LendingManager`:**
-    -   `getYieldGeneratedNoSideEffects` returns 0.
-    -   `transferYield` reverts or transfers less than requested (test `YieldTransferCapped` event).
-    -   `LendingManager` is a malicious contract (basic interaction checks).
--   **Interactions with `CollectionsVault`:**
-    -   `getBalance` (for deposit/borrow) returns 0 for a user.
-    -   `nftBalanceOf` returns 0 for a user.
-    -   `CollectionsVault` is a malicious contract (basic interaction checks).
--   **Large Number of Collections in `claimAllRewards`:**
-    -   Test with a reasonably large array of collections to check for gas limits or unexpected behavior.
+-   **Interactions with `ICollectionsVault`:**
+    -   `IERC4626(forVault).asset()` returns `address(0)` or invalid asset.
+    -   `IERC20(asset).balanceOf(address(this))` returns unexpected values.
+    -   `ICollectionsVault` is a malicious contract (basic interaction checks).
+-   **Large Number of Claims in `claimLazy`:**
+    -   Test with a reasonably large array of claims to check for gas limits or unexpected behavior.
     -   Consider if there's a practical limit imposed by block gas limits.
 -   **Gas Consumption for Key Functions:**
     -   Measure gas usage for:
-        -   `addNFTCollection`, `updateNFTCollection`, `removeNFTCollection`.
-        -   `claimRewardsForCollection`.
-        -   `claimAllRewards` (with varying numbers of collections).
-        -   `getAccruedRewardsForCollection`.
-        -   `getAccruedRewardsForAllCollections`.
--   **Re-entrancy:**
-    -   Analyze potential re-entrancy vectors, especially during `claimRewardsForCollection` or `claimAllRewards` if `LendingManager.transferYield` could call back into `RewardsController`. (Given the typical flow, direct re-entrancy seems less likely if `transferYield` is a simple token transfer, but good to consider).
-    -   If `rewardToken` is an ERC777 or has hooks, consider implications.
+        -   `whitelistCollection`, `removeCollection`, `updateCollectionPercentageShare`, `setWeightFunction`.
+        -   `claimLazy` (with varying numbers of claims).
+        -   `syncAccount`.
+        -   `refreshRewardPerBlock`.
+        -   `userNonce`, `userSecondsPaid`, `vaults`, `acc`.
 -   **Zero Address Inputs:**
-    -   Re-verify all functions that take address parameters for proper handling of `address(0)` where not explicitly allowed (e.g., `recipient` in claims, `collection` addresses).
+    -   Re-verify all functions that take address parameters for proper handling of `address(0)` where not explicitly allowed (e.g., `collectionAddress` in `whitelistCollection`, `user` in `syncAccount`).
 -   **Maximum Values:**
-    -   Test with `rewardSharePercentage` at `maxRewardSharePercentage`.
-    -   Test with `beta` at its maximum reasonable value.
+    -   Test with `sharePercentageBps` at `MAX_REWARD_SHARE_PERCENTAGE`.
+    -   Test with `_totalCollectionShareBps` reaching `MAX_REWARD_SHARE_PERCENTAGE`.
 -   **Timestamp Dependencies:**
-    -   Confirm no unintended reliance on `block.timestamp` for core reward logic if calculations are meant to be purely based on external state and signed messages.
+    -   Confirm `block.timestamp` is used correctly for `claim.deadline` in `claimLazy`.
+-   **`_totalCollectionShareBps` guard:**
+    -   Test `whitelistCollection` or `updateCollectionPercentageShare` calls that attempt to make `_totalCollectionShareBps > MAX_REWARD_SHARE_PERCENTAGE` revert with `InvalidRewardSharePercentage` (e.g., add 6000 BPS, then attempt to add 5000 BPS).
+-   **ERC165 checks in `whitelistCollection`:**
+    -   Test `ERC721` and `ERC1155` collections with valid and invalid interfaces.
 
 This testing plan should guide the creation of specific test files such as `Admin.t.sol`, `Calculation.t.sol`, `Claiming.t.sol`, `Signature.t.sol`, and `View.t.sol`, all inheriting from `RewardsController_Test_Base.sol`.

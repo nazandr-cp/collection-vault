@@ -26,6 +26,8 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
     mapping(address => uint256) public collectionYieldTransferred;
     mapping(address => uint16) public collectionRewardSharePercentage;
 
+    event CollectionYieldTransferred(address indexed collection, uint256 amount);
+
     constructor(
         IERC20 _asset,
         string memory _name,

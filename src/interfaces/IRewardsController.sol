@@ -4,9 +4,15 @@ pragma solidity ^0.8.19;
 import {ICollectionsVault} from "./ICollectionsVault.sol";
 
 interface IRewardsController {
+    enum CollectionType {
+        ERC721,
+        ERC1155
+    }
+
     enum RewardBasis {
         DEPOSIT,
-        BORROW
+        BORROW,
+        FIXED_POOL
     }
 
     enum WeightFunctionType {
@@ -63,16 +69,19 @@ interface IRewardsController {
         uint256 incRPS,
         uint256 yieldSlice
     );
-    event NewCollectionWhitelisted(address indexed collection, RewardBasis rewardBasis, uint256 sharePercentage);
+    event NewCollectionWhitelisted(
+        address indexed collection, CollectionType collectionType, RewardBasis rewardBasis, uint16 sharePercentage
+    );
     event WhitelistCollectionRemoved(address indexed collection);
     event CollectionRewardShareUpdated(
-        address indexed collection, uint256 oldSharePercentage, uint256 newSharePercentage
+        address indexed collection, uint16 oldSharePercentage, uint16 newSharePercentage
     );
     event TrustedSignerUpdated(address oldSigner, address newSigner, address indexed changedBy);
     event BatchRewardsClaimedForLazy(address indexed caller, uint256 totalDue, uint256 numClaims);
     event WeightFunctionSet(address indexed collection, WeightFunction fn);
     event RewardClaimed(address vault, address indexed user, uint256 amount);
     event RewardPerBlockUpdated(address indexed vault, uint128 rewardPerBlock);
+    event VaultUpdated(address indexed newVaultAddress);
 
     //  ====== Errors ======
     error AddressZero();
@@ -87,37 +96,38 @@ interface IRewardsController {
     error InvalidNonce(uint256 providedNonce, uint256 expectedNonce);
     error VaultMismatch();
     error InvalidRewardSharePercentage(uint16 percentage);
+    error InvalidCollectionInterface(address collection, bytes4 interfaceId);
+    error CannotSetSignerToZeroAddress();
 
     // ====== Collection Management Functions ======
-    function whitelistCollection(address collectionAddress, RewardBasis rewardBasis, uint256 sharePercentage)
-        external;
+    function whitelistCollection(
+        address collectionAddress,
+        CollectionType collectionType,
+        RewardBasis rewardBasis,
+        uint16 sharePercentageBps
+    ) external;
     function removeCollection(address collectionAddress) external;
-    function updateCollectionPercentageShare(address collectionAddress, uint256 sharePercentage) external;
+    function updateCollectionPercentageShare(address collectionAddress, uint16 newSharePercentageBps) external;
+
     function setWeightFunction(address collectionAddress, WeightFunction calldata fn) external;
 
     // ====== View Functions ======
     function oracle() external view returns (address);
-    function vault() external view returns (address);
-    function vaultInfo() external view returns (VaultInfo memory);
+    function vault() external view returns (ICollectionsVault);
 
-    function lastAssets() external view returns (uint256);
-    function yieldLeft() external view returns (uint128);
-
-    function coll(address collectionAddress) external view returns (uint128 accRPS, uint128 lastSeconds);
-
-    function userNonce(address userAddress) external view returns (uint128 nonce);
-    function userSecondsPaid(address userAddress, address collectionAddress)
-        external
-        view
-        returns (uint128 secondsPaid);
+    function userNonce(address vaultAddress, address userAddress) external view returns (uint64 nonce);
+    function userSecondsPaid(address vaultAddress, address userAddress) external view returns (uint64 secondsPaid);
 
     function vaults(address vaultAddress) external view returns (VaultInfo memory);
     function acc(address vaultAddress, address userAddress) external view returns (AccountInfo memory);
 
+    function collectionRewardBasis(address collectionAddress) external view returns (RewardBasis);
+
+    function isCollectionWhitelisted(address collectionAddress) external view returns (bool);
+
     // ====== User/Claim Functions ======
-    function previewClaim(Claim[] calldata claims) external view returns (uint256 totalDue);
-    function claimLazy(Claim[] calldata claims, bytes[] calldata signatures) external;
-    function claim(address vault, address to) external;
+    function claimLazy(Claim[] calldata claims, bytes calldata signature) external;
+    function syncAccount(address user, address collectionAddress) external;
 
     // ====== Admin Functions ======
     function updateTrustedSigner(address newSigner) external;
@@ -128,4 +138,5 @@ interface IRewardsController {
 
     // ====== Admin/Keeper Functions ======
     function refreshRewardPerBlock(address vault) external;
+    function claimSigner() external view returns (address);
 }

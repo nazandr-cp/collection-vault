@@ -27,6 +27,13 @@ contract MockERC20 is ERC20, Ownable {
         _mint(to, amount);
     }
 
+    // function _transfer(address from, address to, uint256 value) internal virtual override {
+    //     super._transfer(from, to, value);
+    // }
+    function _update(address from, address to, uint256 value) internal virtual override {
+        super._update(from, to, value);
+    }
+
     function burn(address from, uint256 amount) public {
         _burn(from, amount);
     }

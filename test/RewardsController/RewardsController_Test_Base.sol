@@ -32,10 +32,9 @@ contract RewardsController_Test_Base is Test {
     using Strings for uint256;
 
     // Typehashes from RewardsController.sol
-    bytes32 public constant CLAIM_REWARD_TYPEHASH =
-        keccak256("ClaimReward(address collection,address recipient,uint256 rewardAmount,uint256 nonce)");
-    bytes32 public constant CLAIM_ALL_REWARDS_TYPEHASH =
-        keccak256("ClaimAllRewards(address recipient,bytes32 collectionsHash,bytes32 rewardAmountsHash,uint256 nonce)");
+    bytes32 public constant CLAIM_TYPEHASH = keccak256(
+        "Claim(address account,address collection,uint256 secondsUser,uint256 secondsColl,uint256 incRPS,uint256 yieldSlice,uint256 nonce,uint256 deadline)"
+    );
 
     address constant USER_A = address(0xAAA);
     address constant USER_B = address(0xBBB);
@@ -78,11 +77,11 @@ contract RewardsController_Test_Base is Test {
     function setUp() public virtual {
         uint256 forkId = vm.createFork("mainnet", FORK_BLOCK_NUMBER);
         vm.selectFork(forkId);
+        vm.roll(block.number + 1);
 
         rewardToken = IERC20(DAI_ADDRESS);
 
         vm.startPrank(OWNER);
-
         mockERC20 = new MockERC20("Mock Token", "MOCK", 18, 0); // Added initialSupply
         mockERC721 = new MockERC721("Mock NFT 1", "MNFT1");
         mockERC721_2 = new MockERC721("Mock NFT 2", "MNFT2");
@@ -110,29 +109,38 @@ contract RewardsController_Test_Base is Test {
         lendingManager.grantVaultRole(address(tokenVault));
 
         // Deploy RewardsController implementation and proxy first
-        rewardsControllerImpl = new RewardsController();
+        rewardsControllerImpl = new RewardsController(address(1)); // Provide a dummy address for priceOracleAddress_
 
-        // vm.stopPrank(); // Removed potentially misplaced stopPrank
-        vm.startPrank(ADMIN);
-        proxyAdmin = new ProxyAdmin(ADMIN);
+        // Transfer ownership of mockERC20 to ADMIN for consistent access control
+        mockERC20.transferOwnership(ADMIN);
         vm.stopPrank();
 
         vm.startPrank(ADMIN);
+        proxyAdmin = new ProxyAdmin(ADMIN);
+        
         bytes memory initData = abi.encodeWithSelector(
             RewardsController.initialize.selector,
             ADMIN, // RewardsController owner is ADMIN
-            address(lendingManager),
-            address(tokenVault),
-            AUTHORIZED_UPDATER
+            address(tokenVault), // Corrected: This is the ICollectionsVault address
+            AUTHORIZED_UPDATER // Corrected: This is the initialClaimSigner
+                // AUTHORIZED_UPDATER // Original extra argument removed
         );
-        TransparentUpgradeableProxy proxy =
-            new TransparentUpgradeableProxy(address(rewardsControllerImpl), address(proxyAdmin), initData);
+        TransparentUpgradeableProxy proxy;
+        try new TransparentUpgradeableProxy(address(rewardsControllerImpl), address(proxyAdmin), initData) returns (
+            TransparentUpgradeableProxy _proxy
+        ) {
+            proxy = _proxy;
+        } catch Error(string memory reason) {
+            console.log("Proxy deployment failed:", reason);
+            revert("Proxy deployment failed");
+        } catch (bytes memory lowLevelData) {
+            console.log("Proxy deployment failed with low-level data:", string(lowLevelData));
+            revert("Proxy deployment failed with low-level data");
+        }
         rewardsController = RewardsController(address(proxy));
-        vm.stopPrank();
-
+        
         // Grant REWARDS_CONTROLLER_ROLE to rewardsController on the tokenVault
         // This needs to be done by an admin of tokenVault (ADMIN in this case)
-        vm.startPrank(ADMIN);
         tokenVault.setRewardsControllerRole(address(rewardsController));
         vm.stopPrank();
 
@@ -143,17 +151,26 @@ contract RewardsController_Test_Base is Test {
         vm.stopPrank();
 
         // RewardsController onlyOwner functions are called by ADMIN
-        vm.startPrank(ADMIN);
-        rewardsController.addNFTCollection(
-            address(mockERC721), BETA_1, IRewardsController.RewardBasis.BORROW, VALID_REWARD_SHARE_PERCENTAGE
-        );
-        rewardsController.addNFTCollection(
-            address(mockERC721_2), BETA_2, IRewardsController.RewardBasis.DEPOSIT, VALID_REWARD_SHARE_PERCENTAGE
-        );
-        rewardsController.addNFTCollection(
-            address(mockERC721_alt), BETA_1, IRewardsController.RewardBasis.DEPOSIT, VALID_REWARD_SHARE_PERCENTAGE
-        );
-        vm.stopPrank(); // Stop pranking as ADMIN
+        // vm.startPrank(ADMIN);
+        // rewardsController.whitelistCollection(
+        //     address(mockERC721),
+        //     IRewardsController.CollectionType.ERC721,
+        //     IRewardsController.RewardBasis.BORROW,
+        //     uint16(BETA_1)
+        // );
+        // rewardsController.whitelistCollection(
+        //     address(mockERC721_2),
+        //     IRewardsController.CollectionType.ERC721,
+        //     IRewardsController.RewardBasis.DEPOSIT,
+        //     uint16(BETA_2)
+        // );
+        // rewardsController.whitelistCollection(
+        //     address(mockERC721_alt),
+        //     IRewardsController.CollectionType.ERC721,
+        //     IRewardsController.RewardBasis.DEPOSIT,
+        //     uint16(VALID_REWARD_SHARE_PERCENTAGE)
+        // );
+        // vm.stopPrank(); // Stop pranking as ADMIN
 
         uint256 initialFunding = 1_000_000 ether;
         uint256 userFunding = 10_000 ether;
@@ -172,29 +189,6 @@ contract RewardsController_Test_Base is Test {
         }
         vm.stopPrank();
 
-        // vm.startPrank(USER_C);
-        // // Update the initial claimRewardsForCollection call
-        // // The function now expects: recipient, collection, rewardAmount, nonce, signature
-        // // For this initial setup call, we can assume rewardAmount is 0.
-        // // The nonce should be the current authorizedUpdaterNonce for AUTHORIZED_UPDATER.
-        // uint256 rewardAmountForInitialClaim = 0;
-        // bytes memory signatureForInitialClaim = _signClaimReward(
-        //     address(mockERC721_alt), // collection
-        //     USER_C, // recipient
-        //     rewardAmountForInitialClaim, // rewardAmount
-        //     claimNonce, // nonce
-        //     UPDATER_PRIVATE_KEY // privateKey of AUTHORIZED_UPDATER
-        // );
-
-        // rewardsController.claimRewardsForCollection(
-        //     USER_C, // recipient
-        //     address(mockERC721_alt), // collection
-        //     rewardAmountForInitialClaim, // rewardAmount
-        //     claimNonce, // nonce
-        //     signatureForInitialClaim // signature
-        // );
-        // vm.stopPrank();
-
         vm.label(OWNER, "OWNER");
         vm.label(ADMIN, "ADMIN");
         vm.label(AUTHORIZED_UPDATER, "AUTHORIZED_UPDATER");
@@ -212,6 +206,20 @@ contract RewardsController_Test_Base is Test {
         vm.label(NFT_COLLECTION_3, "NFT_COLLECTION_3 (Constant, Non-WL)");
     }
 
+    function tearDown() public virtual {
+        // Clear the contract code to ensure a clean state for each test
+        vm.etch(address(rewardsController), bytes(""));
+        vm.etch(address(rewardsControllerImpl), bytes(""));
+        vm.etch(address(lendingManager), bytes(""));
+        vm.etch(address(tokenVault), bytes(""));
+        vm.etch(address(proxyAdmin), bytes(""));
+        vm.etch(address(mockERC20), bytes(""));
+        vm.etch(address(mockERC721), bytes(""));
+        vm.etch(address(mockERC721_2), bytes(""));
+        vm.etch(address(mockERC721_alt), bytes(""));
+        vm.etch(address(mockCToken), bytes(""));
+    }
+
     function _buildDomainSeparator() internal view returns (bytes32) {
         bytes32 typeHashDomain =
             keccak256(bytes("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"));
@@ -220,37 +228,6 @@ contract RewardsController_Test_Base is Test {
         return keccak256(
             abi.encode(typeHashDomain, nameHashDomain, versionHashDomain, block.chainid, address(rewardsController))
         );
-    }
-
-    function _signClaimReward(
-        address collection,
-        address recipient,
-        uint256 rewardAmount,
-        uint256 nonce,
-        uint256 privateKey
-    ) internal view returns (bytes memory signature) {
-        bytes32 structHash = keccak256(abi.encode(CLAIM_REWARD_TYPEHASH, collection, recipient, rewardAmount, nonce));
-        bytes32 domainSeparator = _buildDomainSeparator();
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
-        signature = abi.encodePacked(r, s, v);
-    }
-
-    function _signClaimAllRewards(
-        address recipient,
-        address[] memory collections,
-        uint256[] memory rewardAmounts,
-        uint256 nonce,
-        uint256 privateKey
-    ) internal view returns (bytes memory signature) {
-        bytes32 collectionsHash = keccak256(abi.encodePacked(collections));
-        bytes32 rewardAmountsHash = keccak256(abi.encodePacked(rewardAmounts));
-        bytes32 structHash =
-            keccak256(abi.encode(CLAIM_ALL_REWARDS_TYPEHASH, recipient, collectionsHash, rewardAmountsHash, nonce));
-        bytes32 domainSeparator = _buildDomainSeparator();
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
-        signature = abi.encodePacked(r, s, v);
     }
 
     function _assertRewardsClaimedForCollectionLog(
@@ -408,9 +385,8 @@ contract RewardsController_Test_Base is Test {
         //     uint96 betaLocal,
         //     uint16 rewardSharePercentageLocal
         // ) = rewardsController.collectionConfigs(collection);
-        IRewardsController.RewardBasis rewardBasisLocal = rewardsController.collectionRewardBasis(collection);
+        IRewardsController.RewardBasis rewardBasisLocal = rewardsControllerImpl.collectionRewardBasis(collection);
         bool isWhitelisted = rewardsController.isCollectionWhitelisted(collection);
-        // uint256 rewardSharePercentage = rewardSharePercentageLocal;
 
         // // Simplified replication of RewardsController._calculateRewardsWithDelta
         // uint256 yieldReward = (balanceDuringPeriod * indexDelta) / startIndex; // Assuming startIndex is the 'lastRewardIndex' for the period
@@ -429,5 +405,17 @@ contract RewardsController_Test_Base is Test {
         //     MAX_REWARD_SHARE_PERCENTAGE;
 
         // return rawReward;
+    }
+
+    function _signClaimLazy(IRewardsController.Claim[] memory claims, uint256 privateKey)
+        internal
+        view
+        virtual
+        returns (bytes memory)
+    {
+        bytes32 claimsHash = keccak256(abi.encode(claims));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", _buildDomainSeparator(), claimsHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
+        return abi.encodePacked(r, s, v);
     }
 }

@@ -5,31 +5,18 @@ import {Test} from "forge-std/Test.sol";
 import {console} from "forge-std/console.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
-import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
-import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 // Simplified RewardsController implementation for testing ownership and admin roles only
-contract MinimalRewardsController is
-    Initializable,
-    OwnableUpgradeable,
-    ReentrancyGuardUpgradeable,
-    EIP712Upgradeable,
-    PausableUpgradeable
-{
+contract MinimalRewardsController is Initializable, OwnableUpgradeable {
     // Constructor & Initializer
     constructor() {
-        _disableInitializers();
+        // _disableInitializers(); // Removed: contract is initialized directly in tests, not via proxy.
     }
 
     function initialize(address initialOwner) public initializer {
         require(initialOwner != address(0), "Zero address owner");
         __Ownable_init(initialOwner);
-        __ReentrancyGuard_init();
-        __EIP712_init("RewardsController", "1");
-        __Pausable_init();
     }
 }
 
@@ -70,13 +57,13 @@ contract MinimalOwnershipTests is Test {
 
     function test_TransferOwnership_RevertsIfNonOwner() public {
         vm.prank(USER_1); // Non-owner
-        vm.expectRevert("Ownable: caller is not the owner");
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, USER_1));
         rewardsController.transferOwnership(USER_2);
     }
 
     function test_TransferOwnership_RevertsIfNewOwnerIsZeroAddress() public {
         vm.prank(ADMIN);
-        vm.expectRevert("Ownable: new owner is the zero address");
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableInvalidOwner.selector, address(0)));
         rewardsController.transferOwnership(address(0));
     }
 
@@ -95,7 +82,7 @@ contract MinimalOwnershipTests is Test {
 
     function test_RenounceOwnership_RevertsIfNonOwner() public {
         vm.prank(USER_1); // Non-owner
-        vm.expectRevert("Ownable: caller is not the owner");
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, USER_1));
         rewardsController.renounceOwnership();
     }
 
