@@ -33,15 +33,22 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         string memory _name,
         string memory _symbol,
         address initialAdmin,
-        address _lendingManagerAddress
+        address _lendingManagerAddress // Can be address(0) initially
     ) ERC4626(_asset) ERC20(_name, _symbol) {
-        if (_lendingManagerAddress == address(0)) revert AddressZero();
-        if (address(_asset) == address(0)) revert AddressZero();
-        if (initialAdmin == address(0)) revert AddressZero();
-        lendingManager = ILendingManager(_lendingManagerAddress);
-        if (address(lendingManager.asset()) != address(_asset)) {
-            revert LendingManagerMismatch();
+        if (address(_asset) == address(0)) revert AddressZero(); // Asset must be valid
+        if (initialAdmin == address(0)) revert AddressZero(); // Admin must be valid
+
+        // If a lendingManagerAddress is provided at construction, validate and set it.
+        // Otherwise, it's expected to be set later via setLendingManager().
+        if (_lendingManagerAddress != address(0)) {
+            ILendingManager tempLendingManager = ILendingManager(_lendingManagerAddress);
+            // Ensure the provided lending manager's asset matches this vault's asset.
+            if (address(tempLendingManager.asset()) != address(_asset)) {
+                revert LendingManagerMismatch();
+            }
+            lendingManager = tempLendingManager;
         }
+
         _grantRole(DEFAULT_ADMIN_ROLE, initialAdmin);
         _grantRole(ADMIN_ROLE, initialAdmin);
     }
@@ -55,7 +62,9 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         }
 
         IERC20 assetToken = IERC20(asset());
-        assetToken.forceApprove(address(oldLendingManagerAddress), 0);
+        if (oldLendingManagerAddress != address(0)) {
+            assetToken.forceApprove(oldLendingManagerAddress, 0);
+        }
         assetToken.forceApprove(_lendingManagerAddress, type(uint256).max);
 
         emit LendingManagerChanged(oldLendingManagerAddress, _lendingManagerAddress, _msgSender());

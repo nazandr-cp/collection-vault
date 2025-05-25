@@ -209,6 +209,7 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         return underlyingBalanceInCToken;
     }
 
+    // TODO: remove
     function getBaseRewardPerBlock() external view override returns (uint256) {
         uint256 currentTotalAssets = totalAssets();
         if (currentTotalAssets == 0) {
