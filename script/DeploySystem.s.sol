@@ -47,10 +47,8 @@ contract DeploySystem is Script {
             NFT_REWARD_BASIS = IRewardsController.RewardBasis.DEPOSIT;
         } else if (basisIndex == 1) {
             NFT_REWARD_BASIS = IRewardsController.RewardBasis.BORROW;
-        } else if (basisIndex == 2) {
-            NFT_REWARD_BASIS = IRewardsController.RewardBasis.FIXED_POOL;
         } else {
-            revert("Invalid NFT_REWARD_BASIS_ENUM_INDEX. Must be 0, 1, or 2.");
+            revert("Invalid NFT_REWARD_BASIS_ENUM_INDEX. Must be 0 or 1.");
         }
         console.log("NFT_REWARD_BASIS_ENUM_INDEX:", basisIndex);
         console.log("NFT_REWARD_BASIS (parsed):", uint8(NFT_REWARD_BASIS));
@@ -81,7 +79,7 @@ contract DeploySystem is Script {
         );
         console.log("New CollectionsVault deployed at:", address(newCollectionsVault));
         console.log("Deploying RewardsController implementation...");
-        RewardsController newRewardsControllerImpl = new RewardsController(PRICE_ORACLE_ADDRESS);
+        RewardsController newRewardsControllerImpl = new RewardsController();
         console.log("New RewardsController implementation deployed at:", address(newRewardsControllerImpl));
         console.log("Deploying TransparentUpgradeableProxy for RewardsController...");
         // Initialize RewardsController
