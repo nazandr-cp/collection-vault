@@ -28,18 +28,11 @@ interface IRewardsController {
     struct Claim {
         address account;
         address collection;
-        uint256 secondsUser;
-        uint256 secondsColl;
-        uint256 incRPS;
-        uint256 yieldSlice;
         uint256 nonce;
         uint256 deadline;
     }
 
     struct VaultInfo {
-        uint128 rewardPerBlock; // The amount of reward tokens distributed per block for this vault
-        uint128 globalRPW; // Global reward per weight, used to calculate rewards
-        uint128 totalWeight; // The total weight of all users in this vault
         uint32 lastUpdateBlock; // The block number when the vault was last updated
         address cToken; // The address of the cToken associated with this vault
     }
@@ -126,15 +119,13 @@ interface IRewardsController {
         external
         view
         returns (RewardBasis);
-
-    // --- Reward & Weighting Configuration ---
     function setWeightFunction(address vaultAddress, address collectionAddress, WeightFunction calldata weightFunction)
         external;
-    function refreshRewardPerBlock(address vault) external;
+
+    // --- Reward & Weighting Configuration ---
 
     // --- User Information & Claims ---
     function userNonce(address vaultAddress, address userAddress) external view returns (uint64 nonce);
-    function userSecondsClaimed(address vaultAddress, address userAddress) external view returns (uint256); // New function
     function claimLazy(address vaultAddress, Claim[] calldata claims, bytes calldata signature) external;
 
     // --- Administrative Actions ---
