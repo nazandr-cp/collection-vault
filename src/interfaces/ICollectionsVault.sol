@@ -12,7 +12,8 @@ interface ICollectionsVault is IERC4626 {
         address indexed caller,
         address indexed receiver,
         uint256 assets,
-        uint256 shares
+        uint256 shares,
+        uint256 cTokenAmount
     );
     event CollectionWithdraw(
         address indexed collectionAddress,
@@ -20,7 +21,8 @@ interface ICollectionsVault is IERC4626 {
         address indexed receiver,
         address indexed owner,
         uint256 assets,
-        uint256 shares
+        uint256 shares,
+        uint256 cTokenAmount
     );
     event LendingManagerChanged(
         address indexed oldLendingManager, address indexed newLendingManager, address indexed changedBy

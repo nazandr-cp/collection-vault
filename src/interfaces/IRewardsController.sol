@@ -26,21 +26,23 @@ interface IRewardsController {
     }
 
     struct Claim {
-        address account;
-        address collection;
-        uint256 nonce;
-        uint256 deadline;
+        address account; // кому платить
+        address collection; // адрес коллекции
+        address vault; // адрес vault, в котором хранится yield
+        uint256 secondsUser; // (вес × время) списываемые в этом claim
+        uint256 amount; // токены к переводу — уже посчитаны off-chain
+        uint256 nonce; // защита от повторного применения подписи
+        uint256 deadline; // до какого блока/времени подпись действительна
     }
 
     struct VaultInfo {
-        uint32 lastUpdateBlock; // The block number when the vault was last updated
-        address cToken; // The address of the cToken associated with this vault
+        uint32 lastUpdateBlock;
+        address cToken;
     }
 
     struct AccountInfo {
-        uint128 weight;
-        uint128 rewardDebt;
-        uint128 accrued;
+        address vaultAddress;
+        uint128 secondsClaimed;
     }
 
     event NewCollectionWhitelisted(
@@ -65,7 +67,6 @@ interface IRewardsController {
         address indexed user,
         address indexed collectionAddress,
         uint256 amount,
-        uint64 newNonce,
         uint256 secondsInClaim
     );
     event RewardPerBlockUpdated(address indexed vault, uint128 rewardPerBlock);
