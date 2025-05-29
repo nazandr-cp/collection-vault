@@ -109,7 +109,7 @@ contract RewardsController_Test_Base is Test {
         lendingManager.grantVaultRole(address(tokenVault));
 
         // Deploy RewardsController implementation and proxy first
-        rewardsControllerImpl = new RewardsController(address(1)); // Provide a dummy address for priceOracleAddress_
+        rewardsControllerImpl = new RewardsController();
 
         // Transfer ownership of mockERC20 to ADMIN for consistent access control
         mockERC20.transferOwnership(ADMIN);
@@ -385,8 +385,9 @@ contract RewardsController_Test_Base is Test {
         //     uint96 betaLocal,
         //     uint16 rewardSharePercentageLocal
         // ) = rewardsController.collectionConfigs(collection);
-        IRewardsController.RewardBasis rewardBasisLocal = rewardsControllerImpl.collectionRewardBasis(collection);
-        bool isWhitelisted = rewardsController.isCollectionWhitelisted(collection);
+        IRewardsController.RewardBasis rewardBasisLocal =
+            rewardsControllerImpl.collectionRewardBasis(address(rewardsControllerImpl), collection);
+        bool isWhitelisted = rewardsController.isCollectionWhitelisted(address(rewardsController), collection);
 
         // // Simplified replication of RewardsController._calculateRewardsWithDelta
         // uint256 yieldReward = (balanceDuringPeriod * indexDelta) / startIndex; // Assuming startIndex is the 'lastRewardIndex' for the period

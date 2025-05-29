@@ -14,20 +14,45 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
 import {ICollectionsVault} from "./interfaces/ICollectionsVault.sol";
 
+/**
+ * @title CollectionsVault
+ * @dev ERC4626 compliant vault for managing asset collections and distributing yield.
+ * It integrates with a LendingManager to deposit and withdraw assets from an external lending protocol.
+ * This contract also handles collection-specific deposits, withdrawals, and yield distribution.
+ */
 contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
     using Math for uint256;
 
+    /// @dev Role for administrators who can pause the contract, set the lending manager, and set reward percentages.
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    /// @dev Role for the RewardsController contract, allowing it to transfer yield in batches.
     bytes32 public constant REWARDS_CONTROLLER_ROLE = keccak256("REWARDS_CONTROLLER_ROLE");
 
+    /// @notice Address of the LendingManager contract.
     ILendingManager public lendingManager;
+    /// @notice Tracks the total assets deposited by each collection.
     mapping(address => uint256) public collectionTotalAssetsDeposited;
+    /// @notice Tracks the total yield transferred to each collection.
     mapping(address => uint256) public collectionYieldTransferred;
+    /// @notice Stores the reward share percentage for each collection (basis points, 10000 = 100%).
     mapping(address => uint16) public collectionRewardSharePercentage;
 
+    /**
+     * @dev Emitted when yield is transferred to a specific collection.
+     * @param collection The address of the collection.
+     * @param amount The amount of yield transferred.
+     */
     event CollectionYieldTransferred(address indexed collection, uint256 amount);
 
+    /**
+     * @notice Initializes the CollectionsVault contract.
+     * @param _asset The address of the underlying ERC20 asset.
+     * @param _name The name of the vault's ERC20 shares.
+     * @param _symbol The symbol of the vault's ERC20 shares.
+     * @param initialAdmin The address to be granted ADMIN_ROLE and DEFAULT_ADMIN_ROLE.
+     * @param _lendingManagerAddress The address of the LendingManager contract, can be address(0) initially.
+     */
     constructor(
         IERC20 _asset,
         string memory _name,
@@ -53,6 +78,11 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         _grantRole(ADMIN_ROLE, initialAdmin);
     }
 
+    /**
+     * @notice Sets or updates the address of the LendingManager contract.
+     * @dev Only callable by an address with the ADMIN_ROLE.
+     * @param _lendingManagerAddress The new address of the LendingManager contract.
+     */
     function setLendingManager(address _lendingManagerAddress) external onlyRole(ADMIN_ROLE) whenNotPaused {
         if (_lendingManagerAddress == address(0)) revert AddressZero();
         address oldLendingManagerAddress = address(lendingManager);
@@ -70,11 +100,23 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         emit LendingManagerChanged(oldLendingManagerAddress, _lendingManagerAddress, _msgSender());
     }
 
+    /**
+     * @notice Grants the REWARDS_CONTROLLER_ROLE to a new address.
+     * @dev Only callable by an address with the ADMIN_ROLE.
+     * @param newRewardsController The address to grant the REWARDS_CONTROLLER_ROLE to.
+     */
     function setRewardsControllerRole(address newRewardsController) external onlyRole(ADMIN_ROLE) whenNotPaused {
         if (newRewardsController == address(0)) revert AddressZero();
         _grantRole(REWARDS_CONTROLLER_ROLE, newRewardsController);
     }
 
+    /**
+     * @notice Sets the reward share percentage for a specific collection.
+     * @dev Only callable by an address with the ADMIN_ROLE.
+     * The percentage is in basis points (e.g., 100 = 1%).
+     * @param collectionAddress The address of the collection.
+     * @param percentage The new reward share percentage in basis points.
+     */
     function setCollectionRewardSharePercentage(address collectionAddress, uint16 percentage)
         external
         onlyRole(ADMIN_ROLE)
@@ -84,14 +126,39 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         collectionRewardSharePercentage[collectionAddress] = percentage;
     }
 
+    /**
+     * @notice Returns the total amount of underlying assets managed by the vault.
+     * @dev This includes assets held directly by the vault and those deposited in the LendingManager.
+     * @return The total amount of assets.
+     */
     function totalAssets() public view override(ERC4626, IERC4626) returns (uint256) {
         return super.totalAssets() + lendingManager.totalAssets();
     }
 
-    function deposit(uint256, address) public virtual override(ERC4626, IERC4626) returns (uint256) {
+    /**
+     * @notice Disables the direct ERC4626 deposit function.
+     * @dev Users should use `depositForCollection` instead to associate deposits with a collection.
+     * @param assets The amount of assets to deposit.
+     * @param receiver The address to receive the shares.
+     * @return shares The amount of shares minted.
+     */
+    function deposit(uint256 assets, address receiver)
+        public
+        virtual
+        override(ERC4626, IERC4626)
+        returns (uint256 shares)
+    {
         revert FunctionDisabledUse("depositForCollection");
     }
 
+    /**
+     * @notice Deposits assets into the vault on behalf of a specific collection.
+     * @dev This function mints vault shares to the `receiver` and tracks the assets for the `collectionAddress`.
+     * @param assets The amount of underlying assets to deposit.
+     * @param receiver The address that will receive the minted shares.
+     * @param collectionAddress The address of the collection associated with this deposit.
+     * @return shares The amount of vault shares minted to the receiver.
+     */
     function depositForCollection(uint256 assets, address receiver, address collectionAddress)
         public
         virtual
@@ -103,13 +170,33 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         _deposit(msg.sender, receiver, assets, shares);
         _hookDeposit(assets);
         collectionTotalAssetsDeposited[collectionAddress] += assets;
-        emit CollectionDeposit(collectionAddress, msg.sender, receiver, assets, shares);
+        emit CollectionDeposit(collectionAddress, _msgSender(), receiver, assets, shares, shares);
     }
 
-    function mint(uint256, address) public virtual override(ERC4626, IERC4626) returns (uint256) {
+    /**
+     * @notice Disables the direct ERC4626 mint function.
+     * @dev Users should use `mintForCollection` instead to associate deposits with a collection.
+     * @param shares The amount of shares to mint.
+     * @param receiver The address to receive the shares.
+     * @return assets The amount of underlying assets required.
+     */
+    function mint(uint256 shares, address receiver)
+        public
+        virtual
+        override(ERC4626, IERC4626)
+        returns (uint256 assets)
+    {
         revert FunctionDisabledUse("mintForCollection");
     }
 
+    /**
+     * @notice Mints a specified amount of vault shares to a receiver on behalf of a collection.
+     * @dev This function calculates the required assets for the given shares and tracks them for the `collectionAddress`.
+     * @param shares The amount of vault shares to mint.
+     * @param receiver The address that will receive the minted shares.
+     * @param collectionAddress The address of the collection associated with this mint.
+     * @return assets The amount of underlying assets that were deposited to mint the shares.
+     */
     function mintForCollection(uint256 shares, address receiver, address collectionAddress)
         public
         virtual
@@ -121,13 +208,36 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         _deposit(msg.sender, receiver, assets, shares);
         _hookDeposit(assets);
         collectionTotalAssetsDeposited[collectionAddress] += assets;
-        emit CollectionDeposit(collectionAddress, msg.sender, receiver, assets, shares);
+        emit CollectionDeposit(collectionAddress, _msgSender(), receiver, assets, shares, shares);
     }
 
-    function withdraw(uint256, address, address) public virtual override(ERC4626, IERC4626) returns (uint256) {
+    /**
+     * @notice Disables the direct ERC4626 withdraw function.
+     * @dev Users should use `withdrawForCollection` instead to track withdrawals against a collection.
+     * @param assets The amount of assets to withdraw.
+     * @param receiver The address to receive the assets.
+     * @param owner The address whose shares are burned.
+     * @return shares The amount of shares burned.
+     */
+    function withdraw(uint256 assets, address receiver, address owner)
+        public
+        virtual
+        override(ERC4626, IERC4626)
+        returns (uint256 shares)
+    {
         revert FunctionDisabledUse("withdrawForCollection");
     }
 
+    /**
+     * @notice Withdraws a specified amount of underlying assets from the vault on behalf of a collection.
+     * @dev This function burns shares from the `owner` and transfers assets to the `receiver`.
+     * It also updates the tracked assets for the `collectionAddress`.
+     * @param assets The amount of underlying assets to withdraw.
+     * @param receiver The address that will receive the withdrawn assets.
+     * @param owner The address whose shares will be burned.
+     * @param collectionAddress The address of the collection associated with this withdrawal.
+     * @return shares The amount of vault shares burned.
+     */
     function withdrawForCollection(uint256 assets, address receiver, address owner, address collectionAddress)
         public
         virtual
@@ -143,13 +253,36 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         _hookWithdraw(assets);
         _withdraw(msg.sender, receiver, owner, assets, shares);
         collectionTotalAssetsDeposited[collectionAddress] = collectionBalance - assets;
-        emit CollectionWithdraw(collectionAddress, msg.sender, receiver, owner, assets, shares);
+        emit CollectionWithdraw(collectionAddress, _msgSender(), receiver, assets, shares, shares);
     }
 
-    function redeem(uint256, address, address) public virtual override(ERC4626, IERC4626) returns (uint256) {
+    /**
+     * @notice Disables the direct ERC4626 redeem function.
+     * @dev Users should use `redeemForCollection` instead to track redemptions against a collection.
+     * @param shares The amount of shares to redeem.
+     * @param receiver The address to receive the assets.
+     * @param owner The address whose shares are burned.
+     * @return assets The amount of underlying assets withdrawn.
+     */
+    function redeem(uint256 shares, address receiver, address owner)
+        public
+        virtual
+        override(ERC4626, IERC4626)
+        returns (uint256 assets)
+    {
         revert FunctionDisabledUse("redeemForCollection");
     }
 
+    /**
+     * @notice Redeems a specified amount of vault shares for underlying assets on behalf of a collection.
+     * @dev This function burns shares from the `owner` and transfers assets to the `receiver`.
+     * It also updates the tracked assets for the `collectionAddress`.
+     * Handles dust remaining in the LendingManager during full redemptions.
+     * @param shares The amount of vault shares to burn.
+     * @param receiver The address that will receive the underlying assets.
+     * @param owner The address whose shares will be burned.
+     * @param collectionAddress The address of the collection associated with this redemption.
+     */
     function redeemForCollection(uint256 shares, address receiver, address owner, address collectionAddress)
         public
         virtual
@@ -183,10 +316,14 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         SafeERC20.safeTransfer(IERC20(asset()), receiver, finalAssetsToTransfer);
         emit Withdraw(msg.sender, receiver, owner, finalAssetsToTransfer, shares);
         collectionTotalAssetsDeposited[collectionAddress] = collectionBalance - assets;
-        emit CollectionWithdraw(collectionAddress, msg.sender, receiver, owner, assets, shares);
+        emit CollectionWithdraw(collectionAddress, _msgSender(), receiver, assets, shares, shares);
         return finalAssetsToTransfer;
     }
 
+    /**
+     * @dev Internal hook called after a deposit to transfer assets to the LendingManager.
+     * @param assets The amount of assets to deposit into the LendingManager.
+     */
     function _hookDeposit(uint256 assets) internal virtual {
         if (assets > 0) {
             IERC20 assetToken = IERC20(asset());
@@ -197,6 +334,11 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         }
     }
 
+    /**
+     * @dev Internal hook called before a withdrawal to ensure sufficient assets are available.
+     * If the vault's direct balance is insufficient, it attempts to withdraw from the LendingManager.
+     * @param assets The amount of assets required for the withdrawal.
+     */
     function _hookWithdraw(uint256 assets) internal virtual {
         if (assets == 0) return;
         IERC20 assetToken = IERC20(asset());
@@ -262,6 +404,15 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
      * @param totalAmount The total sum of amounts to transfer.
      * @param recipient Recipient address.
      */
+    /**
+     * @notice Transfers accrued base yield for multiple collections in a single batch to a recipient.
+     * @dev Only callable by an address with the REWARDS_CONTROLLER_ROLE.
+     * Validates each collection's yield amount against its allowed share.
+     * @param collections Array of collection addresses for which yield is being transferred.
+     * @param amounts Array of yield token amounts to transfer for each corresponding collection.
+     * @param totalAmount The total sum of all amounts to transfer in this batch.
+     * @param recipient The address to receive the total transferred yield.
+     */
     function transferYieldBatch(
         address[] calldata collections,
         uint256[] calldata amounts,
@@ -321,6 +472,11 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         }
     }
 
+    /**
+     * @dev Internal function to redeem and transfer yield from the LendingManager to a recipient.
+     * @param recipient The address to receive the redeemed yield.
+     * @param amount The amount of yield to redeem and transfer.
+     */
     function _redeemYieldFromLandingManager(address recipient, uint256 amount) internal {
         if (recipient == address(0)) revert AddressZero();
         if (amount == 0) return;

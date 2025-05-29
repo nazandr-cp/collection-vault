@@ -7,6 +7,15 @@ import {ILendingManager} from "./ILendingManager.sol";
 interface ICollectionsVault is IERC4626 {
     // --- Events ---
 
+    /**
+     * @dev Emitted when assets are deposited into the vault on behalf of a collection.
+     * @param collectionAddress The address of the collection.
+     * @param caller The address that initiated the deposit.
+     * @param receiver The address that receives the shares.
+     * @param assets The amount of underlying assets deposited.
+     * @param shares The amount of vault shares minted.
+     * @param cTokenAmount The amount of cTokens (shares) minted.
+     */
     event CollectionDeposit(
         address indexed collectionAddress,
         address indexed caller,
@@ -15,11 +24,20 @@ interface ICollectionsVault is IERC4626 {
         uint256 shares,
         uint256 cTokenAmount
     );
+
+    /**
+     * @dev Emitted when shares are minted for a collection.
+     * @param collectionAddress The address of the collection.
+     * @param caller The address that initiated the minting.
+     * @param receiver The address that receives the assets.
+     * @param assets The amount of underlying assets received.
+     * @param shares The amount of vault shares minted.
+     * @param cTokenAmount The amount of cTokens (shares) minted.
+     */
     event CollectionWithdraw(
         address indexed collectionAddress,
-        address caller,
+        address indexed caller,
         address indexed receiver,
-        address indexed owner,
         uint256 assets,
         uint256 shares,
         uint256 cTokenAmount

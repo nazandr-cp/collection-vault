@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: UNLICENSED
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
@@ -39,10 +39,11 @@ contract RewardsController is
         uint128 totalWeight;
         uint64 lastUpdateBlock;
         uint256 lastAssetsBalance;
+        address cToken;
     }
 
     bytes32 private constant CLAIM_TYPEHASH = keccak256(
-        "Claim(address account,address collection,uint256 secondsUser,uint256 secondsColl,uint256 incRPS,uint256 yieldSlice,uint256 nonce,uint256 deadline)"
+        "Claim(address account,address collection,address vault,uint256 secondsUser,uint256 amount,uint256 nonce,uint256 deadline)"
     );
     uint256 private constant PRECISION_FACTOR = 1e18;
     uint16 private constant MAX_REWARD_SHARE_PERCENTAGE = 10000;
@@ -75,9 +76,6 @@ contract RewardsController is
         _claimSigner = initialClaimSigner;
     }
 
-    // =========================================
-    // ---------- Vault Management -------------
-    // =========================================
     function addVault(address vaultAddress_, address lendingManagerAddress_)
         external
         override(IRewardsController)
@@ -102,8 +100,9 @@ contract RewardsController is
         _vaultLendingManagers[vaultAddress_] = lendingManager;
         _vaultsData[vaultAddress_].lastUpdateBlock = uint64(block.number);
         _vaultsData[vaultAddress_].lastAssetsBalance = lendingManager.totalAssets();
+        _vaultsData[vaultAddress_].cToken = vault.asset();
 
-        emit VaultAdded(vaultAddress_);
+        emit VaultAdded(vaultAddress_, vault.asset(), lendingManagerAddress_);
     }
 
     function removeVault(address vaultAddress_) external override(IRewardsController) onlyOwner {
@@ -133,21 +132,10 @@ contract RewardsController is
         ) {
             revert IRewardsController.VaultNotRegistered(vaultAddress);
         }
-        vaultInfo.rewardPerBlock = internalVault.rewardPerBlock;
-        vaultInfo.globalRPW = internalVault.globalRPW;
-        vaultInfo.totalWeight = internalVault.totalWeight;
         vaultInfo.lastUpdateBlock = uint32(internalVault.lastUpdateBlock);
-        vaultInfo.linK = 0;
-        vaultInfo.expR = 0;
-        vaultInfo.useExp = false;
-        vaultInfo.cToken = address(0);
-        vaultInfo.nft = address(0);
-        vaultInfo.weightByBorrow = false;
+        vaultInfo.cToken = internalVault.cToken;
     }
 
-    // ========================================
-    // -------- Collection Management ---------
-    // ========================================
     function whitelistCollection(
         address vaultAddress,
         address collectionAddress,
@@ -184,10 +172,21 @@ contract RewardsController is
         _isCollectionWhitelisted[vaultAddress][collectionAddress] = true;
         _collectionWeightFunctions[vaultAddress][collectionAddress] =
             IRewardsController.WeightFunction({fnType: IRewardsController.WeightFunctionType.LINEAR, p1: 0, p2: 0});
-        emit NewCollectionWhitelisted(vaultAddress, collectionAddress, collectionType, rewardBasis, sharePercentageBps);
+        emit NewCollectionWhitelisted(
+            vaultAddress,
+            collectionAddress,
+            collectionType,
+            rewardBasis,
+            sharePercentageBps,
+            _collectionWeightFunctions[vaultAddress][collectionAddress]
+        );
     }
 
-    function removeCollection(address vaultAddress, address collectionAddress) external override onlyOwner {
+    function removeCollection(address vaultAddress, address collectionAddress)
+        external
+        override(IRewardsController)
+        onlyOwner
+    {
         if (vaultAddress == address(0) || collectionAddress == address(0)) revert IRewardsController.AddressZero();
         if (!_isCollectionWhitelisted[vaultAddress][collectionAddress]) {
             revert CollectionNotWhitelistedInVault(vaultAddress, collectionAddress);
@@ -226,9 +225,6 @@ contract RewardsController is
         emit CollectionRewardShareUpdated(vaultAddress, collectionAddress, oldSharePercentageBps, newSharePercentageBps);
     }
 
-    // =========================================
-    // ----- Reward & Weighting Functions ------
-    // =========================================
     function setWeightFunction(
         address vaultAddress,
         address collectionAddress,
@@ -242,7 +238,7 @@ contract RewardsController is
         emit WeightFunctionSet(vaultAddress, collectionAddress, weightFunction);
     }
 
-    function refreshRewardPerBlock(address forVault) external override {
+    function refreshRewardPerBlock(address forVault) external {
         if (forVault == address(0)) revert IRewardsController.AddressZero();
         if (_vaultsData[forVault].lastUpdateBlock == 0) {
             revert IRewardsController.VaultNotRegistered(forVault);
@@ -287,9 +283,6 @@ contract RewardsController is
         emit RewardPerBlockUpdated(forVault, newRewardPerBlock);
     }
 
-    // =========================================
-    // ------- User Information & Claims -------
-    // =========================================
     function userNonce(address vaultAddress, address userAddress)
         external
         view
@@ -299,12 +292,7 @@ contract RewardsController is
         return uint64(_accountClaimNonces[vaultAddress][userAddress]);
     }
 
-    function userSecondsClaimed(address vaultAddress, address userAddress)
-        external
-        view
-        override(IRewardsController)
-        returns (uint256)
-    {
+    function userSecondsClaimed(address vaultAddress, address userAddress) external view returns (uint256) {
         return _userSecondsClaimed[vaultAddress][userAddress];
     }
 
@@ -346,19 +334,14 @@ contract RewardsController is
             }
             _accountClaimNonces[vaultAddress][user]++;
 
-            uint256 amountToClaimThisCollection = currentClaim.yieldSlice;
+            uint256 amountToClaimThisCollection = currentClaim.amount;
             individualClaimAmounts[i] = amountToClaimThisCollection;
 
             if (amountToClaimThisCollection > 0) {
                 _userSecondsClaimed[vaultAddress][user] += currentClaim.secondsUser;
                 totalAmountToClaim += amountToClaimThisCollection;
                 emit RewardsClaimed(
-                    vaultAddress,
-                    user,
-                    collection,
-                    amountToClaimThisCollection,
-                    uint64(_accountClaimNonces[vaultAddress][user]),
-                    currentClaim.secondsUser
+                    vaultAddress, user, collection, amountToClaimThisCollection, currentClaim.secondsUser
                 );
             }
         }
@@ -378,9 +361,6 @@ contract RewardsController is
         }
     }
 
-    // =========================================
-    // ----------- Collection Info -------------
-    // =========================================
     function collectionRewardBasis(address vaultAddress, address collectionAddress)
         external
         view
@@ -402,9 +382,6 @@ contract RewardsController is
         return _isCollectionWhitelisted[vaultAddress][collectionAddress];
     }
 
-    // =========================================
-    // -------- Administrative Actions ---------
-    // =========================================
     function updateTrustedSigner(address newSigner) external override(IRewardsController) onlyOwner {
         if (newSigner == address(0)) {
             revert IRewardsController.CannotSetSignerToZeroAddress();
@@ -418,11 +395,11 @@ contract RewardsController is
         return _claimSigner;
     }
 
-    function pause() external override onlyOwner {
+    function pause() external override(IRewardsController) onlyOwner {
         super._pause();
     }
 
-    function unpause() external override onlyOwner {
+    function unpause() external override(IRewardsController) onlyOwner {
         super._unpause();
     }
 
@@ -455,7 +432,7 @@ contract RewardsController is
         } else if (rewardBasis == IRewardsController.RewardBasis.DEPOSIT) {
             nValue = IERC20(collectionAddress).balanceOf(user);
         } else if (rewardBasis == IRewardsController.RewardBasis.BORROW) {
-            nValue = 0;
+            nValue = IERC20(collectionAddress).balanceOf(user);
         } else {
             return 0;
         }
