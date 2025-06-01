@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {ILendingManager} from "./ILendingManager.sol";
 
-interface ICollectionsVault is IERC4626 {
+interface IMarketVault is IERC4626 {
     // --- Events ---
 
     /**

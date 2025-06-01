@@ -12,15 +12,15 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
-import {ICollectionsVault} from "./interfaces/ICollectionsVault.sol";
+import {IMarketVault} from "./interfaces/IMarketVault.sol";
 
 /**
- * @title CollectionsVault
+ * @title MarketVault
  * @dev ERC4626 compliant vault for managing asset collections and distributing yield.
  * It integrates with a LendingManager to deposit and withdraw assets from an external lending protocol.
  * This contract also handles collection-specific deposits, withdrawals, and yield distribution.
  */
-contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, ReentrancyGuard, Pausable {
+contract MarketVault is ERC4626, IMarketVault, AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
     using Math for uint256;
 
