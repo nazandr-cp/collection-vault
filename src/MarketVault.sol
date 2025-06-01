@@ -138,15 +138,12 @@ contract MarketVault is ERC4626, IMarketVault, AccessControl, ReentrancyGuard, P
     /**
      * @notice Disables the direct ERC4626 deposit function.
      * @dev Users should use `depositForCollection` instead to associate deposits with a collection.
-     * @param assets The amount of assets to deposit.
-     * @param receiver The address to receive the shares.
-     * @return shares The amount of shares minted.
      */
-    function deposit(uint256 assets, address receiver)
+    function deposit(uint256, /*assets*/ address /*receiver*/ )
         public
         virtual
         override(ERC4626, IERC4626)
-        returns (uint256 shares)
+        returns (uint256 /*shares*/ )
     {
         revert FunctionDisabledUse("depositForCollection");
     }
@@ -176,15 +173,12 @@ contract MarketVault is ERC4626, IMarketVault, AccessControl, ReentrancyGuard, P
     /**
      * @notice Disables the direct ERC4626 mint function.
      * @dev Users should use `mintForCollection` instead to associate deposits with a collection.
-     * @param shares The amount of shares to mint.
-     * @param receiver The address to receive the shares.
-     * @return assets The amount of underlying assets required.
      */
-    function mint(uint256 shares, address receiver)
+    function mint(uint256, /*shares*/ address /*receiver*/ )
         public
         virtual
         override(ERC4626, IERC4626)
-        returns (uint256 assets)
+        returns (uint256 /*assets*/ )
     {
         revert FunctionDisabledUse("mintForCollection");
     }
@@ -214,16 +208,12 @@ contract MarketVault is ERC4626, IMarketVault, AccessControl, ReentrancyGuard, P
     /**
      * @notice Disables the direct ERC4626 withdraw function.
      * @dev Users should use `withdrawForCollection` instead to track withdrawals against a collection.
-     * @param assets The amount of assets to withdraw.
-     * @param receiver The address to receive the assets.
-     * @param owner The address whose shares are burned.
-     * @return shares The amount of shares burned.
      */
-    function withdraw(uint256 assets, address receiver, address owner)
+    function withdraw(uint256, /*assets*/ address, /*receiver*/ address /*owner*/ )
         public
         virtual
         override(ERC4626, IERC4626)
-        returns (uint256 shares)
+        returns (uint256 /*shares*/ )
     {
         revert FunctionDisabledUse("withdrawForCollection");
     }
@@ -259,16 +249,12 @@ contract MarketVault is ERC4626, IMarketVault, AccessControl, ReentrancyGuard, P
     /**
      * @notice Disables the direct ERC4626 redeem function.
      * @dev Users should use `redeemForCollection` instead to track redemptions against a collection.
-     * @param shares The amount of shares to redeem.
-     * @param receiver The address to receive the assets.
-     * @param owner The address whose shares are burned.
-     * @return assets The amount of underlying assets withdrawn.
      */
-    function redeem(uint256 shares, address receiver, address owner)
+    function redeem(uint256, /*shares*/ address, /*receiver*/ address /*owner*/ )
         public
         virtual
         override(ERC4626, IERC4626)
-        returns (uint256 assets)
+        returns (uint256 /*assets*/ )
     {
         revert FunctionDisabledUse("redeemForCollection");
     }
