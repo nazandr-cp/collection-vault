@@ -25,6 +25,7 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
     uint256 public constant BASIS_POINTS_DENOMINATOR = 10_000;
     uint256 private constant PRECISION = 1e18;
     uint256 private constant EXCHANGE_RATE_DENOMINATOR = 1e18;
+    uint256 private constant REDEEM_TOLERANCE = 1;
     uint256 public constant MAX_BATCH_SIZE = 50;
 
     IERC20 private immutable _asset;
@@ -281,10 +282,15 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         uint256 balanceAfterRedeem = _asset.balanceOf(address(this));
         amountRedeemed = balanceAfterRedeem - balanceBeforeRedeem; // This is the actual amount received after any fees
 
-        // Check if the actual amount received matches the expected amount (pre-fee).
-        if (amountRedeemed != expectedUnderlyingToReceive) {
+        // Allow minor rounding differences when comparing the actual amount received.
+        uint256 diff = amountRedeemed > expectedUnderlyingToReceive
+            ? amountRedeemed - expectedUnderlyingToReceive
+            : expectedUnderlyingToReceive - amountRedeemed;
+        if (diff > REDEEM_TOLERANCE) {
             revert LendingManager__BalanceCheckFailed(
-                "LM: redeemAll cToken.redeem receipt mismatch", expectedUnderlyingToReceive, amountRedeemed
+                "LM: redeemAll cToken.redeem receipt mismatch",
+                expectedUnderlyingToReceive,
+                amountRedeemed
             );
         }
 
