@@ -5,8 +5,17 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {ILendingManager} from "./ILendingManager.sol";
 
 interface ICollectionsVault is IERC4626 {
+    // --- Structs ---
+    struct Collection {
+        address collectionAddress;
+        uint256 totalAssetsDeposited;
+        uint256 totalSharesMinted;
+        uint256 totalCTokensMinted;
+        uint16 yieldSharePercentage;
+        uint256 totalYieldTransferred;
+        uint256 lastGlobalDepositIndex;
+    }
     // --- Events ---
-
     /**
      * @dev Emitted when assets are deposited into the vault on behalf of a collection.
      * @param collectionAddress The address of the collection.
@@ -16,6 +25,7 @@ interface ICollectionsVault is IERC4626 {
      * @param shares The amount of vault shares minted.
      * @param cTokenAmount The amount of cTokens (shares) minted.
      */
+
     event CollectionDeposit(
         address indexed collectionAddress,
         address indexed caller,
@@ -46,7 +56,18 @@ interface ICollectionsVault is IERC4626 {
         address indexed oldLendingManager, address indexed newLendingManager, address indexed changedBy
     );
 
-    event YieldBatchTransferred(uint256 totalAmount, address indexed recipient);
+    event YieldBatchRepaid(uint256 totalAmount, address indexed recipient);
+    event CollectionYieldIndexed(
+        address indexed collectionAddress, uint256 indexed epochId, uint256 assets, uint256 shares, uint256 cTokenAmount
+    );
+
+    event CollectionYieldAccrued(
+        address indexed collectionAddress,
+        uint256 yieldAccrued,
+        uint256 newTotalDeposits,
+        uint256 globalIndex,
+        uint256 previousCollectionIndex
+    );
 
     // --- Errors ---
 
@@ -64,7 +85,7 @@ interface ICollectionsVault is IERC4626 {
 
     function ADMIN_ROLE() external view returns (bytes32);
 
-    function REWARDS_CONTROLLER_ROLE() external view returns (bytes32);
+    function DEBT_SUBSIDIZER_ROLE() external view returns (bytes32);
 
     function lendingManager() external view returns (ILendingManager);
 
@@ -72,7 +93,7 @@ interface ICollectionsVault is IERC4626 {
 
     function setLendingManager(address _lendingManagerAddress) external;
 
-    function setRewardsControllerRole(address newRewardsController) external;
+    function setDebtSubsidizer(address _debtSubsidizerAddress) external;
 
     function depositForCollection(uint256 assets, address receiver, address collectionAddress)
         external
@@ -90,14 +111,18 @@ interface ICollectionsVault is IERC4626 {
         external
         returns (uint256 assets);
 
-    function transferYieldBatch(
-        address[] calldata collections,
+    function repayBorrowBehalfBatch(
+        address[] calldata collectionAddresses,
         uint256[] calldata amounts,
-        uint256 totalAmount,
-        address recipient
+        address[] calldata borrowers,
+        uint256 totalAmount
     ) external;
 
     function collectionYieldTransferred(address collectionAddress) external view returns (uint256);
 
-    function setCollectionRewardSharePercentage(address collectionAddress, uint16 percentage) external;
+    function setCollectionYieldSharePercentage(address collectionAddress, uint16 percentage) external;
+
+    function getCurrentEpochYield(bool includeNonShared) external view returns (uint256 availableYield);
+    function allocateEpochYield(uint256 amount) external;
+    function getEpochYieldAllocated(uint256 epochId) external view returns (uint256 amount);
 }

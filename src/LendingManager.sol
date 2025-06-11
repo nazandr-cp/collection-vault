@@ -19,14 +19,50 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
     using SafeERC20 for IERC20;
 
     bytes32 public constant VAULT_ROLE = keccak256("VAULT_ROLE");
-
-    bytes32 public constant REWARDS_CONTROLLER_ROLE = keccak256("REWARDS_CONTROLLER_ROLE");
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+
+    uint256 public constant R0_BASIS_POINTS = 5;
+    uint256 public constant BASIS_POINTS_DENOMINATOR = 10_000;
+    uint256 private constant PRECISION = 1e18;
+    uint256 private constant EXCHANGE_RATE_DENOMINATOR = 1e18;
+    uint256 public constant MAX_BATCH_SIZE = 50;
 
     IERC20 private immutable _asset;
     uint8 private immutable underlyingDecimals;
     uint8 private immutable cTokenDecimals;
     CErc20Interface internal immutable _cToken;
+
+    uint256 public totalPrincipalDeposited;
+    uint256 public depositIndex;
+
+    constructor(address initialAdmin, address vaultAddress, address _assetAddress, address _cTokenAddress) {
+        if (
+            initialAdmin == address(0) || vaultAddress == address(0) || _assetAddress == address(0)
+                || _cTokenAddress == address(0)
+        ) {
+            revert AddressZero();
+        }
+
+        // Set immutable state variables.
+        _asset = IERC20(_assetAddress);
+        _cToken = CErc20Interface(_cTokenAddress);
+
+        underlyingDecimals = IERC20Metadata(_assetAddress).decimals();
+        cTokenDecimals = IERC20Metadata(_cTokenAddress).decimals();
+
+        _grantRole(DEFAULT_ADMIN_ROLE, initialAdmin);
+        _grantRole(ADMIN_ROLE, initialAdmin);
+        _grantRole(VAULT_ROLE, vaultAddress);
+
+        _asset.approve(address(_cToken), type(uint256).max);
+    }
+
+    modifier onlyVault() {
+        if (!hasRole(VAULT_ROLE, msg.sender)) {
+            revert LM_CallerNotVault(msg.sender);
+        }
+        _;
+    }
 
     /**
      * @notice Get the underlying ERC20 asset managed by the lending manager.
@@ -42,59 +78,6 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
      */
     function cToken() external view override returns (address) {
         return address(_cToken);
-    }
-
-    uint256 public constant R0_BASIS_POINTS = 5;
-
-    uint256 public constant BASIS_POINTS_DENOMINATOR = 10_000;
-    uint256 private constant PRECISION = 1e18;
-
-    uint256 private constant EXCHANGE_RATE_DENOMINATOR = 1e18;
-
-    uint256 public totalPrincipalDeposited;
-    uint256 public constant MAX_BATCH_SIZE = 50;
-
-    constructor(
-        address initialAdmin,
-        address vaultAddress,
-        address rewardsControllerAddress,
-        address _assetAddress,
-        address _cTokenAddress
-    ) {
-        if (
-            initialAdmin == address(0) || vaultAddress == address(0) || rewardsControllerAddress == address(0)
-                || _assetAddress == address(0) || _cTokenAddress == address(0)
-        ) {
-            revert AddressZero();
-        }
-
-        // Set immutable state variables.
-        _asset = IERC20(_assetAddress);
-        _cToken = CErc20Interface(_cTokenAddress);
-
-        underlyingDecimals = IERC20Metadata(_assetAddress).decimals();
-        cTokenDecimals = IERC20Metadata(_cTokenAddress).decimals();
-
-        _grantRole(DEFAULT_ADMIN_ROLE, initialAdmin);
-        _grantRole(ADMIN_ROLE, initialAdmin);
-        _grantRole(VAULT_ROLE, vaultAddress);
-        _grantRole(REWARDS_CONTROLLER_ROLE, rewardsControllerAddress);
-
-        _asset.approve(address(_cToken), type(uint256).max);
-    }
-
-    modifier onlyVault() {
-        if (!hasRole(VAULT_ROLE, msg.sender)) {
-            revert LM_CallerNotVault(msg.sender);
-        }
-        _;
-    }
-
-    modifier onlyRewardsController() {
-        if (!hasRole(REWARDS_CONTROLLER_ROLE, msg.sender)) {
-            revert LM_CallerNotRewardsController(msg.sender);
-        }
-        _;
     }
 
     function depositToLendingProtocol(uint256 amount)
@@ -207,30 +190,6 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
             underlyingBalanceInCToken = (cTokenBalance * currentExchangeRate) / EXCHANGE_RATE_DENOMINATOR;
         }
         return underlyingBalanceInCToken;
-    }
-
-    // TODO: remove
-    function getBaseRewardPerBlock() external view override returns (uint256) {
-        uint256 currentTotalAssets = totalAssets();
-        if (currentTotalAssets == 0) {
-            return 0;
-        }
-        return (currentTotalAssets * R0_BASIS_POINTS) / BASIS_POINTS_DENOMINATOR;
-    }
-
-    function grantRewardsControllerRole(address newController)
-        external
-        onlyRole(ADMIN_ROLE)
-        nonReentrant
-        whenNotPaused
-    {
-        if (newController == address(0)) revert AddressZero();
-        _grantRole(REWARDS_CONTROLLER_ROLE, newController);
-    }
-
-    function revokeRewardsControllerRole(address controller) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
-        if (controller == address(0)) revert AddressZero();
-        _revokeRole(REWARDS_CONTROLLER_ROLE, controller);
     }
 
     // --- Administrative Functions for Role Management ---
@@ -353,6 +312,54 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         uint256 oldValue = totalPrincipalDeposited;
         totalPrincipalDeposited = 0;
         emit PrincipalReset(oldValue, msg.sender);
+    }
+
+    function repayBorrowBehalf(address borrower, uint256 repayAmount)
+        external
+        override
+        onlyVault // Or a new role if CollectionsVault shouldn't directly call this
+        nonReentrant
+        whenNotPaused
+        returns (uint256)
+    {
+        if (borrower == address(0)) revert AddressZero();
+        if (repayAmount == 0) return 0; // No error, just nothing to do
+
+        // Ensure this contract (LendingManager) has enough underlying to cover the repayment
+        // The actual transfer of 'repayAmount' from CollectionsVault to LendingManager
+        // must happen *before* this function is called.
+        // This function assumes LendingManager already holds the assets.
+        uint256 balanceBeforeTransfer = _asset.balanceOf(address(this));
+        _asset.safeTransferFrom(msg.sender, address(this), repayAmount); // Vault sends asset to LM
+        uint256 balanceAfterTransfer = _asset.balanceOf(address(this));
+        if (balanceAfterTransfer != balanceBeforeTransfer + repayAmount) {
+            revert LendingManager__BalanceCheckFailed(
+                "LM: repayBehalf asset receipt mismatch", balanceBeforeTransfer + repayAmount, balanceAfterTransfer
+            );
+        }
+
+        // Approve the cToken to spend the underlying asset from this contract
+        _asset.approve(address(_cToken), repayAmount);
+
+        uint256 cTokenError;
+        try _cToken.repayBorrowBehalf(borrower, repayAmount) returns (uint256 repayResult) {
+            cTokenError = repayResult; // 0 on success, non-zero on failure
+        } catch Error(string memory reason) {
+            revert LendingManagerCTokenRepayBorrowBehalfFailedReason(reason);
+        } catch (bytes memory data) {
+            revert LendingManagerCTokenRepayBorrowBehalfFailedBytes(data);
+        }
+
+        // Reset approval regardless of outcome
+        _asset.approve(address(_cToken), 0);
+
+        if (cTokenError != 0) {
+            // Optionally, revert here or let the caller handle the cTokenError
+            revert LendingManagerCTokenRepayBorrowBehalfFailed(cTokenError);
+        }
+        // If successful, the cToken would have pulled 'repayAmount' of '_asset' from this contract.
+        // No need to adjust totalPrincipalDeposited as this is a passthrough for repayment.
+        return cTokenError; // Should be 0 if successful
     }
 
     // --- Pausable Functions ---

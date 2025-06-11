@@ -29,6 +29,10 @@ interface ILendingManager {
     error LendingManagerCTokenRedeemUnderlyingFailed(uint256 errorCode);
     error LendingManagerCTokenRedeemUnderlyingFailedReason(string reason);
     error LendingManagerCTokenRedeemUnderlyingFailedBytes(bytes data);
+
+    error LendingManagerCTokenRepayBorrowBehalfFailed(uint256 errorCode);
+    error LendingManagerCTokenRepayBorrowBehalfFailedReason(string reason);
+    error LendingManagerCTokenRepayBorrowBehalfFailedBytes(bytes data);
     // --- End Specific cToken interaction errors ---
 
     error AddressZero();
@@ -71,12 +75,6 @@ interface ILendingManager {
     function totalAssets() external view returns (uint256);
 
     /**
-     * @notice Get the base reward generated per block by assets in the lending protocol.
-     * @return Base reward per block.
-     */
-    function getBaseRewardPerBlock() external view returns (uint256);
-
-    /**
      * @notice Redeems the entire cToken balance held by the LendingManager.
      * @dev Used for scenarios like full vault redemption to sweep remaining dust.
      * @param recipient Recipient address.
@@ -89,4 +87,12 @@ interface ILendingManager {
      * @return The total principal deposited in the underlying asset's units.
      */
     function totalPrincipalDeposited() external view returns (uint256);
+
+    /**
+     * @notice Repays a borrow on behalf of a borrower.
+     * @param borrower The address of the borrower.
+     * @param repayAmount The amount of underlying asset to repay.
+     * @return success True if the repayment was successful, otherwise an error code from the cToken.
+     */
+    function repayBorrowBehalf(address borrower, uint256 repayAmount) external returns (uint256);
 }

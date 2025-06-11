@@ -3,7 +3,7 @@ pragma solidity ^0.8.19;
 
 import {ICollectionsVault} from "./ICollectionsVault.sol";
 
-interface IRewardsController {
+interface IDebtSubsidizer {
     enum CollectionType {
         ERC721,
         ERC1155
@@ -25,24 +25,18 @@ interface IRewardsController {
         int256 p2;
     }
 
-    struct Claim {
-        address account; // кому платить
-        address collection; // адрес коллекции
-        address vault; // адрес vault, в котором хранится yield
-        uint256 secondsUser; // (вес × время) списываемые в этом claim
-        uint256 amount; // токены к переводу — уже посчитаны off-chain
-        uint256 nonce; // защита от повторного применения подписи
-        uint256 deadline; // до какого блока/времени подпись действительна
+    struct Subsidy {
+        address account; // recipient of the subsidy
+        address collection; // collection address
+        address vault; // vault address where the yield is stored
+        uint256 amount; // tokens to transfer — already calculated off-chain
+        uint256 nonce; // protection against signature replay
+        uint256 deadline; // signature validity deadline (block/time)
     }
 
     struct VaultInfo {
-        uint32 lastUpdateBlock;
-        address cToken;
-    }
-
-    struct AccountInfo {
-        address vaultAddress;
-        uint128 secondsClaimed;
+        address lendingManager; // lending manager address
+        address cToken; // cToken address
     }
 
     event NewCollectionWhitelisted(
@@ -54,7 +48,7 @@ interface IRewardsController {
         WeightFunction weightFunction
     );
     event WhitelistCollectionRemoved(address indexed vaultAddress, address indexed collectionAddress);
-    event CollectionRewardShareUpdated(
+    event CollectionYieldShareUpdated(
         address indexed vaultAddress,
         address indexed collectionAddress,
         uint16 oldSharePercentage,
@@ -62,14 +56,9 @@ interface IRewardsController {
     );
     event TrustedSignerUpdated(address oldSigner, address newSigner, address indexed changedBy);
     event WeightFunctionSet(address indexed vaultAddress, address indexed collectionAddress, WeightFunction fn);
-    event RewardsClaimed(
-        address indexed vaultAddress,
-        address indexed user,
-        address indexed collectionAddress,
-        uint256 amount,
-        uint256 secondsInClaim
+    event DebtSubsidized(
+        address indexed vaultAddress, address indexed user, address indexed collectionAddress, uint256 amount
     );
-    event RewardPerBlockUpdated(address indexed vault, uint128 rewardPerBlock);
     event VaultAdded(
         address indexed vaultAddress, address indexed cTokenAddress, address indexed lendingManagerAddress
     );
@@ -86,7 +75,7 @@ interface IRewardsController {
     error ArrayLengthMismatch();
     error InvalidNonce();
     error VaultMismatch();
-    error InvalidRewardSharePercentage(uint256 totalSharePercentage);
+    error InvalidYieldSharePercentage(uint256 totalSharePercentage);
     error CollectionNotWhitelistedInVault(address vaultAddress, address collectionAddress);
     error CannotSetSignerToZeroAddress();
     error VaultNotRegistered(address vaultAddress);
@@ -99,7 +88,7 @@ interface IRewardsController {
     // --- Vault Management ---
     function addVault(address vaultAddress_, address lendingManagerAddress_) external;
     function removeVault(address vaultAddress_) external;
-    function vaults(address vaultAddress) external view returns (VaultInfo memory);
+    function vault(address vaultAddress) external view returns (VaultInfo memory);
 
     // --- Collection Management ---
     function whitelistCollection(
@@ -123,15 +112,13 @@ interface IRewardsController {
     function setWeightFunction(address vaultAddress, address collectionAddress, WeightFunction calldata weightFunction)
         external;
 
-    // --- Reward & Weighting Configuration ---
-
     // --- User Information & Claims ---
     function userNonce(address vaultAddress, address userAddress) external view returns (uint64 nonce);
-    function claimLazy(address vaultAddress, Claim[] calldata claims, bytes calldata signature) external;
+    function subsidize(address vaultAddress, Subsidy[] calldata subsidizes, bytes calldata signature) external;
 
     // --- Administrative Actions ---
     function updateTrustedSigner(address newSigner) external;
-    function claimSigner() external view returns (address);
+    function subsidySigner() external view returns (address);
     function pause() external;
     function unpause() external;
     function paused() external view returns (bool);
