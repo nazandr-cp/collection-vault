@@ -40,6 +40,10 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
     mapping(uint256 => uint256) public epochYieldAllocations;
     mapping(uint256 => mapping(address => bool)) public epochCollectionYieldApplied;
 
+    // Temporary storage used during batch repayment to aggregate borrower amounts
+    mapping(address => uint256) private _tempAggregatedAmounts;
+    address[] private _tempBorrowers;
+
     event VaultYieldAllocatedToEpoch(uint256 indexed epochId, uint256 amount);
 
     event CollectionYieldAppliedForEpoch(
@@ -390,9 +394,11 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
     function _hookDeposit(uint256 assets) internal virtual {
         if (assets > 0) {
             IERC20 assetToken = IERC20(asset());
-            assetToken.forceApprove(address(lendingManager), assets);
+            uint256 allowance = assetToken.allowance(address(this), address(lendingManager));
+            if (allowance < assets) {
+                assetToken.forceApprove(address(lendingManager), type(uint256).max);
+            }
             bool success = lendingManager.depositToLendingProtocol(assets);
-            assetToken.forceApprove(address(lendingManager), 0);
             if (!success) revert LendingManagerDepositFailed();
         }
     }
@@ -480,48 +486,42 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
 
         IERC20 assetToken = IERC20(asset());
         assetToken.forceApprove(address(lendingManager), totalAmount);
+        delete _tempBorrowers;
 
-        address[] memory uniqueBorrowers = new address[](numEntries);
-        uint256[] memory aggregatedAmounts = new uint256[](numEntries);
-        uint256 uniqueBorrowerCount = 0;
-
-        for (uint256 i = 0; i < numEntries; i++) {
-            if (amounts[i] == 0) {
-                continue;
-            }
-            address currentBorrower = borrowers[i];
-            uint256 currentAmount = amounts[i];
-            bool found = false;
-            for (uint256 j = 0; j < uniqueBorrowerCount; j++) {
-                if (uniqueBorrowers[j] == currentBorrower) {
-                    aggregatedAmounts[j] += currentAmount;
-                    found = true;
-                    break;
+        for (uint256 i = 0; i < numEntries; ) {
+            uint256 amt = amounts[i];
+            if (amt != 0) {
+                address borrowerAddr = borrowers[i];
+                if (_tempAggregatedAmounts[borrowerAddr] == 0) {
+                    _tempBorrowers.push(borrowerAddr);
                 }
+                _tempAggregatedAmounts[borrowerAddr] += amt;
             }
-            if (!found) {
-                if (uniqueBorrowerCount < numEntries) {
-                    uniqueBorrowers[uniqueBorrowerCount] = currentBorrower;
-                    aggregatedAmounts[uniqueBorrowerCount] = currentAmount;
-                    uniqueBorrowerCount++;
-                } else {
-                    revert("CollectionsVault: Exceeded unique borrower array capacity");
-                }
+            unchecked {
+                ++i;
             }
         }
 
         uint256 actualTotalRepaid = 0;
-        for (uint256 i = 0; i < uniqueBorrowerCount; i++) {
-            address borrower = uniqueBorrowers[i];
-            uint256 repayAmountForThisBorrower = aggregatedAmounts[i];
-
+        uint256 borrowersLength = _tempBorrowers.length;
+        for (uint256 i = 0; i < borrowersLength; ) {
+            address borrower = _tempBorrowers[i];
+            uint256 repayAmountForThisBorrower = _tempAggregatedAmounts[borrower];
+            
             uint256 lmError = lendingManager.repayBorrowBehalf(borrower, repayAmountForThisBorrower);
 
             if (lmError != 0) {
                 revert("CollectionsVault: Repay borrow behalf failed via LendingManager");
             }
             actualTotalRepaid += repayAmountForThisBorrower;
+
+            delete _tempAggregatedAmounts[borrower];
+            unchecked {
+                ++i;
+            }
         }
+
+        delete _tempBorrowers;
 
         for (uint256 i = 0; i < numEntries; i++) {
             if (amounts[i] == 0) continue;
@@ -548,6 +548,18 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         if (includeNonShared) {
             return totalLMYield;
         }
+
+        if (address(epochManager) == address(0)) {
+            return 0;
+        }
+
+        uint256 currentEpochId = epochManager.getCurrentEpochId();
+        if (currentEpochId == 0) {
+            return 0;
+        }
+
+        uint256 allocated = epochYieldAllocations[currentEpochId];
+        return totalLMYield > allocated ? totalLMYield - allocated : 0;
     }
 
     function allocateEpochYield(uint256 amount) external nonReentrant whenNotPaused onlyRole(ADMIN_ROLE) {
@@ -584,8 +596,13 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
      */
     function indexCollectionsDeposits() external onlyRole(ADMIN_ROLE) whenNotPaused nonReentrant {
         _updateGlobalDepositIndex();
-        for (uint256 i = 0; i < allCollectionAddresses.length; i++) {
-            _accrueCollectionYield(allCollectionAddresses[i]);
+        address[] memory collectionList = allCollectionAddresses;
+        uint256 length = collectionList.length;
+        for (uint256 i = 0; i < length; ) {
+            _accrueCollectionYield(collectionList[i]);
+            unchecked {
+                ++i;
+            }
         }
     }
 
