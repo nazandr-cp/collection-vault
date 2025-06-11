@@ -1,66 +1,60 @@
-## Foundry
+# Collection Vault System
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+Collection Vault is a set of Solidity contracts that coordinate NFT collection deposits with a yield strategy based on Compound-like lending markets. The repository contains multiple modules that can be deployed separately or combined into a single system.
 
-Foundry consists of:
+## Repository Structure
 
--   **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
--   **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
--   **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
--   **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+- **src/** – Core contract implementations.
+  - `CollectionsVault.sol` – ERC4626 compliant vault that tracks deposits per NFT collection and accrues yield.
+  - `LendingManager.sol` – Adapter for depositing assets into a Compound V2 fork and pulling yield back to the vault.
+  - `EpochManager.sol` – Utility contract for rolling epochs used to allocate yield over time.
+  - `DebtSubsidizer.sol` – Upgradeable contract used for distributing protocol incentives.
+  - `mocks/` – Simplified token and cToken mocks used for development.
+- **script/** – (planned) deployment and management scripts.
+- **dependencies/** – External libraries installed via `forge install` (OpenZeppelin, Compound, …).
+- **foundry.toml** – Foundry configuration file.
 
-## Documentation
+## Getting Started
 
-https://book.getfoundry.sh/
+1. **Install Foundry** if it is not already available:
+   ```bash
+   curl -L https://foundry.paradigm.xyz | bash
+   source ~/.bashrc
+   foundryup
+   ```
+2. **Install dependencies** (only required once):
+   ```bash
+   forge install OpenZeppelin/openzeppelin-contracts@v5.3.0 \
+               OpenZeppelin/openzeppelin-contracts-upgradeable@v5.3.0 \
+               compound-finance/compound-protocol@a3214f67b73310d547e00fc578e8355911c9d376
+   ```
+3. **Build the contracts**:
+   ```bash
+   forge build
+   ```
 
-## Usage
+## Environment Variables
 
-### Build
+Deployment scripts and tests expect the following environment variables:
 
-```shell
-$ forge build
-```
+- `PRIVATE_KEY` – Deployer key for broadcasting transactions.
+- `RPC_URL` – RPC endpoint for the target network.
+- Optional variables such as `AUTHORIZED_UPDATER_ADDRESS`, `COLLECTIONS_VAULT_NAME`, `COLLECTIONS_VAULT_SYMBOL` can further customize deployment (see `DEPLOYMENT_PLAN.md`).
 
-### Test
+Create a `.env` file in the project root and export these values before running scripts.
 
-```shell
-$ forge test
-```
+## Development Workflow
 
-### Format
+- `forge build` – Compile the entire project.
+- `forge test` – Run the test suite (none are included yet).
+- `forge fmt` – Format all Solidity files using Foundry's style.
+- `anvil` – Launch a local testnet for manual interaction.
+- `forge script` – Execute deployment or utility scripts. Example:
+  ```bash
+  forge script script/DeploySystem.s.sol:DeploySystem --rpc-url $RPC_URL --private-key $PRIVATE_KEY --broadcast -vvvv
+  ```
 
-```shell
-$ forge fmt
-```
+## License
 
-### Gas Snapshots
+This project is released under the terms of the MIT License. See [LICENSE](LICENSE) for details.
 
-```shell
-$ forge snapshot
-```
-
-### Anvil
-
-```shell
-$ anvil
-```
-
-### Deploy
-
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
