@@ -11,7 +11,6 @@ Collection Vault is a set of Solidity contracts that coordinate NFT collection d
   - `DebtSubsidizer.sol` – Upgradeable contract used for distributing protocol incentives.
   - `mocks/` – Simplified token and cToken mocks used for development.
 - **script/** – (planned) deployment and management scripts.
-- **dependencies/** – External libraries installed via `forge install` (OpenZeppelin, Compound, …).
 - **foundry.toml** – Foundry configuration file.
 
 ## Getting Started
@@ -24,9 +23,7 @@ Collection Vault is a set of Solidity contracts that coordinate NFT collection d
    ```
 2. **Install dependencies** (only required once):
    ```bash
-   forge install OpenZeppelin/openzeppelin-contracts@v5.3.0 \
-               OpenZeppelin/openzeppelin-contracts-upgradeable@v5.3.0 \
-               compound-finance/compound-protocol@a3214f67b73310d547e00fc578e8355911c9d376
+   forge soldeer install
    ```
 3. **Build the contracts**:
    ```bash
@@ -39,7 +36,7 @@ Deployment scripts and tests expect the following environment variables:
 
 - `PRIVATE_KEY` – Deployer key for broadcasting transactions.
 - `RPC_URL` – RPC endpoint for the target network.
-- Optional variables such as `AUTHORIZED_UPDATER_ADDRESS`, `COLLECTIONS_VAULT_NAME`, `COLLECTIONS_VAULT_SYMBOL` can further customize deployment (see `DEPLOYMENT_PLAN.md`).
+- Optional variables such as `AUTHORIZED_UPDATER_ADDRESS`, `COLLECTIONS_VAULT_NAME`, `COLLECTIONS_VAULT_SYMBOL` can further customize deployment.
 
 Create a `.env` file in the project root and export these values before running scripts.
 
