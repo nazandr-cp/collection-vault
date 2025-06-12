@@ -139,5 +139,6 @@ interface ICollectionsVault is IERC4626 {
     function allocateEpochYield(uint256 amount) external;
     function allocateYieldToEpoch(uint256 epochId) external;
     function applyCollectionYieldForEpoch(address collection, uint256 epochId) external;
+    function resetEpochCollectionYieldFlags(uint256 epochId, address[] calldata collections) external;
     function getEpochYieldAllocated(uint256 epochId) external view returns (uint256 amount);
 }
