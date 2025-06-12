@@ -87,7 +87,10 @@ contract FullEpochFlowTest is Test {
         // EpochManager needs epochDuration, automation address, owner
         epochManager = new EpochManager(ONE_DAY, AUTOMATION, OWNER);
 
-        // Set EpochManager in CollectionsVault
+        // Grant vault role and set EpochManager
+        vm.startPrank(OWNER);
+        epochManager.grantVaultRole(address(vault));
+        vm.stopPrank();
         vm.prank(ADMIN);
         vault.setEpochManager(address(epochManager));
 
@@ -201,7 +204,7 @@ contract FullEpochFlowTest is Test {
         // 1. User deposits into CollectionsVault
         // 2. Yield accrues (simulated)
         // 3. EpochManager: allocateEpochYield is called by CollectionsVault (via admin)
-        // 4. CollectionsVault: applyCollectionEpochYield is called for the collection (via admin)
+        // 4. CollectionsVault: applyCollectionYieldForEpoch is called for the collection (via admin)
         // 5. DebtSubsidizer: subsidize() is called for a user
         // Assert balances and events at each step.
 
@@ -311,7 +314,7 @@ contract FullEpochFlowTest is Test {
         assertEq(uint8(processingStatus), uint8(EpochManager.EpochStatus.Processing), "Epoch not processing");
         vm.stopPrank();
 
-        // Admin calls applyCollectionEpochYield for the specific collection
+        // Admin calls applyCollectionYieldForEpoch for the specific collection
         uint256 assetsBeforeEpochYieldApply = vault.collectionTotalAssetsDeposited(address(nft));
         uint256 collectionShareOfEpochYield = (yieldToAllocateToEpoch * DEFAULT_YIELD_SHARE_BPS) / 10000;
 
@@ -324,7 +327,7 @@ contract FullEpochFlowTest is Test {
             collectionShareOfEpochYield,
             assetsBeforeEpochYieldApply + collectionShareOfEpochYield
         );
-        vault.applyCollectionEpochYield(address(nft), currentEpochId);
+        vault.applyCollectionYieldForEpoch(address(nft), currentEpochId);
         vm.stopPrank();
         assertEq(
             vault.collectionTotalAssetsDeposited(address(nft)),

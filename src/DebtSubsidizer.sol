@@ -21,6 +21,7 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {IDebtSubsidizer} from "./interfaces/IDebtSubsidizer.sol";
 import {ICollectionsVault} from "./interfaces/ICollectionsVault.sol";
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
+import {IEpochManager} from "./interfaces/IEpochManager.sol";
 
 contract DebtSubsidizer is
     Initializable,
@@ -322,6 +323,15 @@ contract DebtSubsidizer is
                 _userTotalSecondsClaimed[user] += amountToSubsidize; // Update total seconds claimed for the user
 
                 emit DebtSubsidized(vaultAddress, user, collection, amountToSubsidize);
+            }
+        }
+
+        if (totalAmountToSubsidize > 0) {
+            IEpochManager em = ICollectionsVault(vaultAddress).epochManager();
+            uint256 epochId = em.getCurrentEpochId();
+            uint256 remainingYield = ICollectionsVault(vaultAddress).getEpochYieldAllocated(epochId);
+            if (totalAmountToSubsidize > remainingYield) {
+                revert IDebtSubsidizer.InsufficientYield();
             }
         }
 

@@ -48,7 +48,9 @@ contract EpochManagerIntegrationTest is Test {
         lendingManager.grantVaultRole(address(vault));
 
         epochManager = new EpochManager(1 days, AUTOMATION, OWNER);
-
+        vm.startPrank(OWNER);
+        epochManager.grantVaultRole(address(vault));
+        vm.stopPrank();
         vm.prank(ADMIN);
         vault.setEpochManager(address(epochManager));
 
@@ -130,13 +132,7 @@ contract EpochManagerIntegrationTest is Test {
 
         vm.prank(AUTOMATION);
         uint256 endTime = block.timestamp + 1 days;
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                EpochManager.EpochManager__EpochNotEnded.selector,
-                1,
-                endTime
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(EpochManager.EpochManager__EpochNotEnded.selector, 1, endTime));
         epochManager.beginEpochProcessing(1);
     }
 

@@ -56,6 +56,9 @@ contract FullIntegrationTest is Test {
         vm.stopPrank();
 
         epochManager = new EpochManager(1 days, AUTOMATION, OWNER);
+        vm.startPrank(OWNER);
+        epochManager.grantVaultRole(address(vault));
+        vm.stopPrank();
         vm.prank(ADMIN);
         vault.setEpochManager(address(epochManager));
 

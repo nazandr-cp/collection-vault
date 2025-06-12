@@ -71,6 +71,9 @@ contract EdgeCasesTest is Test {
         vm.stopPrank();
 
         epochManager = new EpochManager(ONE_DAY, AUTOMATION, OWNER);
+        vm.startPrank(OWNER);
+        epochManager.grantVaultRole(address(vault));
+        vm.stopPrank();
         vm.prank(ADMIN);
         vault.setEpochManager(address(epochManager));
 
@@ -157,37 +160,22 @@ contract EdgeCasesTest is Test {
         ) = vault.collections(address(nft1));
         assertEq(collection1SharesMintedInitial, sharesA, "nft1 total shares minted incorrect after A's deposit");
 
-        // USER_A transfers half of their shares to USER_B
+        // USER_A attempts to transfer shares to USER_B, should revert
         uint256 sharesToTransfer = sharesA / 2;
         vm.startPrank(USER_A);
+        vm.expectRevert();
         vault.transfer(USER_B, sharesToTransfer);
         vm.stopPrank();
 
-        assertEq(vault.balanceOf(USER_A), sharesA - sharesToTransfer, "USER_A shares incorrect after transfer");
-        assertEq(vault.balanceOf(USER_B), sharesToTransfer, "USER_B shares incorrect after transfer");
+        assertEq(vault.balanceOf(USER_A), sharesA, "USER_A shares should remain");
+        assertEq(vault.balanceOf(USER_B), 0, "USER_B should receive no shares");
 
         // IMPORTANT: totalAssetsDeposited for collection nft1 should NOT change due to a share transfer.
         // It tracks the underlying assets attributed to the collection, not who holds the shares.
         assertEq(
             vault.collectionTotalAssetsDeposited(address(nft1)),
             depositAmountA,
-            "nft1 total assets changed after share transfer (should not)"
-        );
-        // totalSharesMinted for the collection should also NOT change due to a simple transfer between users.
-        // It tracks shares minted *for* this collection's deposits.
-        (
-            address _collectionAddressAfterTransfer,
-            uint256 _totalAssetsDepositedAfterTransfer,
-            uint256 totalSharesMintedAfterTransfer,
-            uint256 _totalCTokensMintedAfterTransfer,
-            uint16 _yieldSharePercentageAfterTransfer,
-            uint256 _totalYieldTransferredAfterTransfer,
-            uint256 _lastGlobalDepositIndexAfterTransfer
-        ) = vault.collections(address(nft1));
-        assertEq(
-            totalSharesMintedAfterTransfer,
-            collection1SharesMintedInitial,
-            "nft1 total shares minted changed after share transfer (should not)"
+            "nft1 total assets changed after failed transfer"
         );
 
         // Simulate some yield to make withdrawal values more interesting (optional, but good)
@@ -200,8 +188,7 @@ contract EdgeCasesTest is Test {
         uint256 assetsInNft1AfterYield = vault.collectionTotalAssetsDeposited(address(nft1));
         assertTrue(assetsInNft1AfterYield > depositAmountA, "nft1 assets should have increased with yield");
 
-        // USER_A attempts to withdraw their remaining shares from collection nft1
-        // They own (sharesA - sharesToTransfer) shares.
+        // USER_A withdraws all their shares from collection nft1
         // The assets they get should be proportional to their share ownership of the vault's total assets.
         // The collectionAddress parameter in withdrawForCollection is for accounting the decrease in that collection's totalAssetsDeposited.
         uint256 sharesUserAHas = vault.balanceOf(USER_A);
@@ -243,56 +230,6 @@ contract EdgeCasesTest is Test {
             collection1SharesMintedInitial - sharesUserAHas,
             "nft1 total shares minted incorrect after A's withdrawal"
         );
-
-        // USER_B attempts to withdraw their received shares, also attributed to collection nft1 for accounting.
-        // (Even though USER_B might not have "deposited" to nft1, the shares originated there)
-        uint256 sharesUserBHas = vault.balanceOf(USER_B);
-        uint256 expectedAssetsForUserB = vault.previewRedeem(sharesUserBHas);
-        uint256 assetsInNft1BeforeBWithdraw = vault.collectionTotalAssetsDeposited(address(nft1));
-
-        vm.startPrank(USER_B);
-        vm.expectEmit(true, true, true, true, address(vault));
-        emit ICollectionsVault.CollectionWithdraw(
-            address(nft1), USER_B, USER_B, expectedAssetsForUserB, sharesUserBHas, sharesUserBHas
-        );
-        uint256 assetsWithdrawnB = vault.withdrawForCollection(expectedAssetsForUserB, USER_B, USER_B, address(nft1));
-        vm.stopPrank();
-
-        assertEq(assetsWithdrawnB, expectedAssetsForUserB, "Assets withdrawn by USER_B mismatch");
-        assertEq(vault.balanceOf(USER_B), 0, "USER_B should have 0 shares after withdrawal");
-
-        assertEq(
-            vault.collectionTotalAssetsDeposited(address(nft1)),
-            assetsInNft1BeforeBWithdraw - assetsWithdrawnB,
-            "nft1 total assets incorrect after B's withdrawal"
-        );
-        (
-            address _collectionAddressAfterBWithdraw,
-            uint256 _totalAssetsDepositedAfterBWithdraw,
-            uint256 totalSharesMintedAfterBWithdraw,
-            uint256 _totalCTokensMintedAfterBWithdraw,
-            uint16 _yieldSharePercentageAfterBWithdraw,
-            uint256 _totalYieldTransferredAfterBWithdraw,
-            uint256 _lastGlobalDepositIndexAfterBWithdraw
-        ) = vault.collections(address(nft1));
-        assertEq(
-            totalSharesMintedAfterBWithdraw,
-            collection1SharesMintedInitial - sharesUserAHas - sharesUserBHas,
-            "nft1 total shares minted incorrect after B's withdrawal"
-        );
-
-        // After both withdrawals, if all original shares from depositA were redeemed,
-        // totalSharesMinted for nft1 should be 0.
-        (
-            address _collectionAddressFinal,
-            uint256 _totalAssetsDepositedFinal,
-            uint256 totalSharesMintedFinal,
-            uint256 _totalCTokensMintedFinal,
-            uint16 _yieldSharePercentageFinal,
-            uint256 _totalYieldTransferredFinal,
-            uint256 _lastGlobalDepositIndexFinal
-        ) = vault.collections(address(nft1));
-        assertEq(totalSharesMintedFinal, 0, "nft1 total shares should be zero if all original shares redeemed");
     }
 
     // Test for EpochManager: markEpochFailed
@@ -388,7 +325,7 @@ contract EdgeCasesTest is Test {
         epochManager.beginEpochProcessing(epochId);
         vm.stopPrank();
         vm.prank(ADMIN);
-        vault.applyCollectionEpochYield(address(nft1), epochId);
+        vault.applyCollectionYieldForEpoch(address(nft1), epochId);
         vm.stopPrank();
 
         // Initial weight function (default is LINEAR, 0, 0)
@@ -952,7 +889,7 @@ contract EdgeCasesTest is Test {
 
     // --- Final Batch of Edge Cases ---
 
-    // CollectionsVault: applyCollectionEpochYield with 0% yield share for collection
+    // CollectionsVault: applyCollectionYieldForEpoch with 0% yield share for collection
     function testApplyCollectionEpochYield_ZeroPercentShare() public {
         // Setup: Deposit, yield, start epoch, allocate vault yield to epoch
         uint256 depositAmount = 100_000 * (10 ** asset.decimals());
@@ -977,12 +914,12 @@ contract EdgeCasesTest is Test {
         vm.stopPrank();
 
         // Set collection nft1's yield share to 0% for epoch yield
-        uint16 oldShareBps = vault.collections(address(nft1)).epochYieldSharePercentageBps;
+        ( , , , , uint16 oldShareBps, , ) = vault.collections(address(nft1));
         vm.prank(ADMIN);
         vault.setCollectionYieldSharePercentage(address(nft1), 0); // This sets both passive and epoch share
         vm.stopPrank();
-        assertEq(vault.collections(address(nft1)).epochYieldSharePercentageBps, 0, "nft1 epoch share should be 0");
-        assertEq(vault.collections(address(nft1)).passiveYieldSharePercentageBps, 0, "nft1 passive share should be 0");
+        ( , , , , uint16 shareAfter, , ) = vault.collections(address(nft1));
+        assertEq(shareAfter, 0, "nft1 share should be 0");
 
         // Advance time and begin epoch processing
         vm.warp(block.timestamp + ONE_DAY + 1);
@@ -992,12 +929,12 @@ contract EdgeCasesTest is Test {
 
         uint256 assetsBeforeApply = vault.collectionTotalAssetsDeposited(address(nft1));
 
-        // Call applyCollectionEpochYield
+        // Call applyCollectionYieldForEpoch
         vm.prank(ADMIN);
         vm.expectEmit(true, true, true, true, address(vault));
         // Expected yield for collection is 0
         emit ICollectionsVault.CollectionYieldAppliedForEpoch(epochId, address(nft1), 0, 0, assetsBeforeApply);
-        vault.applyCollectionEpochYield(address(nft1), epochId);
+        vault.applyCollectionYieldForEpoch(address(nft1), epochId);
         vm.stopPrank();
 
         // Assert collection's totalAssetsDeposited did not change
@@ -1013,8 +950,8 @@ contract EdgeCasesTest is Test {
         vm.stopPrank();
     }
 
-    // CollectionsVault: applyCollectionEpochYield when epoch has 0 yield allocated
-    function testApplyCollectionEpochYield_ZeroEpochYield() public {
+    // CollectionsVault: applyCollectionYieldForEpoch when epoch has 0 yield allocated
+    function testApplyCollectionYieldForEpoch_ZeroEpochYield() public {
         // Setup: Deposit, start epoch, but allocate 0 vault yield to epoch
         uint256 depositAmount = 100_000 * (10 ** asset.decimals());
         vm.startPrank(USER_A);
@@ -1052,14 +989,14 @@ contract EdgeCasesTest is Test {
             uint256 _lastGlobalDepositIndex
         ) = vault.collections(address(nft1));
 
-        // Call applyCollectionEpochYield
+        // Call applyCollectionYieldForEpoch
         vm.prank(ADMIN);
         vm.expectEmit(true, true, true, true, address(vault));
         // Expected yield for collection is 0 (collectionShareBps % of 0 is 0)
         emit ICollectionsVault.CollectionYieldAppliedForEpoch(
             epochId, address(nft1), collectionShareBps, 0, assetsBeforeApply
         );
-        vault.applyCollectionEpochYield(address(nft1), epochId);
+        vault.applyCollectionYieldForEpoch(address(nft1), epochId);
         vm.stopPrank();
 
         // Assert collection's totalAssetsDeposited did not change

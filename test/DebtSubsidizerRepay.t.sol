@@ -56,6 +56,9 @@ contract DebtSubsidizerRepayTest is Test {
         vm.stopPrank();
 
         epochManager = new EpochManager(1 days, AUTOMATION, OWNER);
+        vm.startPrank(OWNER);
+        epochManager.grantVaultRole(address(vault));
+        vm.stopPrank();
         vm.prank(ADMIN);
         vault.setEpochManager(address(epochManager));
 
@@ -92,7 +95,8 @@ contract DebtSubsidizerRepayTest is Test {
     }
 
     function _domainSeparator() internal view returns (bytes32) {
-        bytes32 typeHash = keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+        bytes32 typeHash =
+            keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
         bytes32 nameHash = keccak256(bytes("DebtSubsidizer"));
         bytes32 versionHash = keccak256(bytes("1"));
         return keccak256(abi.encode(typeHash, nameHash, versionHash, block.chainid, address(debtSubsidizer)));
@@ -128,12 +132,7 @@ contract DebtSubsidizerRepayTest is Test {
 
         vm.recordLogs();
         vm.expectRevert(
-            abi.encodeWithSelector(
-                ICollectionsVault.ExcessiveYieldAmount.selector,
-                address(nft),
-                20 ether,
-                0
-            )
+            abi.encodeWithSelector(ICollectionsVault.ExcessiveYieldAmount.selector, address(nft), 20 ether, 0)
         );
         debtSubsidizer.subsidize(address(vault), subsidies, sig);
         Vm.Log[] memory entries = vm.getRecordedLogs();
@@ -153,4 +152,3 @@ contract DebtSubsidizerRepayTest is Test {
         assertTrue(subsidyFound, "DebtSubsidized event not emitted");
     }
 }
-

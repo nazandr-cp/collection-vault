@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {ILendingManager} from "./ILendingManager.sol";
+import {IEpochManager} from "./IEpochManager.sol";
 
 interface ICollectionsVault is IERC4626 {
     // --- Structs ---
@@ -90,6 +91,7 @@ interface ICollectionsVault is IERC4626 {
     error FunctionDisabledUse(string functionName);
     error InsufficientBalanceInProtocol();
     error ExcessiveYieldAmount(address collection, uint256 requested, uint256 maxAllowed);
+    error ShareBalanceUnderflow();
 
     // --- Functions ---
 
@@ -98,6 +100,7 @@ interface ICollectionsVault is IERC4626 {
     function DEBT_SUBSIDIZER_ROLE() external view returns (bytes32);
 
     function lendingManager() external view returns (ILendingManager);
+    function epochManager() external view returns (IEpochManager);
 
     function collectionTotalAssetsDeposited(address collectionAddress) external view returns (uint256);
 
@@ -134,5 +137,7 @@ interface ICollectionsVault is IERC4626 {
 
     function getCurrentEpochYield(bool includeNonShared) external view returns (uint256 availableYield);
     function allocateEpochYield(uint256 amount) external;
+    function allocateYieldToEpoch(uint256 epochId) external;
+    function applyCollectionYieldForEpoch(address collection, uint256 epochId) external;
     function getEpochYieldAllocated(uint256 epochId) external view returns (uint256 amount);
 }
