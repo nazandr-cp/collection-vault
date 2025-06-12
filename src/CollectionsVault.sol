@@ -746,4 +746,21 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
             collection.totalAssetsDeposited
         );
     }
+
+    /// @notice Resets the flags tracking whether collection yield was applied
+    /// for a given epoch. Useful when starting a new epoch to clean up storage.
+    /// @param epochId The epoch id to reset flags for.
+    /// @param collectionsToReset The list of collection addresses to reset.
+    function resetEpochCollectionYieldFlags(uint256 epochId, address[] calldata collectionsToReset)
+        external
+        onlyRole(ADMIN_ROLE)
+    {
+        uint256 length = collectionsToReset.length;
+        for (uint256 i = 0; i < length;) {
+            delete epochCollectionYieldApplied[epochId][collectionsToReset[i]];
+            unchecked {
+                ++i;
+            }
+        }
+    }
 }

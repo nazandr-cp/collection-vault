@@ -35,11 +35,23 @@ contract EpochManager is Ownable, AccessControl, ReentrancyGuard {
     event EpochProcessingStarted(uint256 indexed epochId);
 
     /**
+     * @dev Emitted when processing of an epoch has started. Alias of
+     * `EpochProcessingStarted` for easier integrations.
+     */
+    event ProcessingStarted(uint256 indexed epochId);
+
+    /**
      * @dev Emitted when an epoch is marked as failed.
      * @param epochId The ID of the epoch.
      * @param reason The reason for the failure.
      */
     event EpochFailed(uint256 indexed epochId, string reason);
+
+    /**
+     * @dev Emitted when processing of an epoch fails and it is forcefully
+     * aborted. Mirrors `EpochFailed` but uses a distinct event name.
+     */
+    event ProcessingFailed(uint256 indexed epochId, string reason);
 
     /**
      * @dev Emitted when yield is allocated to a vault for a specific epoch.
@@ -222,6 +234,7 @@ contract EpochManager is Ownable, AccessControl, ReentrancyGuard {
 
         epoch.status = EpochStatus.Processing;
         emit EpochProcessingStarted(epochId);
+        emit ProcessingStarted(epochId);
     }
 
     /**
@@ -400,6 +413,7 @@ contract EpochManager is Ownable, AccessControl, ReentrancyGuard {
 
         epoch.status = EpochStatus.Failed;
         emit EpochFailed(epochId, reason);
+        emit ProcessingFailed(epochId, reason);
     }
 
     function grantVaultRole(address vault) external onlyOwner {
