@@ -13,30 +13,7 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
 import {ICollectionsVault} from "./interfaces/ICollectionsVault.sol";
-import {EpochManager} from "./EpochManager.sol";
-
-interface IEpochManager {
-    enum EpochStatus {
-        Pending,
-        Active,
-        Processing,
-        Completed
-    }
-
-    function getCurrentEpochId() external view returns (uint256);
-    function getEpoch(uint256 epochId)
-        external
-        view
-        returns (
-            uint256 id,
-            uint256 startTime,
-            uint256 endTime,
-            uint256 totalYieldAvailableInEpoch,
-            uint256 totalSubsidiesDistributed,
-            IEpochManager.EpochStatus status
-        );
-    function allocateVaultYield(address vaultAddress, uint256 amount) external;
-}
+import {IEpochManager} from "./interfaces/IEpochManager.sol";
 
 interface ICToken {
     function repayBorrowBehalf(address borrower, uint256 repayAmount) external returns (uint256);
@@ -332,6 +309,9 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         collections[collectionAddress].totalAssetsDeposited = currentCollectionTotalAssets - assets;
         // Task 1: Track supply correctly
         ICollectionsVault.Collection storage collection = collections[collectionAddress];
+        if (collection.totalSharesMinted < shares || collection.totalCTokensMinted < shares) {
+            revert ShareBalanceUnderflow();
+        }
         collection.totalSharesMinted -= shares;
         collection.totalCTokensMinted -= shares; // Placeholder, actual cToken amount depends on LM
 
@@ -413,11 +393,22 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         }
         // Task 1: Track supply correctly
         ICollectionsVault.Collection storage collection = collections[collectionAddress];
+        if (collection.totalSharesMinted < shares || collection.totalCTokensMinted < shares) {
+            revert ShareBalanceUnderflow();
+        }
         collection.totalSharesMinted -= shares;
         collection.totalCTokensMinted -= shares; // Placeholder, actual cToken amount depends on LM
 
         emit CollectionWithdraw(collectionAddress, _msgSender(), receiver, assets, shares, shares); // Assuming cTokenAmount is shares
         return finalAssetsToTransfer;
+    }
+
+    function transfer(address to, uint256 amount) public override(ERC20, IERC20) returns (bool) {
+        revert FunctionDisabledUse("transferForCollection");
+    }
+
+    function transferFrom(address from, address to, uint256 amount) public override(ERC20, IERC20) returns (bool) {
+        revert FunctionDisabledUse("transferForCollection");
     }
 
     function _hookDeposit(uint256 assets) internal virtual {
@@ -616,6 +607,21 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         emit VaultYieldAllocatedToEpoch(currentEpochId, amount);
     }
 
+    function allocateYieldToEpoch(uint256 epochId) external nonReentrant whenNotPaused onlyRole(ADMIN_ROLE) {
+        if (address(epochManager) == address(0)) revert("CollectionsVault: EpochManager not set");
+        uint256 currentEpochId = epochManager.getCurrentEpochId();
+        if (epochId != currentEpochId || epochId == 0) {
+            revert("CollectionsVault: Invalid epochId");
+        }
+        uint256 amount = getCurrentEpochYield(false);
+        if (amount == 0) {
+            revert("CollectionsVault: No yield available for allocation");
+        }
+        epochManager.allocateVaultYield(address(this), amount);
+        epochYieldAllocations[epochId] += amount;
+        emit VaultYieldAllocatedToEpoch(epochId, amount);
+    }
+
     function getEpochYieldAllocated(uint256 epochId) external view returns (uint256 amount) {
         return epochYieldAllocations[epochId];
     }
@@ -665,7 +671,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
      * @param collectionAddress The address of the collection to apply yield to.
      * @param epochId The ID of the epoch for which to apply yield.
      */
-    function applyCollectionEpochYield(address collectionAddress, uint256 epochId)
+    function applyCollectionYieldForEpoch(address collectionAddress, uint256 epochId)
         external
         nonReentrant
         whenNotPaused
@@ -721,8 +727,13 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
 
         uint256 collectionYieldFromEpoch = (totalEpochAllocation * collection.yieldSharePercentage) / 10000;
 
+        if (collectionYieldFromEpoch > epochYieldAllocations[epochId]) {
+            revert("CollectionsVault: Allocation underflow");
+        }
+
         if (collectionYieldFromEpoch > 0) {
             collection.totalAssetsDeposited += collectionYieldFromEpoch;
+            epochYieldAllocations[epochId] -= collectionYieldFromEpoch;
         }
 
         epochCollectionYieldApplied[epochId][collectionAddress] = true;

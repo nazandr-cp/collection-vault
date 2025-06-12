@@ -32,6 +32,8 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
     CErc20Interface internal immutable _cToken;
 
     uint256 public totalPrincipalDeposited;
+    uint256 public cachedExchangeRate;
+    uint256 public lastExchangeRateTimestamp;
 
     constructor(address initialAdmin, address vaultAddress, address _assetAddress, address _cTokenAddress) {
         if (
@@ -53,6 +55,9 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         _grantRole(VAULT_ROLE, vaultAddress);
 
         _asset.approve(address(_cToken), type(uint256).max);
+
+        cachedExchangeRate = CTokenInterface(address(_cToken)).exchangeRateStored();
+        lastExchangeRateTimestamp = block.timestamp;
     }
 
     modifier onlyVault() {
@@ -182,12 +187,11 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
 
     function totalAssets() public view override returns (uint256) {
         uint256 cTokenBalance = CTokenInterface(address(_cToken)).balanceOf(address(this));
-        uint256 currentExchangeRate = CTokenInterface(address(_cToken)).exchangeRateStored();
-        uint256 underlyingBalanceInCToken;
-        if (cTokenBalance > 0 && currentExchangeRate > 0) {
-            underlyingBalanceInCToken = (cTokenBalance * currentExchangeRate) / EXCHANGE_RATE_DENOMINATOR;
+        uint256 rate = cachedExchangeRate;
+        if (cTokenBalance == 0 || rate == 0) {
+            return 0;
         }
-        return underlyingBalanceInCToken;
+        return (cTokenBalance * rate) / EXCHANGE_RATE_DENOMINATOR;
     }
 
     // --- Administrative Functions for Role Management ---
@@ -355,6 +359,12 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         // If successful, the cToken would have pulled 'repayAmount' of '_asset' from this contract.
         // No need to adjust totalPrincipalDeposited as this is a passthrough for repayment.
         return cTokenError; // Should be 0 if successful
+    }
+
+    function updateExchangeRate() external onlyRole(ADMIN_ROLE) whenNotPaused returns (uint256 newRate) {
+        newRate = CTokenInterface(address(_cToken)).exchangeRateCurrent();
+        cachedExchangeRate = newRate;
+        lastExchangeRateTimestamp = block.timestamp;
     }
 
     // --- Pausable Functions ---

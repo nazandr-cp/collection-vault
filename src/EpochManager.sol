@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
@@ -10,7 +11,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
  * @notice Manages the lifecycle of epochs for distributing rewards.
  * It handles epoch creation, state transitions, and yield allocation tracking.
  */
-contract EpochManager is Ownable, ReentrancyGuard {
+contract EpochManager is Ownable, AccessControl, ReentrancyGuard {
     /**
      * @dev Emitted when a new epoch is started.
      * @param epochId The ID of the new epoch.
@@ -59,6 +60,8 @@ contract EpochManager is Ownable, ReentrancyGuard {
      * @param newAutomatedSystem The new address authorized for automated system interactions.
      */
     event AutomatedSystemUpdated(address indexed newAutomatedSystem);
+
+    bytes32 public constant VAULT_ROLE = keccak256("VAULT_ROLE");
 
     enum EpochStatus {
         Pending, // Epoch has not started yet
@@ -142,6 +145,8 @@ contract EpochManager is Ownable, ReentrancyGuard {
         }
         epochDuration = _initialEpochDuration;
         automatedSystem = _initialAutomatedSystem;
+        _grantRole(DEFAULT_ADMIN_ROLE, _initialOwner);
+        _grantRole(VAULT_ROLE, _initialOwner);
         // currentEpochId is 0 initially, startNewEpoch will create epoch 1.
     }
 
@@ -181,9 +186,7 @@ contract EpochManager is Ownable, ReentrancyGuard {
      * @param vault The address of the CollectionsVault.
      * @param amount The amount of yield being allocated.
      */
-    function allocateVaultYield(address vault, uint256 amount) external nonReentrant {
-        // For now, allowing any address to call this, assuming CollectionsVault will be the caller.
-        // Consider adding access control if needed, e.g., onlyAutomatedSystem or a registered vault.
+    function allocateVaultYield(address vault, uint256 amount) external nonReentrant onlyRole(VAULT_ROLE) {
         if (currentEpochId == 0) {
             revert EpochManager__InvalidEpochId(0);
         }
@@ -397,5 +400,13 @@ contract EpochManager is Ownable, ReentrancyGuard {
 
         epoch.status = EpochStatus.Failed;
         emit EpochFailed(epochId, reason);
+    }
+
+    function grantVaultRole(address vault) external onlyOwner {
+        _grantRole(VAULT_ROLE, vault);
+    }
+
+    function revokeVaultRole(address vault) external onlyOwner {
+        _revokeRole(VAULT_ROLE, vault);
     }
 }
