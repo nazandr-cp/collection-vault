@@ -31,8 +31,8 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
     IEpochManager public epochManager;
 
     mapping(address => ICollectionsVault.Collection) public collections;
-    uint256 public globalDepositIndex; // Represents the total value accrued per unit of principal over time
-    uint256 public constant GLOBAL_DEPOSIT_INDEX_PRECISION = 1e18; // Precision for globalDepositIndex
+    uint256 public globalDepositIndex;
+    uint256 public constant GLOBAL_DEPOSIT_INDEX_PRECISION = 1e18;
 
     address[] private allCollectionAddresses;
     mapping(address => bool) private isCollectionRegistered;
@@ -40,7 +40,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
     mapping(uint256 => uint256) public epochYieldAllocations;
     mapping(uint256 => mapping(address => bool)) public epochCollectionYieldApplied;
 
-    // Temporary storage used during batch repayment to aggregate borrower amounts
     mapping(address => uint256) private _tempAggregatedAmounts;
     address[] private _tempBorrowers;
 
@@ -60,11 +59,10 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
                 revert LendingManagerMismatch();
             }
             lendingManager = tempLendingManager;
-            // Task 5: Allowance hygiene - Approve LM in constructor
             IERC20(_asset).forceApprove(_lendingManagerAddress, type(uint256).max);
         }
 
-        globalDepositIndex = GLOBAL_DEPOSIT_INDEX_PRECISION; // Initialize with precision
+        globalDepositIndex = GLOBAL_DEPOSIT_INDEX_PRECISION;
 
         _grantRole(DEFAULT_ADMIN_ROLE, initialAdmin);
         _grantRole(ADMIN_ROLE, initialAdmin);
@@ -74,39 +72,24 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         if (address(lendingManager) == address(0)) return;
         uint256 totalPrincipal = lendingManager.totalPrincipalDeposited();
         if (totalPrincipal == 0) {
-            // If there's no principal, the index doesn't change, or could reset to precision
-            // For now, let's assume it doesn't change to avoid division by zero if totalAssets is also zero.
-            // If totalAssets > 0 and totalPrincipal == 0, this implies pure yield, which is an edge case.
-            // A common approach is to not update index if principal is zero.
             return;
         }
         uint256 currentTotalAssets = lendingManager.totalAssets();
-        // globalDepositIndex = (currentTotalAssets * GLOBAL_DEPOSIT_INDEX_PRECISION) / totalPrincipal;
-        // More robust: update based on yield generated since last update
-        // This requires storing lastTotalAssets and lastTotalPrincipal or similar.
-        // For simplicity with current LM interface, we'll use the direct calculation.
-        // Ensure it doesn't decrease if totalAssets somehow becomes less than totalPrincipal (e.g. due to losses not yet accounted for in principal)
         uint256 newIndex = (currentTotalAssets * GLOBAL_DEPOSIT_INDEX_PRECISION) / totalPrincipal;
         if (newIndex > globalDepositIndex) {
-            // Index should only increase or stay same
             globalDepositIndex = newIndex;
         }
         // If newIndex is less, it implies a loss or principal withdrawal not reflected.
-        // The current design assumes totalAssets >= totalPrincipalDeposited from LM.
     }
 
     function _accrueCollectionYield(address collectionAddress) internal {
         ICollectionsVault.Collection storage collection = collections[collectionAddress];
-        // Ensure collection is actually registered before proceeding
         if (!isCollectionRegistered[collectionAddress] || collection.collectionAddress == address(0)) {
-            // This should ideally not be hit if called from a loop of registered addresses,
-            // but good for safety if called directly.
             return;
         }
 
         if (collection.yieldSharePercentage == 0) {
-            // No yield share for this collection
-            collection.lastGlobalDepositIndex = globalDepositIndex; // Keep it updated
+            collection.lastGlobalDepositIndex = globalDepositIndex;
             return;
         }
 
@@ -132,12 +115,8 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
             allCollectionAddresses.push(collectionAddress);
 
             ICollectionsVault.Collection storage collection = collections[collectionAddress];
-            // Initialize basic info if it's truly new for the 'collections' mapping
             if (collection.collectionAddress == address(0)) {
                 collection.collectionAddress = collectionAddress;
-                // Initialize lastGlobalDepositIndex only if it's zero (first time setup)
-                // If yieldSharePercentage is set later, _accrue will handle it.
-                // If deposit happens, it will also set it.
                 if (collection.lastGlobalDepositIndex == 0) {
                     collection.lastGlobalDepositIndex = globalDepositIndex;
                 }
@@ -183,10 +162,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         _accrueCollectionYield(collectionAddress); // Accrue any pending yield with old percentage
 
         ICollectionsVault.Collection storage collection = collections[collectionAddress];
-        // collection.collectionAddress = collectionAddress; // Handled by _register...
         collection.yieldSharePercentage = percentage;
-        // collection.lastGlobalDepositIndex will be set by _accrueCollectionYield or _register...
-        // If it was new, _register set it. If existing, _accrue updated it.
     }
 
     function collectionTotalAssetsDeposited(address collectionAddress) public view override returns (uint256) {
@@ -226,31 +202,19 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         returns (uint256 shares)
     {
         _updateGlobalDepositIndex();
-        _registerCollectionAddressIfNeeded(collectionAddress); // Ensure registered before accruing
-        _accrueCollectionYield(collectionAddress); // Accrue yield before deposit
+        _registerCollectionAddressIfNeeded(collectionAddress);
+        _accrueCollectionYield(collectionAddress);
 
         ICollectionsVault.Collection storage collection = collections[collectionAddress];
-        // Initialization of collection.collectionAddress and lastGlobalDepositIndex
-        // is handled by _registerCollectionAddressIfNeeded if it's the first time,
-        // or _accrueCollectionYield updates lastGlobalDepositIndex.
 
-        // previewDeposit uses totalAssets(), which now needs to be accurate
-        // totalAssets() internally calls ERC4626.totalAssets() + lendingManager.totalAssets()
-        // The ERC4626 part is fine. The LM part is external.
-        // The shares calculation depends on the current total supply of shares and total assets in the vault.
-        // If individual collection deposits grow, but the shares they "own" don't change,
-        // then previewDeposit might give fewer shares for the same asset amount over time,
-        // which is correct as their existing "virtual" assets have grown.
+        shares = previewDeposit(assets);
+        _deposit(msg.sender, receiver, assets, shares);
+        _hookDeposit(assets);
 
-        shares = previewDeposit(assets); // This should use the global totalAssets
-        _deposit(msg.sender, receiver, assets, shares); // ERC4626 _deposit updates totalShares and pulls assets
-        _hookDeposit(assets); // Moves assets to LM
-
-        collection.totalAssetsDeposited += assets; // Add the new principal
-        // Task 1: Track supply correctly
+        collection.totalAssetsDeposited += assets;
         collection.totalSharesMinted += shares;
-        collection.totalCTokensMinted += shares; // Placeholder, actual cToken amount depends on LM
-        emit CollectionDeposit(collectionAddress, _msgSender(), receiver, assets, shares, shares); // Assuming cTokenAmount is shares for now
+        collection.totalCTokensMinted += shares;
+        emit CollectionDeposit(collectionAddress, _msgSender(), receiver, assets, shares, shares);
     }
 
     function mint(uint256, address) public virtual override(ERC4626, IERC4626) returns (uint256) {
@@ -269,17 +233,15 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         _accrueCollectionYield(collectionAddress); // Accrue yield before mint
 
         ICollectionsVault.Collection storage collection = collections[collectionAddress];
-        // Initialization handled by _registerCollectionAddressIfNeeded or _accrueCollectionYield
 
-        assets = previewMint(shares); // Calculates assets based on global totalAssets and totalShares
-        _deposit(msg.sender, receiver, assets, shares); // ERC4626 _deposit
-        _hookDeposit(assets); // Moves assets to LM
+        assets = previewMint(shares);
+        _deposit(msg.sender, receiver, assets, shares);
+        _hookDeposit(assets);
 
-        collection.totalAssetsDeposited += assets; // Add the new principal
-        // Task 1: Track supply correctly
+        collection.totalAssetsDeposited += assets;
         collection.totalSharesMinted += shares;
-        collection.totalCTokensMinted += shares; // Placeholder, actual cToken amount depends on LM
-        emit CollectionDeposit(collectionAddress, _msgSender(), receiver, assets, shares, shares); // Assuming cTokenAmount is shares
+        collection.totalCTokensMinted += shares;
+        emit CollectionDeposit(collectionAddress, _msgSender(), receiver, assets, shares, shares);
     }
 
     function withdraw(uint256, address, address) public virtual override(ERC4626, IERC4626) returns (uint256) {
@@ -296,26 +258,24 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         _updateGlobalDepositIndex();
         _accrueCollectionYield(collectionAddress); // Accrue yield before withdrawal
 
-        uint256 currentCollectionTotalAssets = collections[collectionAddress].totalAssetsDeposited; // This is now the accrued balance
+        uint256 currentCollectionTotalAssets = collections[collectionAddress].totalAssetsDeposited;
         if (assets > currentCollectionTotalAssets) {
             revert CollectionInsufficientBalance(collectionAddress, assets, currentCollectionTotalAssets);
         }
 
-        // previewWithdraw uses totalAssets()
         shares = previewWithdraw(assets);
-        _hookWithdraw(assets); // Ensure funds are in vault
-        _withdraw(msg.sender, receiver, owner, assets, shares); // ERC4626 _withdraw burns shares, transfers assets
+        _hookWithdraw(assets);
+        _withdraw(msg.sender, receiver, owner, assets, shares);
 
         collections[collectionAddress].totalAssetsDeposited = currentCollectionTotalAssets - assets;
-        // Task 1: Track supply correctly
         ICollectionsVault.Collection storage collection = collections[collectionAddress];
         if (collection.totalSharesMinted < shares || collection.totalCTokensMinted < shares) {
             revert ShareBalanceUnderflow();
         }
         collection.totalSharesMinted -= shares;
-        collection.totalCTokensMinted -= shares; // Placeholder, actual cToken amount depends on LM
+        collection.totalCTokensMinted -= shares;
 
-        emit CollectionWithdraw(collectionAddress, _msgSender(), receiver, assets, shares, shares); // Assuming cTokenAmount is shares
+        emit CollectionWithdraw(collectionAddress, _msgSender(), receiver, assets, shares, shares);
     }
 
     function redeem(uint256, address, address) public virtual override(ERC4626, IERC4626) returns (uint256) {
@@ -332,38 +292,23 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         _updateGlobalDepositIndex();
         _accrueCollectionYield(collectionAddress); // Accrue yield before redeem
 
-        uint256 currentCollectionTotalAssets = collections[collectionAddress].totalAssetsDeposited; // Accrued balance
+        uint256 currentCollectionTotalAssets = collections[collectionAddress].totalAssetsDeposited;
 
-        uint256 _totalSupply = totalSupply(); // Global total supply of shares
-        assets = previewRedeem(shares); // Calculates assets based on global totalAssets and totalShares
+        uint256 _totalSupply = totalSupply();
+        assets = previewRedeem(shares);
 
         if (assets == 0) {
-            // This check is from OpenZeppelin's ERC4626 and should be fine.
-            // It means the number of shares is too small to correspond to any assets.
             require(shares == 0, "ERC4626: redeem rounds down to zero assets");
         }
 
-        // The amount of assets redeemed belongs to the share owner, not necessarily limited by one collection's deposit.
-        // However, we are tracking collection deposits. If a collection's users redeem more than its tracked deposit,
-        // it implies shares were transferred or the accounting is complex.
-        // For now, we reduce the collection's tracked deposit by the redeemed assets,
-        // but this could go negative if shares were moved between users of different "virtual" collections.
-        // This model assumes shares are not moved out of a collection's users.
-        // A stricter check would be:
-        // if (assets > currentCollectionTotalAssets) {
-        //     revert CollectionInsufficientBalance(collectionAddress, assets, currentCollectionTotalAssets);
-        // }
-        // However, ERC4626 allows redeeming any shares one owns. The collection tracking is an overlay.
-
-        _hookWithdraw(assets); // Ensure funds are in vault
+        _hookWithdraw(assets);
         if (msg.sender != owner) _spendAllowance(owner, msg.sender, shares);
-        _burn(owner, shares); // Burn the global shares
+        _burn(owner, shares);
         emit Transfer(owner, address(0), shares);
 
         uint256 finalAssetsToTransfer = assets;
         bool isFullRedeem = (shares == _totalSupply && shares != 0);
         if (isFullRedeem) {
-            // This part is for redeeming all assets from the vault, including dust from LM
             uint256 remainingDustInLM = lendingManager.totalAssets();
             if (remainingDustInLM > 0) {
                 uint256 redeemedDust = lendingManager.redeemAllCTokens(address(this));
@@ -376,49 +321,71 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
             revert Vault_InsufficientBalancePostLMWithdraw();
         }
         SafeERC20.safeTransfer(IERC20(asset()), receiver, finalAssetsToTransfer);
-        emit Withdraw(msg.sender, receiver, owner, finalAssetsToTransfer, shares); // Standard ERC4626 event
+        emit Withdraw(msg.sender, receiver, owner, finalAssetsToTransfer, shares);
 
-        // Update collection's tracked deposit
-        // If assets > currentCollectionTotalAssets due to share transfers, this will underflow.
-        // This implies the model might need refinement if shares are highly mobile across collection boundaries.
-        // For now, assume shares stay within users attributed to a collection or this is an expected outcome.
         if (assets <= currentCollectionTotalAssets) {
             collections[collectionAddress].totalAssetsDeposited = currentCollectionTotalAssets - assets;
         } else {
-            // This case means more assets were redeemed than the collection's tracked balance.
-            // This can happen if shares were transferred from another collection's user or if the user
-            // is redeeming shares that were part of the "general" pool before this collection existed.
-            // Set to 0, as a collection cannot have negative deposits.
             collections[collectionAddress].totalAssetsDeposited = 0;
         }
-        // Task 1: Track supply correctly
         ICollectionsVault.Collection storage collection = collections[collectionAddress];
         if (collection.totalSharesMinted < shares || collection.totalCTokensMinted < shares) {
             revert ShareBalanceUnderflow();
         }
         collection.totalSharesMinted -= shares;
-        collection.totalCTokensMinted -= shares; // Placeholder, actual cToken amount depends on LM
+        collection.totalCTokensMinted -= shares;
 
-        emit CollectionWithdraw(collectionAddress, _msgSender(), receiver, assets, shares, shares); // Assuming cTokenAmount is shares
+        emit CollectionWithdraw(collectionAddress, _msgSender(), receiver, assets, shares, shares);
         return finalAssetsToTransfer;
     }
 
-    function transfer(address to, uint256 amount) public override(ERC20, IERC20) returns (bool) {
+    function transfer(address, uint256) public pure override(ERC20, IERC20) returns (bool) {
         revert FunctionDisabledUse("transferForCollection");
     }
 
-    function transferFrom(address from, address to, uint256 amount) public override(ERC20, IERC20) returns (bool) {
+    function transferFrom(address, address, uint256) public pure override(ERC20, IERC20) returns (bool) {
         revert FunctionDisabledUse("transferForCollection");
+    }
+
+    function transferForCollection(address to, uint256 amount, address collectionAddress)
+        public
+        virtual
+        nonReentrant
+        whenNotPaused
+        returns (bool)
+    {
+        if (to == address(0)) revert AddressZero();
+        if (amount == 0) return true;
+
+        _updateGlobalDepositIndex();
+        _accrueCollectionYield(collectionAddress);
+
+        ICollectionsVault.Collection storage collection = collections[collectionAddress];
+        if (!isCollectionRegistered[collectionAddress]) {
+            revert CollectionNotRegistered(collectionAddress);
+        }
+
+        uint256 currentCollectionTotalAssets = collectionTotalAssetsDeposited(collectionAddress);
+        if (amount > currentCollectionTotalAssets) {
+            revert CollectionInsufficientBalance(collectionAddress, amount, currentCollectionTotalAssets);
+        }
+
+        _transfer(msg.sender, to, amount);
+        emit Transfer(msg.sender, to, amount);
+
+        collection.totalAssetsDeposited -= amount;
+        if (collection.totalSharesMinted < amount || collection.totalCTokensMinted < amount) {
+            revert ShareBalanceUnderflow();
+        }
+        collection.totalSharesMinted -= amount;
+        collection.totalCTokensMinted -= amount;
+
+        emit CollectionTransfer(collectionAddress, msg.sender, to, amount);
+        return true;
     }
 
     function _hookDeposit(uint256 assets) internal virtual {
         if (assets > 0) {
-            // Task 5: Allowance hygiene - Approval is now set in constructor and setLendingManager
-            // IERC20 assetToken = IERC20(asset());
-            // uint256 allowance = assetToken.allowance(address(this), address(lendingManager));
-            // if (allowance < assets) {
-            //     assetToken.forceApprove(address(lendingManager), type(uint256).max);
-            // }
             bool success = lendingManager.depositToLendingProtocol(assets);
             if (!success) revert LendingManagerDepositFailed();
         }
@@ -636,10 +603,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         }
     }
 
-    /**
-     * @notice Updates the global deposit index based on the current state of the lending manager
-     *         and then accrues yield for all registered collections based on this updated index.
-     */
     function indexCollectionsDeposits() external onlyRole(ADMIN_ROLE) whenNotPaused nonReentrant {
         _updateGlobalDepositIndex();
         address[] memory collectionList = allCollectionAddresses;
@@ -661,16 +624,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
     }
 
     // Task 3: Apply epoch yield
-    /**
-     * @notice Applies the allocated yield for a specific collection for a given epoch.
-     * @dev This function can only be called by an admin. It checks if the epoch exists,
-     *      is in a valid state (assumed, needs EpochManager to enforce or check status),
-     *      and if yield for this collection and epoch has not already been applied.
-     *      It then calculates the collection's share of the epoch's allocated yield and
-     *      adds it to the collection's totalAssetsDeposited.
-     * @param collectionAddress The address of the collection to apply yield to.
-     * @param epochId The ID of the epoch for which to apply yield.
-     */
     function applyCollectionYieldForEpoch(address collectionAddress, uint256 epochId)
         external
         nonReentrant
@@ -690,20 +643,9 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
             revert("CollectionsVault: Yield already applied for this collection and epoch");
         }
 
-        // Check epoch status (e.g., Processing or Completed) - This might require EpochManager to expose status or a helper
-        // For now, we assume EpochManager handles the state logic for when allocation is possible.
-        // (uint256 id, , , uint256 totalYieldAvailableInEpoch, , IEpochManager.EpochStatus status) = epochManager.getEpoch(epochId);
-        // if (status != IEpochManager.EpochStatus.Processing && status != IEpochManager.EpochStatus.Completed) {
-        //     revert("CollectionsVault: Epoch not in Processing or Completed state");
-        // }
-
         uint256 totalEpochAllocation = epochYieldAllocations[epochId];
         if (totalEpochAllocation == 0) {
-            // No yield allocated to this epoch in the vault, or epoch doesn't exist for this vault's tracking
-            // Still mark as applied to prevent re-calls for non-yielding epochs.
             epochCollectionYieldApplied[epochId][collectionAddress] = true;
-            // Optionally emit an event indicating zero yield applied, or just return.
-            // For consistency, we can emit with zero yield.
             emit CollectionYieldAppliedForEpoch(
                 epochId,
                 collectionAddress,
@@ -714,12 +656,11 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
             return;
         }
 
-        _updateGlobalDepositIndex(); // Ensure global index is current
-        _accrueCollectionYield(collectionAddress); // Accrue any passive yield first
+        _updateGlobalDepositIndex();
+        _accrueCollectionYield(collectionAddress);
 
         ICollectionsVault.Collection storage collection = collections[collectionAddress];
         if (collection.yieldSharePercentage == 0) {
-            // No yield share for this collection, mark as applied.
             epochCollectionYieldApplied[epochId][collectionAddress] = true;
             emit CollectionYieldAppliedForEpoch(epochId, collectionAddress, 0, 0, collection.totalAssetsDeposited);
             return;
@@ -747,10 +688,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         );
     }
 
-    /// @notice Resets the flags tracking whether collection yield was applied
-    /// for a given epoch. Useful when starting a new epoch to clean up storage.
-    /// @param epochId The epoch id to reset flags for.
-    /// @param collectionsToReset The list of collection addresses to reset.
     function resetEpochCollectionYieldFlags(uint256 epochId, address[] calldata collectionsToReset)
         external
         onlyRole(ADMIN_ROLE)

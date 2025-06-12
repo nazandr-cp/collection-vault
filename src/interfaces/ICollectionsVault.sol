@@ -80,6 +80,10 @@ interface ICollectionsVault is IERC4626 {
         uint256 newTotalDeposits
     );
 
+    event CollectionTransfer(
+        address indexed collectionAddress, address indexed from, address indexed to, uint256 assets
+    );
+
     // --- Errors ---
 
     error LendingManagerDepositFailed();
@@ -92,6 +96,7 @@ interface ICollectionsVault is IERC4626 {
     error InsufficientBalanceInProtocol();
     error ExcessiveYieldAmount(address collection, uint256 requested, uint256 maxAllowed);
     error ShareBalanceUnderflow();
+    error CollectionNotRegistered(address collectionAddress);
 
     // --- Functions ---
 

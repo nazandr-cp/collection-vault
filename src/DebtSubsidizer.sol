@@ -34,19 +34,6 @@ contract DebtSubsidizer is
     using SafeERC20 for IERC20;
     using ERC165Checker for address;
 
-    // Event definitions
-    // Duplicated events are removed as they are defined in IDebtSubsidizer.sol
-    // VaultAdded, VaultRemoved, NewCollectionWhitelisted, WhitelistCollectionRemoved,
-    // CollectionYieldShareUpdated, TrustedSignerUpdated, DebtSubsidized
-
-    event WeightFunctionConfigUpdated( // This event is specific to the implementation details
-        address indexed vaultAddress,
-        address indexed collectionAddress,
-        IDebtSubsidizer.WeightFunction oldWeightFunction,
-        IDebtSubsidizer.WeightFunction newWeightFunction
-    );
-    // Note: Paused and Unpaused events are inherited from PausableUpgradeable
-
     struct InternalVaultInfo {
         address cToken;
     }
@@ -67,8 +54,8 @@ contract DebtSubsidizer is
     mapping(address => mapping(address => IDebtSubsidizer.CollectionType)) internal _collectionType;
     mapping(address => mapping(address => bool)) internal _isCollectionWhitelisted;
     mapping(address => ILendingManager) internal _vaultLendingManagers;
-    mapping(address => mapping(address => uint256)) internal _userSecondsClaimed; // Original mapping, currently unused for writes
-    mapping(address => uint256) internal _userTotalSecondsClaimed; // New mapping for userSecondsClaimed()
+    mapping(address => mapping(address => uint256)) internal _userSecondsClaimed;
+    mapping(address => uint256) internal _userTotalSecondsClaimed;
 
     constructor() {
         _disableInitializers();
@@ -407,6 +394,6 @@ contract DebtSubsidizer is
     }
 
     function getDomainSeparator() public view returns (bytes32) {
-        return _hashTypedDataV4(0); // This is how EIP712Upgradeable calculates the domain separator
+        return _hashTypedDataV4(0);
     }
 }

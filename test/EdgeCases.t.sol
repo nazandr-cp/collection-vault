@@ -372,7 +372,7 @@ contract EdgeCasesTest is Test {
         });
         vm.prank(OWNER);
         vm.expectEmit(true, true, true, true, address(debtSubsidizer));
-        emit DebtSubsidizer.WeightFunctionConfigUpdated(address(vault), address(nft1), initialWeightFn, newWeightFn);
+        emit IDebtSubsidizer.WeightFunctionConfigUpdated(address(vault), address(nft1), initialWeightFn, newWeightFn);
         debtSubsidizer.setWeightFunction(address(vault), address(nft1), newWeightFn);
         vm.stopPrank();
 
@@ -914,11 +914,11 @@ contract EdgeCasesTest is Test {
         vm.stopPrank();
 
         // Set collection nft1's yield share to 0% for epoch yield
-        ( , , , , uint16 oldShareBps, , ) = vault.collections(address(nft1));
+        (,,,, uint16 oldShareBps,,) = vault.collections(address(nft1));
         vm.prank(ADMIN);
         vault.setCollectionYieldSharePercentage(address(nft1), 0); // This sets both passive and epoch share
         vm.stopPrank();
-        ( , , , , uint16 shareAfter, , ) = vault.collections(address(nft1));
+        (,,,, uint16 shareAfter,,) = vault.collections(address(nft1));
         assertEq(shareAfter, 0, "nft1 share should be 0");
 
         // Advance time and begin epoch processing

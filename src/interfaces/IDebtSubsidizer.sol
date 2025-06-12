@@ -54,6 +54,12 @@ interface IDebtSubsidizer {
         uint16 oldSharePercentage,
         uint16 newSharePercentage
     );
+    event WeightFunctionConfigUpdated(
+        address indexed vaultAddress,
+        address indexed collectionAddress,
+        IDebtSubsidizer.WeightFunction oldWeightFunction,
+        IDebtSubsidizer.WeightFunction newWeightFunction
+    );
     event TrustedSignerUpdated(address oldSigner, address newSigner, address indexed changedBy);
     event WeightFunctionSet(address indexed vaultAddress, address indexed collectionAddress, WeightFunction fn);
     event DebtSubsidized(
