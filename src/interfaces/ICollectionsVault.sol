@@ -69,6 +69,16 @@ interface ICollectionsVault is IERC4626 {
         uint256 previousCollectionIndex
     );
 
+    event VaultYieldAllocatedToEpoch(uint256 indexed epochId, uint256 amount);
+
+    event CollectionYieldAppliedForEpoch(
+        uint256 indexed epochId,
+        address indexed collection,
+        uint16 yieldSharePercentage,
+        uint256 yieldAdded,
+        uint256 newTotalDeposits
+    );
+
     // --- Errors ---
 
     error LendingManagerDepositFailed();

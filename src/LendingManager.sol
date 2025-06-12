@@ -26,15 +26,12 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
     uint256 private constant PRECISION = 1e18;
     uint256 private constant EXCHANGE_RATE_DENOMINATOR = 1e18;
     uint256 private constant REDEEM_TOLERANCE = 1;
-    uint256 public constant MAX_BATCH_SIZE = 50;
-
     IERC20 private immutable _asset;
     uint8 private immutable underlyingDecimals;
     uint8 private immutable cTokenDecimals;
     CErc20Interface internal immutable _cToken;
 
     uint256 public totalPrincipalDeposited;
-    uint256 public depositIndex;
 
     constructor(address initialAdmin, address vaultAddress, address _assetAddress, address _cTokenAddress) {
         if (
@@ -288,9 +285,7 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
             : expectedUnderlyingToReceive - amountRedeemed;
         if (diff > REDEEM_TOLERANCE) {
             revert LendingManager__BalanceCheckFailed(
-                "LM: redeemAll cToken.redeem receipt mismatch",
-                expectedUnderlyingToReceive,
-                amountRedeemed
+                "LM: redeemAll cToken.redeem receipt mismatch", expectedUnderlyingToReceive, amountRedeemed
             );
         }
 
@@ -344,9 +339,6 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
             );
         }
 
-        // Approve the cToken to spend the underlying asset from this contract
-        _asset.approve(address(_cToken), repayAmount);
-
         uint256 cTokenError;
         try _cToken.repayBorrowBehalf(borrower, repayAmount) returns (uint256 repayResult) {
             cTokenError = repayResult; // 0 on success, non-zero on failure
@@ -355,9 +347,6 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         } catch (bytes memory data) {
             revert LendingManagerCTokenRepayBorrowBehalfFailedBytes(data);
         }
-
-        // Reset approval regardless of outcome
-        _asset.approve(address(_cToken), 0);
 
         if (cTokenError != 0) {
             // Optionally, revert here or let the caller handle the cTokenError

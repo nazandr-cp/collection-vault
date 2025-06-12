@@ -43,6 +43,10 @@ contract SimpleMockCToken is CTokenInterface, CErc20Interface {
     // Inherited public state variables from CErc20Storage via CErc20Interface:
     // address public underlying;
 
+    // Custom state for mocking exchange rate
+    uint256 internal mockExchangeRateMantissa;
+    bool internal useMockExchangeRate;
+
     // Custom events for fees
     event NewAdminFee(uint256 oldAdminFeeMantissa, uint256 newAdminFeeMantissa);
     event NewComptrollerFee(uint256 oldComptrollerFeeMantissa, uint256 newComptrollerFeeMantissa);
@@ -81,6 +85,7 @@ contract SimpleMockCToken is CTokenInterface, CErc20Interface {
         underlying = underlyingAddress_;
 
         _notEntered = true;
+        useMockExchangeRate = false; // Initialize mock rate flag
     }
 
     // --- ERC20-like functions required by CTokenInterface ---
@@ -267,6 +272,9 @@ contract SimpleMockCToken is CTokenInterface, CErc20Interface {
     }
 
     function exchangeRateStored() external view virtual override returns (uint256) {
+        if (useMockExchangeRate) {
+            return mockExchangeRateMantissa;
+        }
         if (CTokenStorage.totalSupply == 0) {
             return CTokenStorage.initialExchangeRateMantissa;
         }
@@ -275,7 +283,8 @@ contract SimpleMockCToken is CTokenInterface, CErc20Interface {
         uint256 _totalBorrows = CTokenStorage.totalBorrows;
         uint256 _totalReserves = CTokenStorage.totalReserves;
 
-        if (_totalSupply == 0) return CTokenStorage.initialExchangeRateMantissa;
+        // This check is redundant as it's covered by the first check in this function
+        // if (_totalSupply == 0) return CTokenStorage.initialExchangeRateMantissa;
 
         uint256 numerator;
         if (_totalBorrows >= _totalReserves) {
@@ -283,7 +292,27 @@ contract SimpleMockCToken is CTokenInterface, CErc20Interface {
         } else {
             numerator = cash > (_totalReserves - _totalBorrows) ? cash - (_totalReserves - _totalBorrows) : 0;
         }
+        if (_totalSupply == 0) return CTokenStorage.initialExchangeRateMantissa; // Safety for division by zero if logic changes
         return numerator * 1e18 / _totalSupply;
+    }
+
+    // --- Mock specific functions ---
+    /**
+     * @notice Sets a mock exchange rate for testing purposes.
+     * @dev This will override the dynamic calculation in exchangeRateStored().
+     * @param newRateMantissa The new exchange rate mantissa (scaled by 1e18, like initialExchangeRateMantissa).
+     */
+    function setExchangeRate(uint256 newRateMantissa) external {
+        // In a real scenario, only admin or specific roles might call this. For a mock, it's open.
+        mockExchangeRateMantissa = newRateMantissa;
+        useMockExchangeRate = true;
+    }
+
+    /**
+     * @notice Resets the exchange rate to be dynamically calculated.
+     */
+    function resetExchangeRateToDynamic() external {
+        useMockExchangeRate = false;
     }
 
     function getCash() external view virtual override returns (uint256) {

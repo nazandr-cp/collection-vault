@@ -28,6 +28,19 @@ contract EpochManager is Ownable, ReentrancyGuard {
     event EpochFinalized(uint256 indexed epochId, uint256 totalYieldAvailable, uint256 totalSubsidiesDistributed);
 
     /**
+     * @dev Emitted when an epoch's processing has started.
+     * @param epochId The ID of the epoch.
+     */
+    event EpochProcessingStarted(uint256 indexed epochId);
+
+    /**
+     * @dev Emitted when an epoch is marked as failed.
+     * @param epochId The ID of the epoch.
+     * @param reason The reason for the failure.
+     */
+    event EpochFailed(uint256 indexed epochId, string reason);
+
+    /**
      * @dev Emitted when yield is allocated to a vault for a specific epoch.
      * @param epochId The ID of the epoch.
      * @param vault The address of the vault.
@@ -51,7 +64,8 @@ contract EpochManager is Ownable, ReentrancyGuard {
         Pending, // Epoch has not started yet
         Active, // Epoch is currently active and accumulating yield
         Processing, // Epoch has ended, subsidies are being calculated and processed
-        Completed // Epoch processing is finished, subsidies distributed
+        Completed, // Epoch processing is finished, subsidies distributed
+        Failed // Epoch was aborted due to an issue
 
     }
 
@@ -204,8 +218,7 @@ contract EpochManager is Ownable, ReentrancyGuard {
         }
 
         epoch.status = EpochStatus.Processing;
-        // Emitting an event for this state transition could be useful for off-chain monitoring.
-        // event EpochProcessingStarted(epochId);
+        emit EpochProcessingStarted(epochId);
     }
 
     /**
@@ -285,6 +298,35 @@ contract EpochManager is Ownable, ReentrancyGuard {
     }
 
     /**
+     * @notice Gets the details of a specific epoch (alternative signature for interface compatibility).
+     * @param epochId The ID of the epoch.
+     * @return id The epoch ID.
+     * @return startTime The start timestamp.
+     * @return endTime The end timestamp.
+     * @return totalYieldAvailableInEpoch Total yield available for the epoch.
+     * @return totalSubsidiesDistributed Total subsidies distributed.
+     * @return status The current status of the epoch.
+     */
+    function getEpoch(uint256 epochId)
+        external
+        view
+        returns (
+            uint256 id,
+            uint256 startTime,
+            uint256 endTime,
+            uint256 totalYieldAvailableInEpoch,
+            uint256 totalSubsidiesDistributed,
+            EpochStatus status
+        )
+    {
+        if (epochId == 0 || epochId > currentEpochId) {
+            revert EpochManager__InvalidEpochId(epochId);
+        }
+        Epoch storage e = epochs[epochId];
+        return (e.id, e.startTime, e.endTime, e.totalYieldAvailable, e.totalSubsidiesDistributed, e.status);
+    }
+
+    /**
      * @notice Gets the yield allocated by a specific vault for a given epoch.
      * @param epochId The ID of the epoch.
      * @param vault The address of the vault.
@@ -332,5 +374,28 @@ contract EpochManager is Ownable, ReentrancyGuard {
         }
         Epoch storage e = epochs[currentEpochId];
         return (e.id, e.startTime, e.endTime, e.totalYieldAvailable, e.totalSubsidiesDistributed, e.status);
+    }
+
+    /**
+     * @notice Marks an epoch as Failed.
+     * @dev Can only be called by the automated system or owner.
+     * This is used to explicitly abort an epoch if issues arise.
+     * @param epochId The ID of the epoch to mark as failed.
+     * @param reason A string describing the reason for failure.
+     */
+    function markEpochFailed(uint256 epochId, string calldata reason) external nonReentrant onlyAutomatedSystem {
+        if (epochId == 0 || epochId > currentEpochId) {
+            revert EpochManager__InvalidEpochId(epochId);
+        }
+        Epoch storage epoch = epochs[epochId];
+
+        // An epoch can be marked as failed if it's Pending, Active, or Processing.
+        // Cannot mark a Completed or already Failed epoch as Failed.
+        if (epoch.status == EpochStatus.Completed || epoch.status == EpochStatus.Failed) {
+            revert EpochManager__InvalidEpochStatus(epochId, epoch.status, EpochStatus.Active); // Or a more specific error
+        }
+
+        epoch.status = EpochStatus.Failed;
+        emit EpochFailed(epochId, reason);
     }
 }

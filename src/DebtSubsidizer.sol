@@ -33,6 +33,19 @@ contract DebtSubsidizer is
     using SafeERC20 for IERC20;
     using ERC165Checker for address;
 
+    // Event definitions
+    // Duplicated events are removed as they are defined in IDebtSubsidizer.sol
+    // VaultAdded, VaultRemoved, NewCollectionWhitelisted, WhitelistCollectionRemoved,
+    // CollectionYieldShareUpdated, TrustedSignerUpdated, DebtSubsidized
+
+    event WeightFunctionConfigUpdated( // This event is specific to the implementation details
+        address indexed vaultAddress,
+        address indexed collectionAddress,
+        IDebtSubsidizer.WeightFunction oldWeightFunction,
+        IDebtSubsidizer.WeightFunction newWeightFunction
+    );
+    // Note: Paused and Unpaused events are inherited from PausableUpgradeable
+
     struct InternalVaultInfo {
         address cToken;
     }
@@ -53,7 +66,8 @@ contract DebtSubsidizer is
     mapping(address => mapping(address => IDebtSubsidizer.CollectionType)) internal _collectionType;
     mapping(address => mapping(address => bool)) internal _isCollectionWhitelisted;
     mapping(address => ILendingManager) internal _vaultLendingManagers;
-    mapping(address => mapping(address => uint256)) internal _userSecondsClaimed;
+    mapping(address => mapping(address => uint256)) internal _userSecondsClaimed; // Original mapping, currently unused for writes
+    mapping(address => uint256) internal _userTotalSecondsClaimed; // New mapping for userSecondsClaimed()
 
     constructor() {
         _disableInitializers();
@@ -219,14 +233,16 @@ contract DebtSubsidizer is
     function setWeightFunction(
         address vaultAddress,
         address collectionAddress,
-        IDebtSubsidizer.WeightFunction calldata weightFunction_
+        IDebtSubsidizer.WeightFunction calldata newWeightFunction_
     ) external override(IDebtSubsidizer) onlyOwner {
         if (vaultAddress == address(0) || collectionAddress == address(0)) revert IDebtSubsidizer.AddressZero();
         if (!_isCollectionWhitelisted[vaultAddress][collectionAddress]) {
             revert IDebtSubsidizer.CollectionNotWhitelistedInVault(vaultAddress, collectionAddress);
         }
-        _collectionWeightFunctions[vaultAddress][collectionAddress] = weightFunction_;
-        emit WeightFunctionSet(vaultAddress, collectionAddress, weightFunction_);
+        IDebtSubsidizer.WeightFunction memory oldWeightFunction =
+            _collectionWeightFunctions[vaultAddress][collectionAddress];
+        _collectionWeightFunctions[vaultAddress][collectionAddress] = newWeightFunction_;
+        emit WeightFunctionConfigUpdated(vaultAddress, collectionAddress, oldWeightFunction, newWeightFunction_);
     }
 
     function userNonce(address vaultAddress, address userAddress)
@@ -236,6 +252,17 @@ contract DebtSubsidizer is
         returns (uint64 nonce)
     {
         return uint64(_accountNonces[vaultAddress][userAddress]);
+    }
+
+    function getCollectionWeightFunction(address vaultAddress, address collectionAddress)
+        external
+        view
+        returns (IDebtSubsidizer.WeightFunction memory)
+    {
+        if (!_isCollectionWhitelisted[vaultAddress][collectionAddress]) {
+            revert IDebtSubsidizer.CollectionNotWhitelistedInVault(vaultAddress, collectionAddress);
+        }
+        return _collectionWeightFunctions[vaultAddress][collectionAddress];
     }
 
     function subsidize(address vaultAddress, IDebtSubsidizer.Subsidy[] calldata subsidies, bytes calldata signature)
@@ -292,6 +319,7 @@ contract DebtSubsidizer is
                 tempBorrowers[actualSubsidyCountForBatch] = user;
                 actualSubsidyCountForBatch++;
                 totalAmountToSubsidize += amountToSubsidize;
+                _userTotalSecondsClaimed[user] += amountToSubsidize; // Update total seconds claimed for the user
 
                 emit DebtSubsidized(vaultAddress, user, collection, amountToSubsidize);
             }
@@ -358,5 +386,17 @@ contract DebtSubsidizer is
 
     function paused() public view override(IDebtSubsidizer, PausableUpgradeable) returns (bool) {
         return super.paused();
+    }
+
+    // --- Getter for claimed seconds ---
+    function userSecondsClaimed(address user) external view returns (uint256) {
+        if (user == address(0)) {
+            revert IDebtSubsidizer.AddressZero();
+        }
+        return _userTotalSecondsClaimed[user];
+    }
+
+    function getDomainSeparator() public view returns (bytes32) {
+        return _hashTypedDataV4(0); // This is how EIP712Upgradeable calculates the domain separator
     }
 }
