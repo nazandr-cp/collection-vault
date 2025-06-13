@@ -1,0 +1,15 @@
+version: '3.8'
+services:
+  anvil:
+    build: .
+    command: ["anvil", "-p", "8545", "--host", "0.0.0.0"]
+    ports:
+      - "8545:8545"
+  deployer:
+    build: .
+    command: ["bash", "script/setup.sh"]
+    environment:
+      - RPC_URL=http://anvil:8545
+      - PRIVATE_KEY=${PRIVATE_KEY}
+    depends_on:
+      - anvil

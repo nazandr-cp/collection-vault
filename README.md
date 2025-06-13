@@ -27,7 +27,7 @@ Collection Vault is a set of Solidity contracts that coordinate NFT collection d
    ```
 3. **Build the contracts**:
    ```bash
-   forge build
+   forge build src
    ```
 
 ## Environment Variables
@@ -42,7 +42,7 @@ Create a `.env` file in the project root and export these values before running 
 
 ## Development Workflow
 
-- `forge build` – Compile the entire project.
+ - `forge build src` – Compile the core contracts.
 - `forge test` – Run the test suite (none are included yet).
 - `forge fmt` – Format all Solidity files using Foundry's style.
 - `anvil` – Launch a local testnet for manual interaction.
@@ -55,3 +55,19 @@ Create a `.env` file in the project root and export these values before running 
 
 This project is released under the terms of the MIT License. See [LICENSE](LICENSE) for details.
 
+
+## Docker Local Setup
+
+A Docker configuration is provided for quickly deploying the entire system on a local Anvil network. To start the environment run:
+
+```bash
+docker compose up deployer
+```
+
+The compose file builds a container with Foundry, launches an Anvil instance, and runs `script/setup.sh`. The script installs dependencies, compiles only the contracts in `src/`, and deploys:
+
+- Mock ERC20 and ERC721 tokens
+- Minimal Compound contracts (`Comptroller` and `WhitePaperInterestRateModel`)
+- `SimpleMockCToken`, `LendingManager`, `CollectionsVault`, `EpochManager` and `DebtSubsidizer`
+
+The script requires a `PRIVATE_KEY` environment variable, which should match one of the funded Anvil accounts (the default is fine). The deployed addresses will be printed to the console.
