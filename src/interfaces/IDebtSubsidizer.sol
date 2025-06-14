@@ -9,11 +9,6 @@ interface IDebtSubsidizer {
         ERC1155
     }
 
-    enum RewardBasis {
-        DEPOSIT,
-        BORROW
-    }
-
     enum WeightFunctionType {
         LINEAR,
         EXPONENTIAL
@@ -41,7 +36,6 @@ interface IDebtSubsidizer {
         address indexed vaultAddress,
         address indexed collectionAddress,
         CollectionType collectionType,
-        RewardBasis rewardBasis,
         uint16 sharePercentage,
         WeightFunction weightFunction
     );
@@ -103,7 +97,6 @@ interface IDebtSubsidizer {
         address vaultAddress,
         address collectionAddress,
         CollectionType collectionType,
-        RewardBasis rewardBasis,
         uint16 sharePercentageBps
     ) external;
     function removeCollection(address vaultAddress, address collectionAddress) external;
@@ -113,10 +106,6 @@ interface IDebtSubsidizer {
         uint16 newSharePercentageBps
     ) external;
     function isCollectionWhitelisted(address vaultAddress, address collectionAddress) external view returns (bool);
-    function collectionRewardBasis(address vaultAddress, address collectionAddress)
-        external
-        view
-        returns (RewardBasis);
     function setWeightFunction(address vaultAddress, address collectionAddress, WeightFunction calldata weightFunction)
         external;
 

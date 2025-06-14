@@ -37,6 +37,7 @@ contract DebtSubsidizer is
     }
 
     uint16 private constant MAX_YIELD_SHARE_PERCENTAGE = 10000;
+    uint16 private constant MIN_YIELD_SHARE_PERCENTAGE = 100;
 
     mapping(address => InternalVaultInfo) internal _vaultsData;
     mapping(address => bytes32) internal _merkleRoots; // Vault address => Merkle Root
@@ -45,7 +46,6 @@ contract DebtSubsidizer is
     mapping(address => mapping(address => IDebtSubsidizer.WeightFunction)) internal _collectionWeightFunctions;
     mapping(address => mapping(address => uint16)) internal _collectionYieldSharePercentage;
     mapping(address => uint16) internal _totalCollectionYieldShareBps;
-    mapping(address => mapping(address => IDebtSubsidizer.RewardBasis)) internal _collectionRewardBasis;
     mapping(address => mapping(address => IDebtSubsidizer.CollectionType)) internal _collectionType;
     mapping(address => mapping(address => bool)) internal _isCollectionWhitelisted;
     mapping(address => ILendingManager) internal _vaultLendingManagers;
@@ -124,7 +124,6 @@ contract DebtSubsidizer is
         address vaultAddress,
         address collectionAddress,
         IDebtSubsidizer.CollectionType collectionType,
-        IDebtSubsidizer.RewardBasis rewardBasis,
         uint16 sharePercentageBps
     ) external override(IDebtSubsidizer) onlyOwner {
         if (vaultAddress == address(0) || collectionAddress == address(0)) revert IDebtSubsidizer.AddressZero();
@@ -152,7 +151,6 @@ contract DebtSubsidizer is
             );
         }
         _collectionType[vaultAddress][collectionAddress] = collectionType;
-        _collectionRewardBasis[vaultAddress][collectionAddress] = rewardBasis;
         _collectionYieldSharePercentage[vaultAddress][collectionAddress] = sharePercentageBps;
         _totalCollectionYieldShareBps[vaultAddress] += sharePercentageBps;
         _isCollectionWhitelisted[vaultAddress][collectionAddress] = true;
@@ -162,7 +160,6 @@ contract DebtSubsidizer is
             vaultAddress,
             collectionAddress,
             collectionType,
-            rewardBasis,
             sharePercentageBps,
             _collectionWeightFunctions[vaultAddress][collectionAddress]
         );
@@ -181,7 +178,6 @@ contract DebtSubsidizer is
         _totalCollectionYieldShareBps[vaultAddress] -= sharePercentageBps;
         delete _isCollectionWhitelisted[vaultAddress][collectionAddress];
         delete _collectionType[vaultAddress][collectionAddress];
-        delete _collectionRewardBasis[vaultAddress][collectionAddress];
         delete _collectionYieldSharePercentage[vaultAddress][collectionAddress];
         delete _collectionWeightFunctions[vaultAddress][collectionAddress];
         emit WhitelistCollectionRemoved(vaultAddress, collectionAddress);
@@ -296,18 +292,6 @@ contract DebtSubsidizer is
         }
         _merkleRoots[vaultAddress] = merkleRoot_;
         emit MerkleRootUpdated(vaultAddress, merkleRoot_, msg.sender);
-    }
-
-    function collectionRewardBasis(address vaultAddress, address collectionAddress)
-        external
-        view
-        override(IDebtSubsidizer)
-        returns (IDebtSubsidizer.RewardBasis)
-    {
-        if (!_isCollectionWhitelisted[vaultAddress][collectionAddress]) {
-            revert IDebtSubsidizer.CollectionNotWhitelistedInVault(vaultAddress, collectionAddress);
-        }
-        return _collectionRewardBasis[vaultAddress][collectionAddress];
     }
 
     function isCollectionWhitelisted(address vaultAddress, address collectionAddress)
