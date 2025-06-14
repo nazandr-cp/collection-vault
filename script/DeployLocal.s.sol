@@ -8,6 +8,8 @@ import {SimpleMockCToken} from "../src/mocks/SimpleMockCToken.sol";
 import {LendingManager} from "../src/LendingManager.sol";
 import {CollectionsVault} from "../src/CollectionsVault.sol";
 import {EpochManager} from "../src/EpochManager.sol";
+import {CollectionRegistry} from "../src/CollectionRegistry.sol";
+import {ICollectionRegistry} from "../src/interfaces/ICollectionRegistry.sol";
 import {DebtSubsidizer} from "../src/DebtSubsidizer.sol";
 import {IDebtSubsidizer} from "../src/interfaces/IDebtSubsidizer.sol";
 import {ComptrollerInterface, InterestRateModel} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol";
@@ -37,13 +39,36 @@ contract DeployLocal is Script {
         );
 
         LendingManager lendingManager = new LendingManager(msg.sender, msg.sender, address(asset), address(cToken));
-        vault = new CollectionsVault(asset, "Vault", "vMOCK", msg.sender, address(lendingManager));
+        CollectionRegistry collectionRegistry = new CollectionRegistry(msg.sender);
+        vault = new CollectionsVault(
+            asset, "Vault", "vMOCK", msg.sender, address(lendingManager), address(collectionRegistry)
+        );
         EpochManager epochManager = new EpochManager(1 days, msg.sender, msg.sender);
 
         DebtSubsidizer debtImpl = new DebtSubsidizer();
-        bytes memory initData = abi.encodeWithSelector(DebtSubsidizer.initialize.selector, msg.sender, msg.sender);
+        // For DebtSubsidizer.initialize, the second argument is the CollectionRegistry address
+        bytes memory initData =
+            abi.encodeWithSelector(DebtSubsidizer.initialize.selector, msg.sender, address(collectionRegistry));
         TransparentUpgradeableProxy proxy = new TransparentUpgradeableProxy(address(debtImpl), msg.sender, initData);
         DebtSubsidizer debtSubsidizer = DebtSubsidizer(address(proxy));
+
+        // Register the NFT collection in the CollectionRegistry first
+        ICollectionRegistry.Collection memory collectionData = ICollectionRegistry.Collection({
+            collectionAddress: address(nft),
+            collectionType: ICollectionRegistry.CollectionType.ERC721,
+            weightFunction: ICollectionRegistry.WeightFunction({
+                fnType: ICollectionRegistry.WeightFunctionType.LINEAR,
+                p1: 0,
+                p2: 0
+            }),
+            p1: 0, // Corresponds to weightFunction.p1
+            p2: 0, // Corresponds to weightFunction.p2
+            yieldSharePercentage: 5000, // 50%
+            vaults: new address[](0) // Initially no vaults, or add `address(vault)` if appropriate
+        });
+        collectionRegistry.registerCollection(collectionData);
+        // If the vault needs to be explicitly added to the collection in the registry:
+        // collectionRegistry.addVaultToCollection(address(nft), address(vault));
 
         lendingManager.revokeVaultRole(address(msg.sender));
         lendingManager.grantVaultRole(address(vault));
@@ -51,14 +76,20 @@ contract DeployLocal is Script {
         vault.setEpochManager(address(epochManager));
         debtSubsidizer.addVault(address(vault), address(lendingManager));
         vault.setDebtSubsidizer(address(debtSubsidizer));
-        debtSubsidizer.whitelistCollection(
-            address(vault),
-            address(nft),
-            IDebtSubsidizer.CollectionType.ERC721,
-            IDebtSubsidizer.RewardBasis.DEPOSIT,
-            5000
-        );
-        vault.setCollectionYieldSharePercentage(address(nft), 5000);
+
+        // Whitelist collection in DebtSubsidizer (now takes 2 args)
+        debtSubsidizer.whitelistCollection(address(vault), address(nft));
+
+        // Set yield share percentage directly on the CollectionRegistry or CollectionsVault
+        // vault.setCollectionYieldSharePercentage(address(nft), 5000); // This calls collectionRegistry.setYieldShare
+        // Or directly on collectionRegistry if that's the intended flow after whitelisting in subsidizer
+        collectionRegistry.setYieldShare(address(nft), 5000); // 50%
+
+        // If DebtSubsidizer needs to know about collection type and weight function for its own logic,
+        // separate functions on DebtSubsidizer would be needed to set these after whitelisting.
+        // For example:
+        // debtSubsidizer.setCollectionTypeForVault(address(vault), address(nft), ICollectionRegistry.CollectionType.ERC721);
+        // debtSubsidizer.setCollectionWeightFunctionForVault(address(vault), address(nft), someWeightFunctionData);
 
         vm.stopBroadcast();
     }

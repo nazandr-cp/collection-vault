@@ -44,12 +44,7 @@ contract DebtSubsidizer is
     mapping(address => bytes32) internal _merkleRoots; // Vault address => Merkle Root
     mapping(bytes32 => bool) internal _claimedLeaves; // Merkle Leaf => Claimed status
 
-    mapping(address => mapping(address => IDebtSubsidizer.WeightFunction)) internal _collectionWeightFunctions;
-    mapping(address => mapping(address => uint16)) internal _collectionYieldSharePercentage;
-    mapping(address => uint16) internal _totalCollectionYieldShareBps;
-    mapping(address => mapping(address => IDebtSubsidizer.CollectionType)) internal _collectionType;
     mapping(address => mapping(address => bool)) internal _isCollectionWhitelisted;
-    mapping(address => ILendingManager) internal _vaultLendingManagers;
     mapping(address => mapping(address => uint256)) internal _userSecondsClaimed;
     mapping(address => uint256) internal _userTotalSecondsClaimed;
     ICollectionRegistry public collectionRegistry;
@@ -92,7 +87,6 @@ contract DebtSubsidizer is
             revert IDebtSubsidizer.LendingManagerAssetMismatch(cTokenAddress, lmAsset);
         }
 
-        _vaultLendingManagers[vaultAddress_] = lendingManager;
         _vaultsData[vaultAddress_].cToken = cTokenAddress;
 
         emit VaultAdded(vaultAddress_, cTokenAddress, lendingManagerAddress_);
@@ -107,7 +101,6 @@ contract DebtSubsidizer is
         }
 
         delete _vaultsData[vaultAddress_];
-        delete _vaultLendingManagers[vaultAddress_];
 
         emit VaultRemoved(vaultAddress_);
     }
@@ -123,53 +116,22 @@ contract DebtSubsidizer is
             revert IDebtSubsidizer.VaultNotRegistered(vaultAddress);
         }
         vaultInfo_.cToken = internalVault.cToken;
-        vaultInfo_.lendingManager = address(_vaultLendingManagers[vaultAddress]);
     }
 
-    function whitelistCollection(
-        address vaultAddress,
-        address collectionAddress,
-        IDebtSubsidizer.CollectionType collectionType,
-        uint16 sharePercentageBps
-    ) external override(IDebtSubsidizer) onlyOwner {
+    function whitelistCollection(address vaultAddress, address collectionAddress)
+        external
+        override(IDebtSubsidizer)
+        onlyOwner
+    {
         if (vaultAddress == address(0) || collectionAddress == address(0)) revert IDebtSubsidizer.AddressZero();
         if (_vaultsData[vaultAddress].cToken == address(0)) revert IDebtSubsidizer.VaultNotRegistered(vaultAddress);
         if (_isCollectionWhitelisted[vaultAddress][collectionAddress]) {
             revert IDebtSubsidizer.CollectionAlreadyWhitelistedInVault(vaultAddress, collectionAddress);
         }
-        if (
-            collectionType == IDebtSubsidizer.CollectionType.ERC721
-                || collectionType == IDebtSubsidizer.CollectionType.ERC1155
-        ) {
-            bytes4 interfaceIdNFT;
-            if (collectionType == IDebtSubsidizer.CollectionType.ERC721) {
-                interfaceIdNFT = type(IERC721).interfaceId;
-            } else {
-                interfaceIdNFT = type(IERC1155).interfaceId;
-            }
-            if (!ERC165Checker.supportsInterface(collectionAddress, interfaceIdNFT)) {
-                revert IDebtSubsidizer.InvalidCollectionInterface(collectionAddress, interfaceIdNFT);
-            }
-        }
-        if (_totalCollectionYieldShareBps[vaultAddress] + sharePercentageBps > MAX_YIELD_SHARE_PERCENTAGE) {
-            revert IDebtSubsidizer.InvalidYieldSharePercentage(
-                _totalCollectionYieldShareBps[vaultAddress] + sharePercentageBps
-            );
-        }
-        _collectionType[vaultAddress][collectionAddress] = collectionType;
-        _collectionYieldSharePercentage[vaultAddress][collectionAddress] = sharePercentageBps;
-        _totalCollectionYieldShareBps[vaultAddress] += sharePercentageBps;
+
         _isCollectionWhitelisted[vaultAddress][collectionAddress] = true;
-        collectionRegistry.setYieldShare(collectionAddress, sharePercentageBps);
-        _collectionWeightFunctions[vaultAddress][collectionAddress] =
-            IDebtSubsidizer.WeightFunction({fnType: IDebtSubsidizer.WeightFunctionType.LINEAR, p1: 0, p2: 0});
-        emit NewCollectionWhitelisted(
-            vaultAddress,
-            collectionAddress,
-            collectionType,
-            sharePercentageBps,
-            _collectionWeightFunctions[vaultAddress][collectionAddress]
-        );
+
+        emit NewCollectionWhitelisted(vaultAddress, collectionAddress);
     }
 
     function removeCollection(address vaultAddress, address collectionAddress)
@@ -181,65 +143,9 @@ contract DebtSubsidizer is
         if (!_isCollectionWhitelisted[vaultAddress][collectionAddress]) {
             revert IDebtSubsidizer.CollectionNotWhitelistedInVault(vaultAddress, collectionAddress);
         }
-        uint16 sharePercentageBps = _collectionYieldSharePercentage[vaultAddress][collectionAddress];
-        _totalCollectionYieldShareBps[vaultAddress] -= sharePercentageBps;
+
         delete _isCollectionWhitelisted[vaultAddress][collectionAddress];
-        delete _collectionType[vaultAddress][collectionAddress];
-        delete _collectionYieldSharePercentage[vaultAddress][collectionAddress];
-        collectionRegistry.setYieldShare(collectionAddress, 0);
-        delete _collectionWeightFunctions[vaultAddress][collectionAddress];
         emit WhitelistCollectionRemoved(vaultAddress, collectionAddress);
-    }
-
-    function updateCollectionPercentageShare(
-        address vaultAddress,
-        address collectionAddress,
-        uint16 newSharePercentageBps
-    ) external override(IDebtSubsidizer) onlyOwner {
-        if (vaultAddress == address(0) || collectionAddress == address(0)) revert IDebtSubsidizer.AddressZero();
-        if (!_isCollectionWhitelisted[vaultAddress][collectionAddress]) {
-            revert IDebtSubsidizer.CollectionNotWhitelistedInVault(vaultAddress, collectionAddress);
-        }
-        uint16 oldSharePercentageBps = _collectionYieldSharePercentage[vaultAddress][collectionAddress];
-        if (
-            _totalCollectionYieldShareBps[vaultAddress] - oldSharePercentageBps + newSharePercentageBps
-                > MAX_YIELD_SHARE_PERCENTAGE
-        ) {
-            revert IDebtSubsidizer.InvalidYieldSharePercentage(
-                _totalCollectionYieldShareBps[vaultAddress] - oldSharePercentageBps + newSharePercentageBps
-            );
-        }
-        _totalCollectionYieldShareBps[vaultAddress] =
-            _totalCollectionYieldShareBps[vaultAddress] - oldSharePercentageBps + newSharePercentageBps;
-        _collectionYieldSharePercentage[vaultAddress][collectionAddress] = newSharePercentageBps;
-        collectionRegistry.setYieldShare(collectionAddress, newSharePercentageBps);
-        emit CollectionYieldShareUpdated(vaultAddress, collectionAddress, oldSharePercentageBps, newSharePercentageBps);
-    }
-
-    function setWeightFunction(
-        address vaultAddress,
-        address collectionAddress,
-        IDebtSubsidizer.WeightFunction calldata newWeightFunction_
-    ) external override(IDebtSubsidizer) onlyOwner {
-        if (vaultAddress == address(0) || collectionAddress == address(0)) revert IDebtSubsidizer.AddressZero();
-        if (!_isCollectionWhitelisted[vaultAddress][collectionAddress]) {
-            revert IDebtSubsidizer.CollectionNotWhitelistedInVault(vaultAddress, collectionAddress);
-        }
-        IDebtSubsidizer.WeightFunction memory oldWeightFunction =
-            _collectionWeightFunctions[vaultAddress][collectionAddress];
-        _collectionWeightFunctions[vaultAddress][collectionAddress] = newWeightFunction_;
-        emit WeightFunctionConfigUpdated(vaultAddress, collectionAddress, oldWeightFunction, newWeightFunction_);
-    }
-
-    function getCollectionWeightFunction(address vaultAddress, address collectionAddress)
-        external
-        view
-        returns (IDebtSubsidizer.WeightFunction memory)
-    {
-        if (!_isCollectionWhitelisted[vaultAddress][collectionAddress]) {
-            revert IDebtSubsidizer.CollectionNotWhitelistedInVault(vaultAddress, collectionAddress);
-        }
-        return _collectionWeightFunctions[vaultAddress][collectionAddress];
     }
 
     function claimSubsidy(address vaultAddress, IDebtSubsidizer.ClaimData calldata claim)

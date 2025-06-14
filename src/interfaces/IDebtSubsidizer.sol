@@ -2,24 +2,9 @@
 pragma solidity ^0.8.19;
 
 import {ICollectionsVault} from "./ICollectionsVault.sol";
+import {ICollectionRegistry} from "./ICollectionRegistry.sol";
 
 interface IDebtSubsidizer {
-    enum CollectionType {
-        ERC721,
-        ERC1155
-    }
-
-    enum WeightFunctionType {
-        LINEAR,
-        EXPONENTIAL
-    }
-
-    struct WeightFunction {
-        WeightFunctionType fnType;
-        int256 p1;
-        int256 p2;
-    }
-
     struct ClaimData {
         address recipient; // recipient of the subsidy
         address collection; // collection address for which subsidy is claimed
@@ -32,28 +17,9 @@ interface IDebtSubsidizer {
         address cToken; // cToken address
     }
 
-    event NewCollectionWhitelisted(
-        address indexed vaultAddress,
-        address indexed collectionAddress,
-        CollectionType collectionType,
-        uint16 sharePercentage,
-        WeightFunction weightFunction
-    );
+    event NewCollectionWhitelisted(address indexed vaultAddress, address indexed collectionAddress);
     event WhitelistCollectionRemoved(address indexed vaultAddress, address indexed collectionAddress);
-    event CollectionYieldShareUpdated(
-        address indexed vaultAddress,
-        address indexed collectionAddress,
-        uint16 oldSharePercentage,
-        uint16 newSharePercentage
-    );
-    event WeightFunctionConfigUpdated(
-        address indexed vaultAddress,
-        address indexed collectionAddress,
-        IDebtSubsidizer.WeightFunction oldWeightFunction,
-        IDebtSubsidizer.WeightFunction newWeightFunction
-    );
     event TrustedSignerUpdated(address oldSigner, address newSigner, address indexed changedBy);
-    event WeightFunctionSet(address indexed vaultAddress, address indexed collectionAddress, WeightFunction fn);
     event SubsidyClaimed(
         address indexed vaultAddress, address indexed recipient, address indexed collection, uint256 amount
     );
@@ -62,12 +28,23 @@ interface IDebtSubsidizer {
         address indexed vaultAddress, address indexed cTokenAddress, address indexed lendingManagerAddress
     );
     event VaultRemoved(address indexed vaultAddress);
+    event CollectionYieldShareUpdated(
+        address indexed vaultAddress,
+        address indexed collectionAddress,
+        uint16 oldSharePercentageBps,
+        uint16 newSharePercentageBps
+    );
+    event WeightFunctionConfigUpdated(
+        address indexed vaultAddress,
+        address indexed collectionAddress,
+        ICollectionRegistry.WeightFunction oldWeightFunction,
+        ICollectionRegistry.WeightFunction newWeightFunction
+    );
 
     error AddressZero();
     error CollectionNotWhitelisted(address collection);
     error CollectionAlreadyExists(address collection);
     error InvalidSignature();
-    error ClaimExpired();
     error InvalidSecondsColl();
     error InvalidYieldSlice();
     error InsufficientYield();
@@ -93,21 +70,9 @@ interface IDebtSubsidizer {
     function vault(address vaultAddress) external view returns (VaultInfo memory);
 
     // --- Collection Management ---
-    function whitelistCollection(
-        address vaultAddress,
-        address collectionAddress,
-        CollectionType collectionType,
-        uint16 sharePercentageBps
-    ) external;
+    function whitelistCollection(address vaultAddress, address collectionAddress) external;
     function removeCollection(address vaultAddress, address collectionAddress) external;
-    function updateCollectionPercentageShare(
-        address vaultAddress,
-        address collectionAddress,
-        uint16 newSharePercentageBps
-    ) external;
     function isCollectionWhitelisted(address vaultAddress, address collectionAddress) external view returns (bool);
-    function setWeightFunction(address vaultAddress, address collectionAddress, WeightFunction calldata weightFunction)
-        external;
 
     // --- User Information & Claims ---
     function claimSubsidy(address vaultAddress, ClaimData calldata claim) external;

@@ -6,6 +6,14 @@ import {ILendingManager} from "./ILendingManager.sol";
 import {IEpochManager} from "./IEpochManager.sol";
 
 interface ICollectionsVault is IERC4626 {
+    // --- Structs ---
+    struct CollectionVaultData {
+        uint256 totalAssetsDeposited;
+        uint256 totalSharesMinted;
+        uint256 totalCTokensMinted;
+        uint256 lastGlobalDepositIndex;
+    }
+
     // --- Events ---
     /**
      * @dev Emitted when assets are deposited into the vault on behalf of a collection.
@@ -97,31 +105,28 @@ interface ICollectionsVault is IERC4626 {
     function epochManager() external view returns (IEpochManager);
 
     function collectionTotalAssetsDeposited(address collectionAddress) external view returns (uint256);
-
     function setLendingManager(address _lendingManagerAddress) external;
-
     function setDebtSubsidizer(address _debtSubsidizerAddress) external;
 
     function depositForCollection(uint256 assets, address receiver, address collectionAddress)
         external
         returns (uint256 shares);
-
     function mintForCollection(uint256 shares, address receiver, address collectionAddress)
         external
         returns (uint256 assets);
-
     function withdrawForCollection(uint256 assets, address receiver, address owner, address collectionAddress)
         external
         returns (uint256 shares);
-
     function redeemForCollection(uint256 shares, address receiver, address owner, address collectionAddress)
         external
         returns (uint256 assets);
+    function transferForCollection(address collectionAddress, address to, uint256 assets)
+        external
+        returns (uint256 shares);
+
     function repayBorrowBehalf(uint256 amount, address borrower) external;
     function repayBorrowBehalfBatch(uint256[] calldata amounts, address[] calldata borrowers, uint256 totalAmount)
         external;
-
-    function setCollectionYieldSharePercentage(address collectionAddress, uint16 percentage) external;
 
     function getCurrentEpochYield(bool includeNonShared) external view returns (uint256 availableYield);
     function allocateEpochYield(uint256 amount) external;
