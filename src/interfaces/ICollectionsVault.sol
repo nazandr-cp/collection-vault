@@ -129,14 +129,8 @@ interface ICollectionsVault is IERC4626 {
         external
         returns (uint256 assets);
 
-    function repayBorrowBehalfBatch(
-        address[] calldata collectionAddresses,
-        uint256[] calldata amounts,
-        address[] calldata borrowers,
-        uint256 totalAmount
-    ) external;
-
-    function collectionYieldTransferred(address collectionAddress) external view returns (uint256);
+    function repayBorrowBehalfBatch(uint256[] calldata amounts, address[] calldata borrowers, uint256 totalAmount)
+        external;
 
     function setCollectionYieldSharePercentage(address collectionAddress, uint16 percentage) external;
 

@@ -182,10 +182,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         return collection.totalAssetsDeposited + potentialYieldAccrued;
     }
 
-    function collectionYieldTransferred(address collectionAddress) public view override returns (uint256) {
-        return collections[collectionAddress].totalYieldTransferred;
-    }
-
     function totalAssets() public view override(ERC4626, IERC4626) returns (uint256) {
         return super.totalAssets() + lendingManager.totalAssets();
     }
@@ -431,22 +427,20 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
             currentCollectionAssets > originalDeposit ? currentCollectionAssets - originalDeposit : 0;
 
         // Calculate shared yield (already transferred to borrowers or other purposes)
-        uint256 sharedYield = collectionData.totalYieldTransferred;
-
-        // Max allowed is available yield minus what has already been shared/transferred
-        maxAllowed = availableYield > sharedYield ? availableYield - sharedYield : 0;
+        // Max allowed is available yield
+        maxAllowed = availableYield;
 
         return (requestedAmount <= maxAllowed, maxAllowed);
     }
 
-    function repayBorrowBehalfBatch(
-        address[] calldata collectionAddresses,
-        uint256[] calldata amounts,
-        address[] calldata borrowers,
-        uint256 totalAmount
-    ) external onlyRole(DEBT_SUBSIDIZER_ROLE) whenNotPaused nonReentrant {
+    function repayBorrowBehalfBatch(uint256[] calldata amounts, address[] calldata borrowers, uint256 totalAmount)
+        external
+        onlyRole(DEBT_SUBSIDIZER_ROLE)
+        whenNotPaused
+        nonReentrant
+    {
         uint256 numEntries = borrowers.length;
-        if (numEntries != amounts.length || numEntries != collectionAddresses.length) {
+        if (numEntries != amounts.length) {
             revert("CollectionsVault: Array lengths mismatch");
         }
 
@@ -455,20 +449,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         }
 
         _updateGlobalDepositIndex();
-
-        for (uint256 i = 0; i < numEntries; i++) {
-            if (amounts[i] == 0) continue;
-
-            address collectionAddress = collectionAddresses[i];
-            uint256 amount = amounts[i];
-
-            _accrueCollectionYield(collectionAddress);
-
-            (bool isValid, uint256 maxAllowed) = _validateYieldAmount(collectionAddress, amount);
-            if (!isValid) {
-                revert ExcessiveYieldAmount(collectionAddress, amount, maxAllowed);
-            }
-        }
 
         _hookWithdraw(totalAmount);
 
@@ -511,14 +491,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
 
         delete _tempBorrowers;
 
-        for (uint256 i = 0; i < numEntries; i++) {
-            if (amounts[i] == 0) continue;
-
-            address collectionAddress = collectionAddresses[i];
-            uint256 amount = amounts[i];
-
-            collections[collectionAddress].totalYieldTransferred += amount;
-        }
+        // Removed totalYieldTransferred update as the field is removed
 
         assetToken.forceApprove(address(lendingManager), 0);
         emit YieldBatchRepaid(actualTotalRepaid, msg.sender);

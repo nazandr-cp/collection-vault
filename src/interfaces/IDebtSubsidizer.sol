@@ -25,13 +25,11 @@ interface IDebtSubsidizer {
         int256 p2;
     }
 
-    struct Subsidy {
-        address account; // recipient of the subsidy
-        address collection; // collection address
-        address vault; // vault address where the yield is stored
-        uint256 amount; // tokens to transfer — already calculated off-chain
-        uint256 nonce; // protection against signature replay
-        uint256 deadline; // signature validity deadline (block/time)
+    struct ClaimData {
+        address recipient; // recipient of the subsidy
+        address collection; // collection address for which subsidy is claimed
+        uint256 amount; // amount to claim, as per Merkle leaf
+        bytes32[] merkleProof; // Merkle proof for the claim
     }
 
     struct VaultInfo {
@@ -62,9 +60,10 @@ interface IDebtSubsidizer {
     );
     event TrustedSignerUpdated(address oldSigner, address newSigner, address indexed changedBy);
     event WeightFunctionSet(address indexed vaultAddress, address indexed collectionAddress, WeightFunction fn);
-    event DebtSubsidized(
-        address indexed vaultAddress, address indexed user, address indexed collectionAddress, uint256 amount
+    event SubsidyClaimed(
+        address indexed vaultAddress, address indexed recipient, address indexed collection, uint256 amount
     );
+    event MerkleRootUpdated(address indexed vaultAddress, bytes32 merkleRoot, address indexed updatedBy);
     event VaultAdded(
         address indexed vaultAddress, address indexed cTokenAddress, address indexed lendingManagerAddress
     );
@@ -79,7 +78,7 @@ interface IDebtSubsidizer {
     error InvalidYieldSlice();
     error InsufficientYield();
     error ArrayLengthMismatch();
-    error InvalidNonce();
+    // InvalidNonce removed
     error VaultMismatch();
     error InvalidYieldSharePercentage(uint256 totalSharePercentage);
     error CollectionNotWhitelistedInVault(address vaultAddress, address collectionAddress);
@@ -90,6 +89,9 @@ interface IDebtSubsidizer {
     error InvalidCollectionInterface(address collectionAddress, bytes4 interfaceId);
     error LendingManagerNotSetForVault(address vaultAddress);
     error LendingManagerAssetMismatch(address vaultAsset, address lmAsset);
+    error InvalidMerkleProof();
+    error MerkleRootNotSet();
+    error AlreadyClaimed();
 
     // --- Vault Management ---
     function addVault(address vaultAddress_, address lendingManagerAddress_) external;
@@ -119,12 +121,13 @@ interface IDebtSubsidizer {
         external;
 
     // --- User Information & Claims ---
-    function userNonce(address vaultAddress, address userAddress) external view returns (uint64 nonce);
-    function subsidize(address vaultAddress, Subsidy[] calldata subsidizes, bytes calldata signature) external;
+    // userNonce removed
+    function claimSubsidy(address vaultAddress, ClaimData[] calldata claims) external; // Changed to accept an array
+    function updateMerkleRoot(address vaultAddress, bytes32 merkleRoot) external;
 
     // --- Administrative Actions ---
-    function updateTrustedSigner(address newSigner) external;
-    function subsidySigner() external view returns (address);
+    // updateTrustedSigner removed
+    // subsidySigner removed
     function pause() external;
     function unpause() external;
     function paused() external view returns (bool);

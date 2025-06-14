@@ -1,10 +1,10 @@
-    // SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
-import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
+// EIP712Upgradeable removed
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -16,7 +16,8 @@ import {ERC165Checker} from "@openzeppelin/contracts/utils/introspection/ERC165C
 
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+// ECDSA removed
+import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 import {IDebtSubsidizer} from "./interfaces/IDebtSubsidizer.sol";
 import {ICollectionsVault} from "./interfaces/ICollectionsVault.sol";
@@ -28,7 +29,7 @@ contract DebtSubsidizer is
     IDebtSubsidizer,
     OwnableUpgradeable,
     ReentrancyGuardUpgradeable,
-    EIP712Upgradeable,
+    // EIP712Upgradeable removed
     PausableUpgradeable
 {
     using SafeERC20 for IERC20;
@@ -38,15 +39,16 @@ contract DebtSubsidizer is
         address cToken;
     }
 
-    bytes32 private constant SUBSIDY_TYPEHASH = keccak256(
-        "Subsidy(address account,address collection,address vault,uint256 amount,uint256 nonce,uint256 deadline)"
-    );
+    // SUBSIDY_TYPEHASH removed
     uint16 private constant MAX_YIELD_SHARE_PERCENTAGE = 10000;
 
-    address internal _subsidySigner;
+    // _subsidySigner removed
 
     mapping(address => InternalVaultInfo) internal _vaultsData;
-    mapping(address => mapping(address => uint256)) private _accountNonces;
+    // _accountNonces removed
+    mapping(address => bytes32) internal _merkleRoots; // Vault address => Merkle Root
+    mapping(bytes32 => bool) internal _claimedLeaves; // Merkle Leaf => Claimed status
+
     mapping(address => mapping(address => IDebtSubsidizer.WeightFunction)) internal _collectionWeightFunctions;
     mapping(address => mapping(address => uint16)) internal _collectionYieldSharePercentage;
     mapping(address => uint16) internal _totalCollectionYieldShareBps;
@@ -61,15 +63,17 @@ contract DebtSubsidizer is
         _disableInitializers();
     }
 
-    function initialize(address initialOwner, address initialSubsidySigner) public initializer {
-        if (initialOwner == address(0) || initialSubsidySigner == address(0)) {
+    function initialize(address initialOwner) public initializer {
+        // initialSubsidySigner removed
+        if (initialOwner == address(0)) {
+            // initialSubsidySigner check removed
             revert IDebtSubsidizer.AddressZero();
         }
         __Ownable_init(initialOwner);
         __ReentrancyGuard_init();
-        __EIP712_init("DebtSubsidizer", "1");
+        // __EIP712_init removed
         __Pausable_init();
-        _subsidySigner = initialSubsidySigner;
+        // _subsidySigner assignment removed
     }
 
     function addVault(address vaultAddress_, address lendingManagerAddress_)
@@ -233,14 +237,7 @@ contract DebtSubsidizer is
         emit WeightFunctionConfigUpdated(vaultAddress, collectionAddress, oldWeightFunction, newWeightFunction_);
     }
 
-    function userNonce(address vaultAddress, address userAddress)
-        external
-        view
-        override(IDebtSubsidizer)
-        returns (uint64 nonce)
-    {
-        return uint64(_accountNonces[vaultAddress][userAddress]);
-    }
+    // userNonce function removed
 
     function getCollectionWeightFunction(address vaultAddress, address collectionAddress)
         external
@@ -253,63 +250,56 @@ contract DebtSubsidizer is
         return _collectionWeightFunctions[vaultAddress][collectionAddress];
     }
 
-    function subsidize(address vaultAddress, IDebtSubsidizer.Subsidy[] calldata subsidies, bytes calldata signature)
+    function claimSubsidy(address vaultAddress, IDebtSubsidizer.ClaimData[] calldata claims)
         external
         override(IDebtSubsidizer)
         nonReentrant
         whenNotPaused
     {
-        bytes32 subsidiesHash = keccak256(abi.encode(subsidies));
-        bytes32 digest = _hashTypedDataV4(subsidiesHash);
-        address recoveredSigner = ECDSA.recover(digest, signature);
-
-        if (recoveredSigner != _subsidySigner || recoveredSigner == address(0)) {
-            revert IDebtSubsidizer.InvalidSignature();
+        if (_vaultsData[vaultAddress].cToken == address(0)) {
+            revert IDebtSubsidizer.VaultNotRegistered(vaultAddress);
         }
 
-        if (_vaultsData[vaultAddress].cToken == address(0)) revert IDebtSubsidizer.VaultNotRegistered(vaultAddress);
+        bytes32 merkleRoot = _merkleRoots[vaultAddress];
+        if (merkleRoot == bytes32(0)) {
+            revert IDebtSubsidizer.MerkleRootNotSet();
+        }
 
-        uint256 numSubsidies = subsidies.length;
-        address[] memory tempCollections = new address[](numSubsidies);
-        uint256[] memory tempAmounts = new uint256[](numSubsidies);
-        address[] memory tempBorrowers = new address[](numSubsidies);
-        uint256 actualSubsidyCountForBatch = 0;
+        uint256 numClaims = claims.length;
+        if (numClaims == 0) {
+            return; // Nothing to claim
+        }
+
+        address[] memory borrowersToRepay = new address[](numClaims);
+        uint256[] memory amountsToRepay = new uint256[](numClaims);
         uint256 totalAmountToSubsidize = 0;
+        uint256 actualClaimsCount = 0;
 
-        for (uint256 i = 0; i < numSubsidies; i++) {
-            IDebtSubsidizer.Subsidy calldata currentSubsidy = subsidies[i];
-            address user = currentSubsidy.account;
-            address collection = currentSubsidy.collection;
-            address subsidyVault = currentSubsidy.vault;
-            uint256 amountToSubsidize = currentSubsidy.amount;
+        for (uint256 i = 0; i < numClaims; i++) {
+            IDebtSubsidizer.ClaimData calldata currentClaim = claims[i];
+            address recipient = currentClaim.recipient;
+            address collection = currentClaim.collection;
+            uint256 amountToSubsidize = currentClaim.amount;
 
-            if (user == address(0) || collection == address(0) || subsidyVault == address(0)) {
+            if (recipient == address(0) || collection == address(0)) {
                 revert IDebtSubsidizer.AddressZero();
             }
 
-            if (subsidyVault != vaultAddress) {
-                revert IDebtSubsidizer.VaultMismatch();
+            bytes32 leaf = keccak256(abi.encodePacked(recipient, collection, amountToSubsidize));
+
+            if (!MerkleProof.verify(currentClaim.merkleProof, merkleRoot, leaf)) {
+                revert IDebtSubsidizer.InvalidMerkleProof();
             }
 
-            if (block.timestamp > currentSubsidy.deadline) {
-                revert IDebtSubsidizer.ClaimExpired();
-            }
-
-            uint256 currentNonce = _accountNonces[vaultAddress][user];
-            if (currentSubsidy.nonce != currentNonce) {
-                revert IDebtSubsidizer.InvalidNonce();
-            }
-            _accountNonces[vaultAddress][user]++;
+            _claimedLeaves[leaf] = true;
 
             if (amountToSubsidize > 0) {
-                tempCollections[actualSubsidyCountForBatch] = collection;
-                tempAmounts[actualSubsidyCountForBatch] = amountToSubsidize;
-                tempBorrowers[actualSubsidyCountForBatch] = user;
-                actualSubsidyCountForBatch++;
+                borrowersToRepay[actualClaimsCount] = recipient;
+                amountsToRepay[actualClaimsCount] = amountToSubsidize;
                 totalAmountToSubsidize += amountToSubsidize;
-                _userTotalSecondsClaimed[user] += amountToSubsidize; // Update total seconds claimed for the user
-
-                emit DebtSubsidized(vaultAddress, user, collection, amountToSubsidize);
+                _userTotalSecondsClaimed[recipient] += amountToSubsidize;
+                actualClaimsCount++;
+                emit SubsidyClaimed(vaultAddress, recipient, collection, amountToSubsidize);
             }
         }
 
@@ -320,23 +310,35 @@ contract DebtSubsidizer is
             if (totalAmountToSubsidize > remainingYield) {
                 revert IDebtSubsidizer.InsufficientYield();
             }
-        }
 
-        if (actualSubsidyCountForBatch > 0) {
-            address[] memory collectionsToRepay = new address[](actualSubsidyCountForBatch);
-            uint256[] memory amountsToRepay = new uint256[](actualSubsidyCountForBatch);
-            address[] memory borrowersToRepay = new address[](actualSubsidyCountForBatch);
-
-            for (uint256 j = 0; j < actualSubsidyCountForBatch; j++) {
-                collectionsToRepay[j] = tempCollections[j];
-                amountsToRepay[j] = tempAmounts[j];
-                borrowersToRepay[j] = tempBorrowers[j];
+            // Resize arrays if some claims were skipped
+            address[] memory finalBorrowers;
+            uint256[] memory finalAmounts;
+            if (actualClaimsCount < numClaims) {
+                finalBorrowers = new address[](actualClaimsCount);
+                finalAmounts = new uint256[](actualClaimsCount);
+                for (uint256 j = 0; j < actualClaimsCount; j++) {
+                    finalBorrowers[j] = borrowersToRepay[j];
+                    finalAmounts[j] = amountsToRepay[j];
+                }
+            } else {
+                finalBorrowers = borrowersToRepay;
+                finalAmounts = amountsToRepay;
             }
 
-            ICollectionsVault(vaultAddress).repayBorrowBehalfBatch(
-                collectionsToRepay, amountsToRepay, borrowersToRepay, totalAmountToSubsidize
-            );
+            ICollectionsVault(vaultAddress).repayBorrowBehalfBatch(finalAmounts, finalBorrowers, totalAmountToSubsidize);
         }
+    }
+
+    function updateMerkleRoot(address vaultAddress, bytes32 merkleRoot_) external override(IDebtSubsidizer) onlyOwner {
+        if (vaultAddress == address(0)) {
+            revert IDebtSubsidizer.AddressZero();
+        }
+        if (_vaultsData[vaultAddress].cToken == address(0)) {
+            revert IDebtSubsidizer.VaultNotRegistered(vaultAddress);
+        }
+        _merkleRoots[vaultAddress] = merkleRoot_;
+        emit MerkleRootUpdated(vaultAddress, merkleRoot_, msg.sender);
     }
 
     function collectionRewardBasis(address vaultAddress, address collectionAddress)
@@ -360,18 +362,9 @@ contract DebtSubsidizer is
         return _isCollectionWhitelisted[vaultAddress][collectionAddress];
     }
 
-    function updateTrustedSigner(address newSigner) external override(IDebtSubsidizer) onlyOwner {
-        if (newSigner == address(0)) {
-            revert IDebtSubsidizer.CannotSetSignerToZeroAddress();
-        }
-        address oldSigner = _subsidySigner;
-        _subsidySigner = newSigner;
-        emit TrustedSignerUpdated(oldSigner, newSigner, msg.sender);
-    }
+    // updateTrustedSigner function removed
 
-    function subsidySigner() external view override(IDebtSubsidizer) returns (address) {
-        return _subsidySigner;
-    }
+    // subsidySigner function removed
 
     function pause() external override(IDebtSubsidizer) onlyOwner {
         super._pause();
@@ -393,7 +386,5 @@ contract DebtSubsidizer is
         return _userTotalSecondsClaimed[user];
     }
 
-    function getDomainSeparator() public view returns (bytes32) {
-        return _hashTypedDataV4(0);
-    }
+    // getDomainSeparator function removed
 }
