@@ -40,9 +40,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
     mapping(uint256 => uint256) public epochYieldAllocations;
     mapping(uint256 => mapping(address => bool)) public epochCollectionYieldApplied;
 
-    mapping(address => uint256) private _tempAggregatedAmounts;
-    address[] private _tempBorrowers;
-
     constructor(
         IERC20 _asset,
         string memory _name,
@@ -79,7 +76,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         if (newIndex > globalDepositIndex) {
             globalDepositIndex = newIndex;
         }
-        // If newIndex is less, it implies a loss or principal withdrawal not reflected.
     }
 
     function _accrueCollectionYield(address collectionAddress) internal {
@@ -157,9 +153,9 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         whenNotPaused
     {
         if (collectionAddress == address(0)) revert AddressZero();
-        _updateGlobalDepositIndex(); // Update global index first
-        _registerCollectionAddressIfNeeded(collectionAddress); // Register before accruing or setting percentage
-        _accrueCollectionYield(collectionAddress); // Accrue any pending yield with old percentage
+        _updateGlobalDepositIndex();
+        _registerCollectionAddressIfNeeded(collectionAddress);
+        _accrueCollectionYield(collectionAddress);
 
         ICollectionsVault.Collection storage collection = collections[collectionAddress];
         collection.yieldSharePercentage = percentage;
@@ -225,8 +221,8 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         returns (uint256 assets)
     {
         _updateGlobalDepositIndex();
-        _registerCollectionAddressIfNeeded(collectionAddress); // Ensure registered before accruing
-        _accrueCollectionYield(collectionAddress); // Accrue yield before mint
+        _registerCollectionAddressIfNeeded(collectionAddress);
+        _accrueCollectionYield(collectionAddress);
 
         ICollectionsVault.Collection storage collection = collections[collectionAddress];
 
@@ -252,7 +248,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         returns (uint256 shares)
     {
         _updateGlobalDepositIndex();
-        _accrueCollectionYield(collectionAddress); // Accrue yield before withdrawal
+        _accrueCollectionYield(collectionAddress);
 
         uint256 currentCollectionTotalAssets = collections[collectionAddress].totalAssetsDeposited;
         if (assets > currentCollectionTotalAssets) {
@@ -286,7 +282,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         returns (uint256 assets)
     {
         _updateGlobalDepositIndex();
-        _accrueCollectionYield(collectionAddress); // Accrue yield before redeem
+        _accrueCollectionYield(collectionAddress);
 
         uint256 currentCollectionTotalAssets = collections[collectionAddress].totalAssetsDeposited;
 
@@ -418,19 +414,34 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
             return (requestedAmount == 0, 0);
         }
 
-        // Calculate total available yield for this collection using index-based approach
         uint256 currentCollectionAssets = collectionTotalAssetsDeposited(collection);
         uint256 originalDeposit = collectionData.totalAssetsDeposited;
-
-        // Available yield is the difference between current accrued assets and original deposit
         uint256 availableYield =
             currentCollectionAssets > originalDeposit ? currentCollectionAssets - originalDeposit : 0;
-
-        // Calculate shared yield (already transferred to borrowers or other purposes)
-        // Max allowed is available yield
         maxAllowed = availableYield;
-
         return (requestedAmount <= maxAllowed, maxAllowed);
+    }
+
+    function repayBorrowBehalf(uint256 amount, address borrower)
+        external
+        onlyRole(DEBT_SUBSIDIZER_ROLE)
+        whenNotPaused
+        nonReentrant
+    {
+        if (amount == 0) return;
+
+        _updateGlobalDepositIndex();
+        _hookWithdraw(amount);
+
+        IERC20 assetToken = IERC20(asset());
+        assetToken.forceApprove(address(lendingManager), amount);
+
+        uint256 lmError = lendingManager.repayBorrowBehalf(borrower, amount);
+        if (lmError != 0) {
+            revert("CollectionsVault: Repay borrow behalf failed via LendingManager");
+        }
+
+        assetToken.forceApprove(address(lendingManager), 0);
     }
 
     function repayBorrowBehalfBatch(uint256[] calldata amounts, address[] calldata borrowers, uint256 totalAmount)
@@ -449,49 +460,27 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         }
 
         _updateGlobalDepositIndex();
-
         _hookWithdraw(totalAmount);
 
         IERC20 assetToken = IERC20(asset());
         assetToken.forceApprove(address(lendingManager), totalAmount);
-        delete _tempBorrowers;
-
-        for (uint256 i = 0; i < numEntries;) {
-            uint256 amt = amounts[i];
-            if (amt != 0) {
-                address borrowerAddr = borrowers[i];
-                if (_tempAggregatedAmounts[borrowerAddr] == 0) {
-                    _tempBorrowers.push(borrowerAddr);
-                }
-                _tempAggregatedAmounts[borrowerAddr] += amt;
-            }
-            unchecked {
-                ++i;
-            }
-        }
 
         uint256 actualTotalRepaid = 0;
-        uint256 borrowersLength = _tempBorrowers.length;
-        for (uint256 i = 0; i < borrowersLength;) {
-            address borrower = _tempBorrowers[i];
-            uint256 repayAmountForThisBorrower = _tempAggregatedAmounts[borrower];
+        for (uint256 i = 0; i < numEntries;) {
+            uint256 amt = amounts[i];
+            address borrowerAddr = borrowers[i];
 
-            uint256 lmError = lendingManager.repayBorrowBehalf(borrower, repayAmountForThisBorrower);
-
-            if (lmError != 0) {
-                revert("CollectionsVault: Repay borrow behalf failed via LendingManager");
+            if (amt != 0) {
+                uint256 lmError = lendingManager.repayBorrowBehalf(borrowerAddr, amt);
+                if (lmError != 0) {
+                    revert("CollectionsVault: Repay borrow behalf failed via LendingManager");
+                }
+                actualTotalRepaid += amt;
             }
-            actualTotalRepaid += repayAmountForThisBorrower;
-
-            delete _tempAggregatedAmounts[borrower];
             unchecked {
                 ++i;
             }
         }
-
-        delete _tempBorrowers;
-
-        // Removed totalYieldTransferred update as the field is removed
 
         assetToken.forceApprove(address(lendingManager), 0);
         emit YieldBatchRepaid(actualTotalRepaid, msg.sender);
@@ -596,7 +585,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         _unpause();
     }
 
-    // Task 3: Apply epoch yield
     function applyCollectionYieldForEpoch(address collectionAddress, uint256 epochId)
         external
         nonReentrant

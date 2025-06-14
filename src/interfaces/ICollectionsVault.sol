@@ -128,7 +128,7 @@ interface ICollectionsVault is IERC4626 {
     function redeemForCollection(uint256 shares, address receiver, address owner, address collectionAddress)
         external
         returns (uint256 assets);
-
+    function repayBorrowBehalf(uint256 amount, address borrower) external;
     function repayBorrowBehalfBatch(uint256[] calldata amounts, address[] calldata borrowers, uint256 totalAmount)
         external;
 

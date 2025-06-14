@@ -78,7 +78,6 @@ interface IDebtSubsidizer {
     error InvalidYieldSlice();
     error InsufficientYield();
     error ArrayLengthMismatch();
-    // InvalidNonce removed
     error VaultMismatch();
     error InvalidYieldSharePercentage(uint256 totalSharePercentage);
     error CollectionNotWhitelistedInVault(address vaultAddress, address collectionAddress);
@@ -92,6 +91,7 @@ interface IDebtSubsidizer {
     error InvalidMerkleProof();
     error MerkleRootNotSet();
     error AlreadyClaimed();
+    error LeafAlreadyClaimed();
 
     // --- Vault Management ---
     function addVault(address vaultAddress_, address lendingManagerAddress_) external;
@@ -121,13 +121,10 @@ interface IDebtSubsidizer {
         external;
 
     // --- User Information & Claims ---
-    // userNonce removed
-    function claimSubsidy(address vaultAddress, ClaimData[] calldata claims) external; // Changed to accept an array
+    function claimSubsidy(address vaultAddress, ClaimData calldata claim) external;
     function updateMerkleRoot(address vaultAddress, bytes32 merkleRoot) external;
 
     // --- Administrative Actions ---
-    // updateTrustedSigner removed
-    // subsidySigner removed
     function pause() external;
     function unpause() external;
     function paused() external view returns (bool);
