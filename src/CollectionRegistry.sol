@@ -8,7 +8,7 @@ import {ICollectionRegistry} from "./interfaces/ICollectionRegistry.sol";
 contract CollectionRegistry is ICollectionRegistry, AccessControl {
     bytes32 public constant MANAGER_ROLE = keccak256("MANAGER_ROLE");
 
-    mapping(address => ICollectionsVault.Collection) private _collections;
+    mapping(address => ICollectionRegistry.Collection) private _collections;
     address[] private _allCollections;
     mapping(address => bool) private _isRegistered;
 
@@ -25,7 +25,7 @@ contract CollectionRegistry is ICollectionRegistry, AccessControl {
         }
     }
 
-    function updateCollection(address collection, ICollectionsVault.Collection calldata data)
+    function updateCollection(address collection, ICollectionRegistry.Collection calldata data)
         external
         override
         onlyRole(MANAGER_ROLE)
@@ -43,12 +43,7 @@ contract CollectionRegistry is ICollectionRegistry, AccessControl {
         _collections[collection].yieldSharePercentage = share;
     }
 
-    function getCollection(address collection)
-        external
-        view
-        override
-        returns (ICollectionsVault.Collection memory)
-    {
+    function getCollection(address collection) external view override returns (ICollectionRegistry.Collection memory) {
         return _collections[collection];
     }
 

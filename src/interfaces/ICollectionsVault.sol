@@ -6,16 +6,6 @@ import {ILendingManager} from "./ILendingManager.sol";
 import {IEpochManager} from "./IEpochManager.sol";
 
 interface ICollectionsVault is IERC4626 {
-    // --- Structs ---
-    struct Collection {
-        address collectionAddress;
-        uint256 totalAssetsDeposited;
-        uint256 totalSharesMinted;
-        uint256 totalCTokensMinted;
-        uint16 yieldSharePercentage;
-        uint256 totalYieldTransferred;
-        uint256 lastGlobalDepositIndex;
-    }
     // --- Events ---
     /**
      * @dev Emitted when assets are deposited into the vault on behalf of a collection.
@@ -26,7 +16,6 @@ interface ICollectionsVault is IERC4626 {
      * @param shares The amount of vault shares minted.
      * @param cTokenAmount The amount of cTokens (shares) minted.
      */
-
     event CollectionDeposit(
         address indexed collectionAddress,
         address indexed caller,

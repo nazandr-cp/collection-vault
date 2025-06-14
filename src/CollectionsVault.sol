@@ -32,7 +32,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
     IEpochManager public epochManager;
     ICollectionRegistry public collectionRegistry;
 
-    mapping(address => ICollectionsVault.Collection) public collections;
+    mapping(address => ICollectionRegistry.Collection) public collections;
     uint256 public globalDepositIndex;
     uint256 public constant GLOBAL_DEPOSIT_INDEX_PRECISION = 1e18;
 
@@ -84,7 +84,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
     }
 
     function _accrueCollectionYield(address collectionAddress) internal {
-        ICollectionsVault.Collection storage collection = collections[collectionAddress];
+        ICollectionRegistry.Collection storage collection = collections[collectionAddress];
         if (!isCollectionRegistered[collectionAddress] || collection.collectionAddress == address(0)) {
             return;
         }
@@ -117,7 +117,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
 
             collectionRegistry.registerCollection(collectionAddress);
 
-            ICollectionsVault.Collection storage collection = collections[collectionAddress];
+            ICollectionRegistry.Collection storage collection = collections[collectionAddress];
             if (collection.collectionAddress == address(0)) {
                 collection.collectionAddress = collectionAddress;
                 if (collection.lastGlobalDepositIndex == 0) {
@@ -164,14 +164,14 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         _registerCollectionAddressIfNeeded(collectionAddress);
         _accrueCollectionYield(collectionAddress);
 
-        ICollectionsVault.Collection storage collection = collections[collectionAddress];
+        ICollectionRegistry.Collection storage collection = collections[collectionAddress];
         collection.yieldSharePercentage = percentage;
-        ICollectionsVault.Collection memory updated = collection;
+        ICollectionRegistry.Collection memory updated = collection;
         collectionRegistry.updateCollection(collectionAddress, updated);
     }
 
     function collectionTotalAssetsDeposited(address collectionAddress) public view override returns (uint256) {
-        ICollectionsVault.Collection memory collection = collections[collectionAddress];
+        ICollectionRegistry.Collection memory collection = collections[collectionAddress];
         if (
             collection.collectionAddress == address(0) || collection.yieldSharePercentage == 0
                 || globalDepositIndex <= collection.lastGlobalDepositIndex
@@ -206,7 +206,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         _registerCollectionAddressIfNeeded(collectionAddress);
         _accrueCollectionYield(collectionAddress);
 
-        ICollectionsVault.Collection storage collection = collections[collectionAddress];
+        ICollectionRegistry.Collection storage collection = collections[collectionAddress];
 
         shares = previewDeposit(assets);
         _deposit(msg.sender, receiver, assets, shares);
@@ -234,7 +234,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         _registerCollectionAddressIfNeeded(collectionAddress);
         _accrueCollectionYield(collectionAddress);
 
-        ICollectionsVault.Collection storage collection = collections[collectionAddress];
+        ICollectionRegistry.Collection storage collection = collections[collectionAddress];
 
         assets = previewMint(shares);
         _deposit(msg.sender, receiver, assets, shares);
@@ -271,7 +271,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         _withdraw(msg.sender, receiver, owner, assets, shares);
 
         collections[collectionAddress].totalAssetsDeposited = currentCollectionTotalAssets - assets;
-        ICollectionsVault.Collection storage collection = collections[collectionAddress];
+        ICollectionRegistry.Collection storage collection = collections[collectionAddress];
         if (collection.totalSharesMinted < shares || collection.totalCTokensMinted < shares) {
             revert ShareBalanceUnderflow();
         }
@@ -332,7 +332,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         } else {
             collections[collectionAddress].totalAssetsDeposited = 0;
         }
-        ICollectionsVault.Collection storage collection = collections[collectionAddress];
+        ICollectionRegistry.Collection storage collection = collections[collectionAddress];
         if (collection.totalSharesMinted < shares || collection.totalCTokensMinted < shares) {
             revert ShareBalanceUnderflow();
         }
@@ -365,7 +365,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         _updateGlobalDepositIndex();
         _accrueCollectionYield(collectionAddress);
 
-        ICollectionsVault.Collection storage collection = collections[collectionAddress];
+        ICollectionRegistry.Collection storage collection = collections[collectionAddress];
         if (!isCollectionRegistered[collectionAddress]) {
             revert CollectionNotRegistered(collectionAddress);
         }
@@ -422,7 +422,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         view
         returns (bool isValid, uint256 maxAllowed)
     {
-        ICollectionsVault.Collection memory collectionData = collections[collection];
+        ICollectionRegistry.Collection memory collectionData = collections[collection];
 
         if (collectionData.yieldSharePercentage == 0) {
             return (requestedAmount == 0, 0);
@@ -634,7 +634,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         _updateGlobalDepositIndex();
         _accrueCollectionYield(collectionAddress);
 
-        ICollectionsVault.Collection storage collection = collections[collectionAddress];
+        ICollectionRegistry.Collection storage collection = collections[collectionAddress];
         if (collection.yieldSharePercentage == 0) {
             epochCollectionYieldApplied[epochId][collectionAddress] = true;
             emit CollectionYieldAppliedForEpoch(epochId, collectionAddress, 0, 0, collection.totalAssetsDeposited);
