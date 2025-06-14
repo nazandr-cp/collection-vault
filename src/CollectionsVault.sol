@@ -14,6 +14,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
 import {ICollectionsVault} from "./interfaces/ICollectionsVault.sol";
 import {IEpochManager} from "./interfaces/IEpochManager.sol";
+import {ICollectionRegistry} from "./interfaces/ICollectionRegistry.sol";
 
 interface ICToken {
     function repayBorrowBehalf(address borrower, uint256 repayAmount) external returns (uint256);
@@ -29,6 +30,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
 
     ILendingManager public lendingManager;
     IEpochManager public epochManager;
+    ICollectionRegistry public collectionRegistry;
 
     mapping(address => ICollectionsVault.Collection) public collections;
     uint256 public globalDepositIndex;
@@ -45,10 +47,12 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         string memory _name,
         string memory _symbol,
         address initialAdmin,
-        address _lendingManagerAddress
+        address _lendingManagerAddress,
+        address _collectionRegistryAddress
     ) ERC4626(_asset) ERC20(_name, _symbol) {
         if (address(_asset) == address(0)) revert AddressZero();
         if (initialAdmin == address(0)) revert AddressZero();
+        if (_collectionRegistryAddress == address(0)) revert AddressZero();
 
         if (_lendingManagerAddress != address(0)) {
             ILendingManager tempLendingManager = ILendingManager(_lendingManagerAddress);
@@ -60,6 +64,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         }
 
         globalDepositIndex = GLOBAL_DEPOSIT_INDEX_PRECISION;
+        collectionRegistry = ICollectionRegistry(_collectionRegistryAddress);
 
         _grantRole(DEFAULT_ADMIN_ROLE, initialAdmin);
         _grantRole(ADMIN_ROLE, initialAdmin);
@@ -110,6 +115,8 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
             isCollectionRegistered[collectionAddress] = true;
             allCollectionAddresses.push(collectionAddress);
 
+            collectionRegistry.registerCollection(collectionAddress);
+
             ICollectionsVault.Collection storage collection = collections[collectionAddress];
             if (collection.collectionAddress == address(0)) {
                 collection.collectionAddress = collectionAddress;
@@ -159,6 +166,8 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
 
         ICollectionsVault.Collection storage collection = collections[collectionAddress];
         collection.yieldSharePercentage = percentage;
+        ICollectionsVault.Collection memory updated = collection;
+        collectionRegistry.updateCollection(collectionAddress, updated);
     }
 
     function collectionTotalAssetsDeposited(address collectionAddress) public view override returns (uint256) {
@@ -206,6 +215,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         collection.totalAssetsDeposited += assets;
         collection.totalSharesMinted += shares;
         collection.totalCTokensMinted += shares;
+        collectionRegistry.updateCollection(collectionAddress, collection);
         emit CollectionDeposit(collectionAddress, _msgSender(), receiver, assets, shares, shares);
     }
 
@@ -233,6 +243,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         collection.totalAssetsDeposited += assets;
         collection.totalSharesMinted += shares;
         collection.totalCTokensMinted += shares;
+        collectionRegistry.updateCollection(collectionAddress, collection);
         emit CollectionDeposit(collectionAddress, _msgSender(), receiver, assets, shares, shares);
     }
 
@@ -266,6 +277,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         }
         collection.totalSharesMinted -= shares;
         collection.totalCTokensMinted -= shares;
+        collectionRegistry.updateCollection(collectionAddress, collection);
 
         emit CollectionWithdraw(collectionAddress, _msgSender(), receiver, assets, shares, shares);
     }
@@ -326,6 +338,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         }
         collection.totalSharesMinted -= shares;
         collection.totalCTokensMinted -= shares;
+        collectionRegistry.updateCollection(collectionAddress, collection);
 
         emit CollectionWithdraw(collectionAddress, _msgSender(), receiver, assets, shares, shares);
         return finalAssetsToTransfer;
@@ -371,6 +384,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         }
         collection.totalSharesMinted -= amount;
         collection.totalCTokensMinted -= amount;
+        collectionRegistry.updateCollection(collectionAddress, collection);
 
         emit CollectionTransfer(collectionAddress, msg.sender, to, amount);
         return true;
@@ -558,7 +572,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
     function totalCollectionYieldShareBps() public view returns (uint16 totalBps) {
         uint256 length = allCollectionAddresses.length;
         for (uint256 i = 0; i < length;) {
-            totalBps += collections[allCollectionAddresses[i]].yieldSharePercentage;
+            totalBps += collectionRegistry.getCollection(allCollectionAddresses[i]).yieldSharePercentage;
             unchecked {
                 ++i;
             }

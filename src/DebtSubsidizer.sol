@@ -21,6 +21,7 @@ import {IDebtSubsidizer} from "./interfaces/IDebtSubsidizer.sol";
 import {ICollectionsVault} from "./interfaces/ICollectionsVault.sol";
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
 import {IEpochManager} from "./interfaces/IEpochManager.sol";
+import {ICollectionRegistry} from "./interfaces/ICollectionRegistry.sol";
 
 contract DebtSubsidizer is
     Initializable,
@@ -51,18 +52,23 @@ contract DebtSubsidizer is
     mapping(address => ILendingManager) internal _vaultLendingManagers;
     mapping(address => mapping(address => uint256)) internal _userSecondsClaimed;
     mapping(address => uint256) internal _userTotalSecondsClaimed;
+    ICollectionRegistry public collectionRegistry;
 
     constructor() {
         _disableInitializers();
     }
 
-    function initialize(address initialOwner) public initializer {
+    function initialize(address initialOwner, address registry) public initializer {
         if (initialOwner == address(0)) {
+            revert IDebtSubsidizer.AddressZero();
+        }
+        if (registry == address(0)) {
             revert IDebtSubsidizer.AddressZero();
         }
         __Ownable_init(initialOwner);
         __ReentrancyGuard_init();
         __Pausable_init();
+        collectionRegistry = ICollectionRegistry(registry);
     }
 
     function addVault(address vaultAddress_, address lendingManagerAddress_)
@@ -154,6 +160,7 @@ contract DebtSubsidizer is
         _collectionYieldSharePercentage[vaultAddress][collectionAddress] = sharePercentageBps;
         _totalCollectionYieldShareBps[vaultAddress] += sharePercentageBps;
         _isCollectionWhitelisted[vaultAddress][collectionAddress] = true;
+        collectionRegistry.setYieldShare(collectionAddress, sharePercentageBps);
         _collectionWeightFunctions[vaultAddress][collectionAddress] =
             IDebtSubsidizer.WeightFunction({fnType: IDebtSubsidizer.WeightFunctionType.LINEAR, p1: 0, p2: 0});
         emit NewCollectionWhitelisted(
@@ -179,6 +186,7 @@ contract DebtSubsidizer is
         delete _isCollectionWhitelisted[vaultAddress][collectionAddress];
         delete _collectionType[vaultAddress][collectionAddress];
         delete _collectionYieldSharePercentage[vaultAddress][collectionAddress];
+        collectionRegistry.setYieldShare(collectionAddress, 0);
         delete _collectionWeightFunctions[vaultAddress][collectionAddress];
         emit WhitelistCollectionRemoved(vaultAddress, collectionAddress);
     }
@@ -204,6 +212,7 @@ contract DebtSubsidizer is
         _totalCollectionYieldShareBps[vaultAddress] =
             _totalCollectionYieldShareBps[vaultAddress] - oldSharePercentageBps + newSharePercentageBps;
         _collectionYieldSharePercentage[vaultAddress][collectionAddress] = newSharePercentageBps;
+        collectionRegistry.setYieldShare(collectionAddress, newSharePercentageBps);
         emit CollectionYieldShareUpdated(vaultAddress, collectionAddress, oldSharePercentageBps, newSharePercentageBps);
     }
 
