@@ -33,6 +33,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
     ICollectionRegistry public collectionRegistry;
 
     mapping(address => CollectionVaultData) public collectionVaultsData;
+    uint256 public totalAssetsDepositedAllCollections;
     uint256 public globalDepositIndex;
     uint256 public constant GLOBAL_DEPOSIT_INDEX_PRECISION = 1e18;
 
@@ -104,6 +105,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
 
             if (yieldAccrued > 0) {
                 vaultData.totalAssetsDeposited += yieldAccrued;
+                totalAssetsDepositedAllCollections += yieldAccrued;
                 emit CollectionYieldAccrued(
                     collectionAddress, yieldAccrued, vaultData.totalAssetsDeposited, globalDepositIndex, lastIndex
                 );
@@ -201,6 +203,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         _hookDeposit(assets);
 
         vaultData.totalAssetsDeposited += assets;
+        totalAssetsDepositedAllCollections += assets;
         vaultData.totalSharesMinted += shares;
         vaultData.totalCTokensMinted += shares;
         emit CollectionDeposit(collectionAddress, _msgSender(), receiver, assets, shares, shares);
@@ -232,6 +235,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         _hookDeposit(assets);
 
         vaultData.totalAssetsDeposited += assets;
+        totalAssetsDepositedAllCollections += assets;
         vaultData.totalSharesMinted += shares;
         vaultData.totalCTokensMinted += shares;
         emit CollectionDeposit(collectionAddress, _msgSender(), to, assets, shares, shares);
@@ -259,6 +263,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         _hookDeposit(assets);
 
         vaultData.totalAssetsDeposited += assets;
+        totalAssetsDepositedAllCollections += assets;
         vaultData.totalSharesMinted += shares;
         vaultData.totalCTokensMinted += shares;
         emit CollectionDeposit(collectionAddress, _msgSender(), receiver, assets, shares, shares);
@@ -289,6 +294,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         _withdraw(msg.sender, receiver, owner, assets, shares);
 
         vaultData.totalAssetsDeposited = currentCollectionTotalAssets - assets;
+        totalAssetsDepositedAllCollections -= assets;
         if (vaultData.totalSharesMinted < shares || vaultData.totalCTokensMinted < shares) {
             revert ShareBalanceUnderflow();
         }
@@ -345,11 +351,15 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         SafeERC20.safeTransfer(IERC20(asset()), receiver, finalAssetsToTransfer);
         emit Withdraw(msg.sender, receiver, owner, finalAssetsToTransfer, shares);
 
+        uint256 deduction;
         if (assets <= currentCollectionTotalAssets) {
             vaultData.totalAssetsDeposited = currentCollectionTotalAssets - assets;
+            deduction = assets;
         } else {
+            deduction = currentCollectionTotalAssets;
             vaultData.totalAssetsDeposited = 0;
         }
+        totalAssetsDepositedAllCollections -= deduction;
         if (vaultData.totalSharesMinted < shares || vaultData.totalCTokensMinted < shares) {
             revert ShareBalanceUnderflow();
         }
@@ -395,6 +405,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         emit Transfer(msg.sender, to, amount);
 
         vaultData.totalAssetsDeposited -= amount;
+        totalAssetsDepositedAllCollections -= amount;
         if (vaultData.totalSharesMinted < amount || vaultData.totalCTokensMinted < amount) {
             revert ShareBalanceUnderflow();
         }
@@ -647,6 +658,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
 
         if (collectionYieldFromEpoch > 0) {
             vaultData.totalAssetsDeposited += collectionYieldFromEpoch;
+            totalAssetsDepositedAllCollections += collectionYieldFromEpoch;
             epochYieldAllocations[epochId] -= collectionYieldFromEpoch;
         }
 
