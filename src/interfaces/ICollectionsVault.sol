@@ -105,6 +105,7 @@ interface ICollectionsVault is IERC4626 {
     function epochManager() external view returns (IEpochManager);
 
     function collectionTotalAssetsDeposited(address collectionAddress) external view returns (uint256);
+    function totalAssetsDepositedAllCollections() external view returns (uint256);
     function setLendingManager(address _lendingManagerAddress) external;
     function setDebtSubsidizer(address _debtSubsidizerAddress) external;
 
