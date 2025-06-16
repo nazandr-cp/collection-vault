@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Roles} from "./Roles.sol";
 
 /**
  * @title EpochManager
@@ -73,7 +74,7 @@ contract EpochManager is Ownable, AccessControl, ReentrancyGuard {
      */
     event AutomatedSystemUpdated(address indexed newAutomatedSystem);
 
-    bytes32 public constant VAULT_ROLE = keccak256("VAULT_ROLE");
+    bytes32 public constant VAULT_ROLE = Roles.VAULT_ROLE;
 
     enum EpochStatus {
         Pending, // Epoch has not started yet

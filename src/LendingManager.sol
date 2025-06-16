@@ -7,6 +7,7 @@ import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {Roles} from "./Roles.sol";
 
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
 import {CErc20Interface, CTokenInterface} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol";
@@ -18,8 +19,8 @@ import {CErc20Interface, CTokenInterface} from "compound-protocol-2.8.1/contract
 contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
-    bytes32 public constant VAULT_ROLE = keccak256("VAULT_ROLE");
-    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    bytes32 public constant VAULT_ROLE = Roles.VAULT_ROLE;
+    bytes32 public constant ADMIN_ROLE = Roles.ADMIN_ROLE;
 
     uint256 public constant R0_BASIS_POINTS = 5;
     uint256 public constant BASIS_POINTS_DENOMINATOR = 10_000;
