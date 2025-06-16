@@ -42,7 +42,7 @@ contract DebtSubsidizer is
 
     mapping(address => InternalVaultInfo) internal _vaultsData;
     mapping(address => bytes32) internal _merkleRoots; // Vault address => Merkle Root
-    mapping(bytes32 => bool) internal _claimedLeaves; // Merkle Leaf => Claimed status
+    mapping(address => mapping(address => uint256)) internal _claimedTotals; // vault => user => total claimed
 
     mapping(address => mapping(address => bool)) internal _isCollectionWhitelisted;
     mapping(address => mapping(address => uint256)) internal _userSecondsClaimed;
@@ -164,24 +164,25 @@ contract DebtSubsidizer is
         }
 
         address recipient = claim.recipient;
-        address collection = claim.collection;
-        uint256 amountToSubsidize = claim.amount;
+        uint256 newTotal = claim.totalEarned;
 
-        if (recipient == address(0) || collection == address(0)) {
+        if (recipient == address(0)) {
             revert IDebtSubsidizer.AddressZero();
         }
 
-        bytes32 leaf = keccak256(abi.encodePacked(recipient, collection, amountToSubsidize));
-
-        if (_claimedLeaves[leaf]) {
-            revert IDebtSubsidizer.LeafAlreadyClaimed();
-        }
+        bytes32 leaf = keccak256(abi.encodePacked(recipient, newTotal));
 
         if (!MerkleProof.verify(claim.merkleProof, merkleRoot, leaf)) {
             revert IDebtSubsidizer.InvalidMerkleProof();
         }
 
-        _claimedLeaves[leaf] = true;
+        uint256 prevClaimed = _claimedTotals[vaultAddress][recipient];
+        if (newTotal <= prevClaimed) {
+            revert IDebtSubsidizer.AlreadyClaimed();
+        }
+
+        uint256 amountToSubsidize = newTotal - prevClaimed;
+        _claimedTotals[vaultAddress][recipient] = newTotal;
 
         if (amountToSubsidize > 0) {
             IEpochManager em = ICollectionsVault(vaultAddress).epochManager();
@@ -192,7 +193,7 @@ contract DebtSubsidizer is
             }
 
             _userTotalSecondsClaimed[recipient] += amountToSubsidize;
-            emit SubsidyClaimed(vaultAddress, recipient, collection, amountToSubsidize);
+            emit SubsidyClaimed(vaultAddress, recipient, amountToSubsidize);
 
             ICollectionsVault(vaultAddress).repayBorrowBehalf(amountToSubsidize, recipient);
         }

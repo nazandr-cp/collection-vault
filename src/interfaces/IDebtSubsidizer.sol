@@ -7,8 +7,7 @@ import {ICollectionRegistry} from "./ICollectionRegistry.sol";
 interface IDebtSubsidizer {
     struct ClaimData {
         address recipient; // recipient of the subsidy
-        address collection; // collection address for which subsidy is claimed
-        uint256 amount; // amount to claim, as per Merkle leaf
+        uint256 totalEarned; // cumulative amount earned as encoded in the leaf
         bytes32[] merkleProof; // Merkle proof for the claim
     }
 
@@ -20,9 +19,7 @@ interface IDebtSubsidizer {
     event NewCollectionWhitelisted(address indexed vaultAddress, address indexed collectionAddress);
     event WhitelistCollectionRemoved(address indexed vaultAddress, address indexed collectionAddress);
     event TrustedSignerUpdated(address oldSigner, address newSigner, address indexed changedBy);
-    event SubsidyClaimed(
-        address indexed vaultAddress, address indexed recipient, address indexed collection, uint256 amount
-    );
+    event SubsidyClaimed(address indexed vaultAddress, address indexed recipient, uint256 amount);
     event MerkleRootUpdated(address indexed vaultAddress, bytes32 merkleRoot, address indexed updatedBy);
     event VaultAdded(
         address indexed vaultAddress, address indexed cTokenAddress, address indexed lendingManagerAddress
@@ -62,7 +59,6 @@ interface IDebtSubsidizer {
     error InvalidMerkleProof();
     error MerkleRootNotSet();
     error AlreadyClaimed();
-    error LeafAlreadyClaimed();
 
     // --- Vault Management ---
     function addVault(address vaultAddress_, address lendingManagerAddress_) external;
