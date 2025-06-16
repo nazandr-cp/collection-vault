@@ -28,13 +28,13 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant DEBT_SUBSIDIZER_ROLE = keccak256("DEBT_SUBSIDIZER_ROLE");
 
-
     ILendingManager public lendingManager;
     IEpochManager public epochManager;
     ICollectionRegistry public collectionRegistry;
 
     mapping(address => CollectionVaultData) public collectionVaultsData;
     uint256 public totalAssetsDepositedAllCollections;
+    uint256 public totalYieldReserved;
     uint256 public globalDepositIndex;
     uint256 public constant GLOBAL_DEPOSIT_INDEX_PRECISION = 1e18;
 
@@ -87,7 +87,8 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         if (totalPrincipal == 0) {
             return;
         }
-        uint256 currentTotalAssets = lendingManager.totalAssets();
+        uint256 lmAssets = lendingManager.totalAssets();
+        uint256 currentTotalAssets = lmAssets > totalYieldReserved ? lmAssets - totalYieldReserved : 0;
         uint256 newIndex = (currentTotalAssets * GLOBAL_DEPOSIT_INDEX_PRECISION) / totalPrincipal;
         if (newIndex > globalDepositIndex) {
             globalDepositIndex = newIndex;
@@ -204,7 +205,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
     }
 
     function totalAssets() public view override(ERC4626, IERC4626) returns (uint256) {
-        return super.totalAssets() + lendingManager.totalAssets();
+        return totalAssetsDepositedAllCollections;
     }
 
     function deposit(uint256, address) public virtual override(ERC4626, IERC4626) returns (uint256) {
@@ -369,9 +370,14 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         bool isFullRedeem = (shares == _totalSupply && shares != 0);
         if (isFullRedeem) {
             uint256 remainingDustInLM = lendingManager.totalAssets();
-            if (remainingDustInLM > 0) {
-                uint256 redeemedDust = lendingManager.redeemAllCTokens(address(this));
-                finalAssetsToTransfer += redeemedDust;
+            uint256 reserve = totalYieldReserved;
+            if (remainingDustInLM > reserve) {
+                uint256 redeemable = remainingDustInLM - reserve;
+                if (redeemable > 0) {
+                    bool success = lendingManager.withdrawFromLendingProtocol(redeemable);
+                    if (!success) revert LendingManagerWithdrawFailed();
+                    finalAssetsToTransfer += redeemable;
+                }
             }
         }
 
@@ -462,7 +468,11 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         if (directBalance < assets) {
             uint256 neededFromLM = assets - directBalance;
             uint256 availableInLM = lendingManager.totalAssets();
-            if (neededFromLM <= availableInLM) {
+            uint256 reserve = totalYieldReserved;
+            uint256 usableInLM = hasRole(DEBT_SUBSIDIZER_ROLE, _msgSender())
+                ? availableInLM
+                : (availableInLM > reserve ? availableInLM - reserve : 0);
+            if (neededFromLM <= usableInLM) {
                 if (neededFromLM > 0) {
                     bool success = lendingManager.withdrawFromLendingProtocol(neededFromLM);
                     if (!success) revert LendingManagerWithdrawFailed();
@@ -492,6 +502,18 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         uint256 lmError = lendingManager.repayBorrowBehalf(borrower, amount);
         if (lmError != 0) {
             revert("CollectionsVault: Repay borrow behalf failed via LendingManager");
+        }
+
+        if (address(epochManager) != address(0)) {
+            uint256 epochId = epochManager.getCurrentEpochId();
+            if (epochId != 0 && epochYieldAllocations[epochId] >= amount) {
+                epochYieldAllocations[epochId] -= amount;
+            }
+        }
+        if (totalYieldReserved >= amount) {
+            totalYieldReserved -= amount;
+        } else {
+            totalYieldReserved = 0;
         }
 
         assetToken.forceApprove(address(lendingManager), 0);
@@ -536,6 +558,17 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         }
 
         assetToken.forceApprove(address(lendingManager), 0);
+        if (address(epochManager) != address(0)) {
+            uint256 epochId = epochManager.getCurrentEpochId();
+            if (epochId != 0 && epochYieldAllocations[epochId] >= actualTotalRepaid) {
+                epochYieldAllocations[epochId] -= actualTotalRepaid;
+            }
+        }
+        if (totalYieldReserved >= actualTotalRepaid) {
+            totalYieldReserved -= actualTotalRepaid;
+        } else {
+            totalYieldReserved = 0;
+        }
         emit YieldBatchRepaid(actualTotalRepaid, msg.sender);
     }
 
@@ -585,6 +618,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
 
         epochManager.allocateVaultYield(address(this), amount);
         epochYieldAllocations[currentEpochId] += amount;
+        totalYieldReserved += amount;
 
         emit VaultYieldAllocatedToEpoch(currentEpochId, amount);
     }
@@ -601,6 +635,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         }
         epochManager.allocateVaultYield(address(this), amount);
         epochYieldAllocations[epochId] += amount;
+        totalYieldReserved += amount;
         emit VaultYieldAllocatedToEpoch(epochId, amount);
     }
 
@@ -692,6 +727,11 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
             vaultData.totalAssetsDeposited += collectionYieldFromEpoch;
             totalAssetsDepositedAllCollections += collectionYieldFromEpoch;
             epochYieldAllocations[epochId] -= collectionYieldFromEpoch;
+            if (totalYieldReserved >= collectionYieldFromEpoch) {
+                totalYieldReserved -= collectionYieldFromEpoch;
+            } else {
+                totalYieldReserved = 0;
+            }
         }
 
         epochCollectionYieldApplied[epochId][collectionAddress] = true;
