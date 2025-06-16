@@ -72,6 +72,7 @@ interface IDebtSubsidizer {
 
     // --- User Information & Claims ---
     function claimSubsidy(address vaultAddress, ClaimData calldata claim) external;
+    function claimAllSubsidies(address[] calldata vaultAddresses, ClaimData[] calldata claims) external;
     function updateMerkleRoot(address vaultAddress, bytes32 merkleRoot) external;
 
     // --- Administrative Actions ---

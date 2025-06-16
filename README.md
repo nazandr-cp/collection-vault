@@ -9,6 +9,7 @@ Collection Vault is a set of Solidity contracts that coordinate NFT collection d
   - `LendingManager.sol` – Adapter for depositing assets into a Compound V2 fork and pulling yield back to the vault.
   - `EpochManager.sol` – Utility contract for rolling epochs used to allocate yield over time.
   - `DebtSubsidizer.sol` – Upgradeable contract used for distributing protocol incentives.
+    - Includes `claimAllSubsidies` for batching subsidy claims across multiple vaults.
   - `mocks/` – Simplified token and cToken mocks used for development.
 - **script/** – (planned) deployment and management scripts.
 - **foundry.toml** – Foundry configuration file.
