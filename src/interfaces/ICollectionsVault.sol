@@ -110,6 +110,7 @@ interface ICollectionsVault is IERC4626 {
 
     function collectionTotalAssetsDeposited(address collectionAddress) external view returns (uint256);
     function totalAssetsDepositedAllCollections() external view returns (uint256);
+    function totalYieldReserved() external view returns (uint256);
     function setLendingManager(address _lendingManagerAddress) external;
     function setDebtSubsidizer(address _debtSubsidizerAddress) external;
 
