@@ -4,9 +4,10 @@ pragma solidity ^0.8.20;
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {ICollectionsVault} from "./interfaces/ICollectionsVault.sol";
 import {ICollectionRegistry} from "./interfaces/ICollectionRegistry.sol";
+import {Roles} from "./Roles.sol";
 
 contract CollectionRegistry is ICollectionRegistry, AccessControl {
-    bytes32 public constant MANAGER_ROLE = keccak256("MANAGER_ROLE");
+    bytes32 public constant MANAGER_ROLE = Roles.MANAGER_ROLE;
 
     mapping(address => ICollectionRegistry.Collection) private _collections;
     address[] private _allCollections;

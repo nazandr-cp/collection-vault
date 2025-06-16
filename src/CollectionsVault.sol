@@ -6,6 +6,7 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {Roles} from "./Roles.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
@@ -25,8 +26,8 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
     using SafeERC20 for IERC20;
     using Math for uint256;
 
-    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
-    bytes32 public constant DEBT_SUBSIDIZER_ROLE = keccak256("DEBT_SUBSIDIZER_ROLE");
+    bytes32 public constant ADMIN_ROLE = Roles.ADMIN_ROLE;
+    bytes32 public constant DEBT_SUBSIDIZER_ROLE = Roles.DEBT_SUBSIDIZER_ROLE;
 
     ILendingManager public lendingManager;
     IEpochManager public epochManager;
