@@ -18,25 +18,12 @@ interface IDebtSubsidizer {
 
     event NewCollectionWhitelisted(address indexed vaultAddress, address indexed collectionAddress);
     event WhitelistCollectionRemoved(address indexed vaultAddress, address indexed collectionAddress);
-    event TrustedSignerUpdated(address oldSigner, address newSigner, address indexed changedBy);
     event SubsidyClaimed(address indexed vaultAddress, address indexed recipient, uint256 amount);
     event MerkleRootUpdated(address indexed vaultAddress, bytes32 merkleRoot, address indexed updatedBy);
     event VaultAdded(
         address indexed vaultAddress, address indexed cTokenAddress, address indexed lendingManagerAddress
     );
     event VaultRemoved(address indexed vaultAddress);
-    event CollectionYieldShareUpdated(
-        address indexed vaultAddress,
-        address indexed collectionAddress,
-        uint16 oldSharePercentageBps,
-        uint16 newSharePercentageBps
-    );
-    event WeightFunctionConfigUpdated(
-        address indexed vaultAddress,
-        address indexed collectionAddress,
-        ICollectionRegistry.WeightFunction oldWeightFunction,
-        ICollectionRegistry.WeightFunction newWeightFunction
-    );
 
     error AddressZero();
     error CollectionNotWhitelisted(address collection);
