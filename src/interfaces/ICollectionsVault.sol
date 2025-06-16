@@ -81,6 +81,9 @@ interface ICollectionsVault is IERC4626 {
         address indexed collectionAddress, address indexed from, address indexed to, uint256 assets
     );
 
+    event CollectionAccessGranted(address indexed collection, address indexed operator);
+    event CollectionAccessRevoked(address indexed collection, address indexed operator);
+
     // --- Errors ---
 
     error LendingManagerDepositFailed();
@@ -94,6 +97,7 @@ interface ICollectionsVault is IERC4626 {
     error ExcessiveYieldAmount(address collection, uint256 requested, uint256 maxAllowed);
     error ShareBalanceUnderflow();
     error CollectionNotRegistered(address collectionAddress);
+    error UnauthorizedCollectionAccess(address collectionAddress, address operator);
 
     // --- Functions ---
 
@@ -124,6 +128,10 @@ interface ICollectionsVault is IERC4626 {
     function transferForCollection(address collectionAddress, address to, uint256 assets)
         external
         returns (uint256 shares);
+
+    function grantCollectionAccess(address collectionAddress, address operator) external;
+    function revokeCollectionAccess(address collectionAddress, address operator) external;
+    function isCollectionOperator(address collectionAddress, address operator) external view returns (bool);
 
     function repayBorrowBehalf(uint256 amount, address borrower) external;
     function repayBorrowBehalfBatch(uint256[] calldata amounts, address[] calldata borrowers, uint256 totalAmount)

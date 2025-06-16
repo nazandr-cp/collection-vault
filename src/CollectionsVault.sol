@@ -28,6 +28,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant DEBT_SUBSIDIZER_ROLE = keccak256("DEBT_SUBSIDIZER_ROLE");
 
+
     ILendingManager public lendingManager;
     IEpochManager public epochManager;
     ICollectionRegistry public collectionRegistry;
@@ -40,8 +41,17 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
     address[] private allCollectionAddresses;
     mapping(address => bool) private isCollectionRegistered;
 
+    mapping(address => mapping(address => bool)) private collectionOperators;
+
     mapping(uint256 => uint256) public epochYieldAllocations;
     mapping(uint256 => mapping(address => bool)) public epochCollectionYieldApplied;
+
+    modifier onlyCollectionOperator(address collection) {
+        if (!collectionOperators[collection][_msgSender()]) {
+            revert UnauthorizedCollectionAccess(collection, _msgSender());
+        }
+        _;
+    }
 
     constructor(
         IERC20 _asset,
@@ -152,6 +162,22 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         _grantRole(DEBT_SUBSIDIZER_ROLE, _debtSubsidizerAddress);
     }
 
+    function grantCollectionAccess(address collectionAddress, address operator) external onlyRole(ADMIN_ROLE) {
+        if (collectionAddress == address(0) || operator == address(0)) revert AddressZero();
+        collectionOperators[collectionAddress][operator] = true;
+        emit CollectionAccessGranted(collectionAddress, operator);
+    }
+
+    function revokeCollectionAccess(address collectionAddress, address operator) external onlyRole(ADMIN_ROLE) {
+        if (collectionAddress == address(0) || operator == address(0)) revert AddressZero();
+        collectionOperators[collectionAddress][operator] = false;
+        emit CollectionAccessRevoked(collectionAddress, operator);
+    }
+
+    function isCollectionOperator(address collectionAddress, address operator) public view returns (bool) {
+        return collectionOperators[collectionAddress][operator];
+    }
+
     function collectionTotalAssetsDeposited(address collectionAddress) public view override returns (uint256) {
         if (!isCollectionRegistered[collectionAddress]) {
             ICollectionRegistry.Collection memory registryCollectionTest =
@@ -190,6 +216,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         override(ICollectionsVault)
         nonReentrant
         whenNotPaused
+        onlyCollectionOperator(collectionAddress)
         returns (uint256 shares)
     {
         _updateGlobalDepositIndex();
@@ -222,6 +249,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         override(ICollectionsVault)
         nonReentrant
         whenNotPaused
+        onlyCollectionOperator(collectionAddress)
         returns (uint256 shares)
     {
         _updateGlobalDepositIndex();
@@ -250,6 +278,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         virtual
         nonReentrant
         whenNotPaused
+        onlyCollectionOperator(collectionAddress)
         returns (uint256 assets)
     {
         _updateGlobalDepositIndex();
@@ -278,6 +307,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         virtual
         nonReentrant
         whenNotPaused
+        onlyCollectionOperator(collectionAddress)
         returns (uint256 shares)
     {
         _updateGlobalDepositIndex();
@@ -313,6 +343,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         virtual
         nonReentrant
         whenNotPaused
+        onlyCollectionOperator(collectionAddress)
         returns (uint256 assets)
     {
         _updateGlobalDepositIndex();
@@ -375,6 +406,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         virtual
         nonReentrant
         whenNotPaused
+        onlyCollectionOperator(collectionAddress)
         returns (bool)
     {
         if (to == address(0)) revert AddressZero();
