@@ -148,12 +148,7 @@ contract DebtSubsidizer is
         emit WhitelistCollectionRemoved(vaultAddress, collectionAddress);
     }
 
-    function claimSubsidy(address vaultAddress, IDebtSubsidizer.ClaimData calldata claim)
-        external
-        override(IDebtSubsidizer)
-        nonReentrant
-        whenNotPaused
-    {
+    function _claimSubsidy(address vaultAddress, IDebtSubsidizer.ClaimData calldata claim) internal {
         if (_vaultsData[vaultAddress].cToken == address(0)) {
             revert IDebtSubsidizer.VaultNotRegistered(vaultAddress);
         }
@@ -196,6 +191,33 @@ contract DebtSubsidizer is
             emit SubsidyClaimed(vaultAddress, recipient, amountToSubsidize);
 
             ICollectionsVault(vaultAddress).repayBorrowBehalf(amountToSubsidize, recipient);
+        }
+    }
+
+    function claimSubsidy(address vaultAddress, IDebtSubsidizer.ClaimData calldata claim)
+        external
+        override(IDebtSubsidizer)
+        nonReentrant
+        whenNotPaused
+    {
+        _claimSubsidy(vaultAddress, claim);
+    }
+
+    function claimAllSubsidies(address[] calldata vaultAddresses, IDebtSubsidizer.ClaimData[] calldata claims)
+        external
+        override(IDebtSubsidizer)
+        nonReentrant
+        whenNotPaused
+    {
+        uint256 len = vaultAddresses.length;
+        if (len != claims.length) {
+            revert IDebtSubsidizer.ArrayLengthMismatch();
+        }
+        for (uint256 i = 0; i < len; ) {
+            _claimSubsidy(vaultAddresses[i], claims[i]);
+            unchecked {
+                ++i;
+            }
         }
     }
 
