@@ -74,6 +74,24 @@ contract EpochManager is Ownable, AccessControl, ReentrancyGuard {
      */
     event AutomatedSystemUpdated(address indexed newAutomatedSystem);
 
+    // Enhanced events with participant counts and processing metrics
+    event EpochStartedWithParticipants(
+        uint256 indexed epochId, uint256 startTime, uint256 endTime, uint256 participantCount
+    );
+    event EpochFinalizedWithMetrics(
+        uint256 indexed epochId,
+        uint256 totalYieldAvailable,
+        uint256 totalSubsidiesDistributed,
+        uint256 processingTimeMs
+    );
+    event EpochProcessingStartedWithMetrics(
+        uint256 indexed epochId, uint256 participantCount, uint256 estimatedProcessingTime
+    );
+
+    // Role management events with context
+    event EpochManagerRoleGranted(bytes32 indexed role, address indexed account, address sender, uint256 timestamp);
+    event EpochManagerRoleRevoked(bytes32 indexed role, address indexed account, address sender, uint256 timestamp);
+
     bytes32 public constant VAULT_ROLE = Roles.VAULT_ROLE;
 
     enum EpochStatus {
@@ -187,9 +205,8 @@ contract EpochManager is Ownable, AccessControl, ReentrancyGuard {
         newEpoch.totalYieldAvailable = 0;
         newEpoch.totalSubsidiesDistributed = 0;
         newEpoch.status = EpochStatus.Active;
-        // The mapping 'vaultYieldAllocated' is implicitly initialized as empty
-
         emit EpochStarted(currentEpochId, startTime, endTime);
+        emit EpochStartedWithParticipants(currentEpochId, startTime, endTime, 0);
     }
 
     /**
@@ -417,11 +434,83 @@ contract EpochManager is Ownable, AccessControl, ReentrancyGuard {
         emit ProcessingFailed(epochId, reason);
     }
 
+    function startNewEpochWithParticipants(uint256 participantCount) external nonReentrant onlyAutomatedSystem {
+        if (currentEpochId > 0) {
+            Epoch storage currentEpoch = epochs[currentEpochId];
+            if (currentEpoch.status != EpochStatus.Completed) {
+                revert EpochManager__InvalidEpochStatus(currentEpochId, currentEpoch.status, EpochStatus.Completed);
+            }
+        }
+
+        currentEpochId++;
+        uint256 startTime = block.timestamp;
+        uint256 endTime = startTime + epochDuration;
+
+        Epoch storage newEpoch = epochs[currentEpochId];
+        newEpoch.id = currentEpochId;
+        newEpoch.startTime = startTime;
+        newEpoch.endTime = endTime;
+        newEpoch.totalYieldAvailable = 0;
+        newEpoch.totalSubsidiesDistributed = 0;
+        newEpoch.status = EpochStatus.Active;
+
+        emit EpochStarted(currentEpochId, startTime, endTime);
+        emit EpochStartedWithParticipants(currentEpochId, startTime, endTime, participantCount);
+    }
+
+    function finalizeEpochWithMetrics(uint256 epochId, uint256 subsidiesDistributed, uint256 processingTimeMs)
+        external
+        nonReentrant
+        onlyAutomatedSystem
+    {
+        if (epochId == 0 || epochId > currentEpochId) {
+            revert EpochManager__InvalidEpochId(epochId);
+        }
+        Epoch storage epoch = epochs[epochId];
+
+        if (epoch.status != EpochStatus.Processing) {
+            revert EpochManager__InvalidEpochStatus(epochId, epoch.status, EpochStatus.Processing);
+        }
+
+        epoch.totalSubsidiesDistributed = subsidiesDistributed;
+        epoch.status = EpochStatus.Completed;
+
+        emit EpochFinalized(epochId, epoch.totalYieldAvailable, epoch.totalSubsidiesDistributed);
+        emit EpochFinalizedWithMetrics(
+            epochId, epoch.totalYieldAvailable, epoch.totalSubsidiesDistributed, processingTimeMs
+        );
+    }
+
+    function beginEpochProcessingWithMetrics(uint256 epochId, uint256 participantCount, uint256 estimatedProcessingTime)
+        external
+        nonReentrant
+        onlyAutomatedSystem
+    {
+        if (epochId == 0 || epochId > currentEpochId) {
+            revert EpochManager__InvalidEpochId(epochId);
+        }
+        Epoch storage epoch = epochs[epochId];
+
+        if (epoch.status != EpochStatus.Active) {
+            revert EpochManager__InvalidEpochStatus(epochId, epoch.status, EpochStatus.Active);
+        }
+        if (block.timestamp < epoch.endTime) {
+            revert EpochManager__EpochNotEnded(epochId, epoch.endTime);
+        }
+
+        epoch.status = EpochStatus.Processing;
+        emit EpochProcessingStarted(epochId);
+        emit ProcessingStarted(epochId);
+        emit EpochProcessingStartedWithMetrics(epochId, participantCount, estimatedProcessingTime);
+    }
+
     function grantVaultRole(address vault) external onlyOwner {
         _grantRole(VAULT_ROLE, vault);
+        emit EpochManagerRoleGranted(VAULT_ROLE, vault, msg.sender, block.timestamp);
     }
 
     function revokeVaultRole(address vault) external onlyOwner {
         _revokeRole(VAULT_ROLE, vault);
+        emit EpochManagerRoleRevoked(VAULT_ROLE, vault, msg.sender, block.timestamp);
     }
 }

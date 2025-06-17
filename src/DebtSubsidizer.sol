@@ -50,6 +50,11 @@ contract DebtSubsidizer is
     mapping(address => uint256) internal _userTotalSecondsClaimed;
     ICollectionRegistry public collectionRegistry;
 
+    uint256 public totalSubsidyPool;
+    uint256 public totalSubsidiesRemaining;
+    uint256 public totalEligibleUsers;
+    mapping(address => bool) public eligibleUsers;
+
     constructor() {
         _disableInitializers();
     }
@@ -101,7 +106,6 @@ contract DebtSubsidizer is
             revert IDebtSubsidizer.VaultNotRegistered(vaultAddress_);
         }
 
-        // Clean up whitelisted collections for this vault
         address[] memory whitelistedCollections = _vaultWhitelistedCollections[vaultAddress_];
         for (uint256 i = 0; i < whitelistedCollections.length; i++) {
             delete _isCollectionWhitelisted[vaultAddress_][whitelistedCollections[i]];
@@ -207,7 +211,23 @@ contract DebtSubsidizer is
                 revert IDebtSubsidizer.InsufficientYield();
             }
 
+            // Check subsidy pool availability
+            if (totalSubsidiesRemaining < amountToSubsidize) {
+                revert IDebtSubsidizer.InsufficientYield();
+            }
+
             _userTotalSecondsClaimed[recipient] += amountToSubsidize;
+
+            // Update subsidy pool tracking
+            totalSubsidiesRemaining -= amountToSubsidize;
+
+            // Add user to eligible users if not already
+            if (!eligibleUsers[recipient]) {
+                eligibleUsers[recipient] = true;
+                totalEligibleUsers++;
+                emit EligibleUserCountUpdated(totalEligibleUsers, true, recipient, block.timestamp);
+            }
+
             emit SubsidyClaimed(vaultAddress, recipient, amountToSubsidize);
 
             ICollectionsVault(vaultAddress).repayBorrowBehalf(amountToSubsidize, recipient);
@@ -233,7 +253,7 @@ contract DebtSubsidizer is
         if (len != claims.length) {
             revert IDebtSubsidizer.ArrayLengthMismatch();
         }
-        for (uint256 i = 0; i < len; ) {
+        for (uint256 i = 0; i < len;) {
             _claimSubsidy(vaultAddresses[i], claims[i]);
             unchecked {
                 ++i;
@@ -271,6 +291,59 @@ contract DebtSubsidizer is
 
     function paused() public view override(IDebtSubsidizer, PausableUpgradeable) returns (bool) {
         return super.paused();
+    }
+
+    function initializeSubsidyPool(uint256 poolAmount) external onlyOwner {
+        require(poolAmount > 0, "Pool amount must be greater than zero");
+        totalSubsidyPool = poolAmount;
+        totalSubsidiesRemaining = poolAmount;
+        emit SubsidyPoolInitialized(poolAmount, block.timestamp);
+    }
+
+    function updateSubsidyPool(uint256 newPoolAmount) external onlyOwner {
+        require(newPoolAmount >= 0, "Pool amount cannot be negative");
+        uint256 oldAmount = totalSubsidyPool;
+        totalSubsidyPool = newPoolAmount;
+        totalSubsidiesRemaining = newPoolAmount;
+        emit SubsidyPoolUpdated(oldAmount, newPoolAmount, block.timestamp);
+    }
+
+    function addEligibleUser(address user) external onlyOwner {
+        if (user == address(0)) {
+            revert IDebtSubsidizer.AddressZero();
+        }
+        if (!eligibleUsers[user]) {
+            eligibleUsers[user] = true;
+            totalEligibleUsers++;
+            emit EligibleUserCountUpdated(totalEligibleUsers, true, user, block.timestamp);
+        }
+    }
+
+    function removeEligibleUser(address user) external onlyOwner {
+        if (user == address(0)) {
+            revert IDebtSubsidizer.AddressZero();
+        }
+        if (eligibleUsers[user]) {
+            eligibleUsers[user] = false;
+            totalEligibleUsers--;
+            emit EligibleUserCountUpdated(totalEligibleUsers, false, user, block.timestamp);
+        }
+    }
+
+    function getTotalSubsidyPool() external view returns (uint256) {
+        return totalSubsidyPool;
+    }
+
+    function getTotalSubsidiesRemaining() external view returns (uint256) {
+        return totalSubsidiesRemaining;
+    }
+
+    function getTotalEligibleUsers() external view returns (uint256) {
+        return totalEligibleUsers;
+    }
+
+    function isUserEligible(address user) external view returns (bool) {
+        return eligibleUsers[user];
     }
 
     function userSecondsClaimed(address user) external view returns (uint256) {

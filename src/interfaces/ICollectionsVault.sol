@@ -6,7 +6,6 @@ import {ILendingManager} from "./ILendingManager.sol";
 import {IEpochManager} from "./IEpochManager.sol";
 
 interface ICollectionsVault is IERC4626 {
-    // --- Structs ---
     struct CollectionVaultData {
         uint256 totalAssetsDeposited;
         uint256 totalSharesMinted;
@@ -14,7 +13,6 @@ interface ICollectionsVault is IERC4626 {
         uint256 lastGlobalDepositIndex;
     }
 
-    // --- Events ---
     /**
      * @dev Emitted when assets are deposited into the vault on behalf of a collection.
      * @param collectionAddress The address of the collection.
@@ -84,7 +82,19 @@ interface ICollectionsVault is IERC4626 {
     event CollectionAccessGranted(address indexed collection, address indexed operator);
     event CollectionAccessRevoked(address indexed collection, address indexed operator);
 
-    // --- Errors ---
+    // Collection-specific yield and performance tracking events
+    event CollectionYieldGenerated(
+        address indexed collectionAddress, uint256 indexed yieldAmount, uint256 indexed timestamp
+    );
+    event CollectionBorrowVolumeUpdated(
+        address indexed collectionAddress,
+        uint256 indexed totalVolume,
+        uint256 indexed incrementAmount,
+        uint256 timestamp
+    );
+    event CollectionPerformanceUpdated(
+        address indexed collectionAddress, uint256 indexed performanceScore, uint256 timestamp
+    );
 
     error LendingManagerDepositFailed();
     error LendingManagerWithdrawFailed();
@@ -98,8 +108,6 @@ interface ICollectionsVault is IERC4626 {
     error ShareBalanceUnderflow();
     error CollectionNotRegistered(address collectionAddress);
     error UnauthorizedCollectionAccess(address collectionAddress, address operator);
-
-    // --- Functions ---
 
     function ADMIN_ROLE() external view returns (bytes32);
 
@@ -144,4 +152,11 @@ interface ICollectionsVault is IERC4626 {
     function applyCollectionYieldForEpoch(address collection, uint256 epochId) external;
     function resetEpochCollectionYieldFlags(uint256 epochId, address[] calldata collections) external;
     function getEpochYieldAllocated(uint256 epochId) external view returns (uint256 amount);
+
+    // Collection statistics getters
+    function getCollectionTotalBorrowVolume(address collectionAddress) external view returns (uint256);
+    function getCollectionTotalYieldGenerated(address collectionAddress) external view returns (uint256);
+    function getCollectionPerformanceScore(address collectionAddress) external view returns (uint256);
+    function updateCollectionPerformanceScore(address collectionAddress, uint256 score) external;
+    function recordCollectionBorrowVolume(address collectionAddress, uint256 borrowAmount) external;
 }

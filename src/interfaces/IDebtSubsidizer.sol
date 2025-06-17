@@ -6,9 +6,9 @@ import {ICollectionRegistry} from "./ICollectionRegistry.sol";
 
 interface IDebtSubsidizer {
     struct ClaimData {
-        address recipient; // recipient of the subsidy
-        uint256 totalEarned; // cumulative amount earned as encoded in the leaf
-        bytes32[] merkleProof; // Merkle proof for the claim
+        address recipient;
+        uint256 totalEarned;
+        bytes32[] merkleProof;
     }
 
     struct VaultInfo {
@@ -24,6 +24,15 @@ interface IDebtSubsidizer {
         address indexed vaultAddress, address indexed cTokenAddress, address indexed lendingManagerAddress
     );
     event VaultRemoved(address indexed vaultAddress);
+
+    // Subsidy pool management events
+    event SubsidyPoolInitialized(uint256 indexed poolAmount, uint256 indexed timestamp);
+    event SubsidyPoolUpdated(uint256 indexed oldAmount, uint256 indexed newAmount, uint256 timestamp);
+    event EligibleUserCountUpdated(uint256 indexed totalCount, bool indexed added, address user, uint256 timestamp);
+
+    // Role management events with context
+    event DebtSubsidizerRoleGranted(bytes32 indexed role, address indexed account, address sender, uint256 timestamp);
+    event DebtSubsidizerRoleRevoked(bytes32 indexed role, address indexed account, address sender, uint256 timestamp);
 
     error AddressZero();
     error CollectionNotWhitelisted(address collection);
@@ -47,23 +56,28 @@ interface IDebtSubsidizer {
     error MerkleRootNotSet();
     error AlreadyClaimed();
 
-    // --- Vault Management ---
     function addVault(address vaultAddress_, address lendingManagerAddress_) external;
     function removeVault(address vaultAddress_) external;
     function vault(address vaultAddress) external view returns (VaultInfo memory);
 
-    // --- Collection Management ---
     function whitelistCollection(address vaultAddress, address collectionAddress) external;
     function removeCollection(address vaultAddress, address collectionAddress) external;
     function isCollectionWhitelisted(address vaultAddress, address collectionAddress) external view returns (bool);
 
-    // --- User Information & Claims ---
     function claimSubsidy(address vaultAddress, ClaimData calldata claim) external;
     function claimAllSubsidies(address[] calldata vaultAddresses, ClaimData[] calldata claims) external;
     function updateMerkleRoot(address vaultAddress, bytes32 merkleRoot) external;
 
-    // --- Administrative Actions ---
     function pause() external;
     function unpause() external;
     function paused() external view returns (bool);
+
+    function initializeSubsidyPool(uint256 poolAmount) external;
+    function updateSubsidyPool(uint256 newPoolAmount) external;
+    function addEligibleUser(address user) external;
+    function removeEligibleUser(address user) external;
+    function getTotalSubsidyPool() external view returns (uint256);
+    function getTotalSubsidiesRemaining() external view returns (uint256);
+    function getTotalEligibleUsers() external view returns (uint256);
+    function isUserEligible(address user) external view returns (bool);
 }

@@ -17,6 +17,25 @@ interface ILendingManager {
     event WithdrawFromProtocol(address indexed caller, uint256 amount);
     event PrincipalReset(uint256 oldValue, address indexed trigger);
 
+    // Volume tracking events
+    event SupplyVolumeUpdated(uint256 indexed totalVolume, uint256 indexed incrementAmount, uint256 indexed timestamp);
+    event BorrowVolumeUpdated(uint256 indexed totalVolume, uint256 indexed incrementAmount, uint256 indexed timestamp);
+    event LiquidationVolumeUpdated(
+        uint256 indexed totalVolume, uint256 indexed incrementAmount, uint256 indexed timestamp
+    );
+
+    // Risk parameter events
+    event GlobalCollateralFactorUpdated(uint256 indexed newFactor, uint256 indexed timestamp);
+    event LiquidationIncentiveUpdated(uint256 indexed newIncentive, uint256 indexed timestamp);
+
+    // Market management events
+    event SupportedMarketAdded(address indexed market, uint256 indexed timestamp);
+    event SupportedMarketRemoved(address indexed market, uint256 indexed timestamp);
+
+    // Role management events with context
+    event LendingManagerRoleGranted(bytes32 indexed role, address indexed account, address sender, uint256 timestamp);
+    event LendingManagerRoleRevoked(bytes32 indexed role, address indexed account, address sender, uint256 timestamp);
+
     // --- Specific cToken interaction errors ---
     error LendingManagerCTokenMintFailed(uint256 errorCode);
     error LendingManagerCTokenMintFailedReason(string reason);
@@ -33,7 +52,6 @@ interface ILendingManager {
     error LendingManagerCTokenRepayBorrowBehalfFailed(uint256 errorCode);
     error LendingManagerCTokenRepayBorrowBehalfFailedReason(string reason);
     error LendingManagerCTokenRepayBorrowBehalfFailedBytes(bytes data);
-    // --- End Specific cToken interaction errors ---
 
     error AddressZero();
     error InsufficientBalanceInProtocol();
@@ -95,4 +113,19 @@ interface ILendingManager {
      * @return success True if the repayment was successful, otherwise an error code from the cToken.
      */
     function repayBorrowBehalf(address borrower, uint256 repayAmount) external returns (uint256);
+
+    function updateMarketParticipants(uint256 _totalMarketParticipants) external;
+    function recordLiquidationVolume(uint256 liquidationAmount) external;
+    function setGlobalCollateralFactor(uint256 _globalCollateralFactor) external;
+    function setLiquidationIncentive(uint256 _liquidationIncentive) external;
+    function addSupportedMarket(address market) external;
+    function removeSupportedMarket(address market) external;
+
+    function getSupportedMarkets() external view returns (address[] memory markets);
+    function getTotalMarketParticipants() external view returns (uint256);
+    function getTotalSupplyVolume() external view returns (uint256);
+    function getTotalBorrowVolume() external view returns (uint256);
+    function getTotalLiquidationVolume() external view returns (uint256);
+    function getGlobalCollateralFactor() external view returns (uint256);
+    function getLiquidationIncentive() external view returns (uint256);
 }

@@ -47,6 +47,11 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
     mapping(uint256 => uint256) public epochYieldAllocations;
     mapping(uint256 => mapping(address => bool)) public epochCollectionYieldApplied;
 
+    // Collection-specific statistics
+    mapping(address => uint256) public collectionTotalBorrowVolume;
+    mapping(address => uint256) public collectionTotalYieldGenerated;
+    mapping(address => uint256) public collectionPerformanceScore;
+
     modifier onlyCollectionOperator(address collection) {
         if (!collectionOperators[collection][_msgSender()]) {
             revert UnauthorizedCollectionAccess(collection, _msgSender());
@@ -118,6 +123,11 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
             if (yieldAccrued > 0) {
                 vaultData.totalAssetsDeposited += yieldAccrued;
                 totalAssetsDepositedAllCollections += yieldAccrued;
+
+                // Track collection-specific yield generation
+                collectionTotalYieldGenerated[collectionAddress] += yieldAccrued;
+                emit CollectionYieldGenerated(collectionAddress, yieldAccrued, block.timestamp);
+
                 emit CollectionYieldAccrued(
                     collectionAddress, yieldAccrued, vaultData.totalAssetsDeposited, globalDepositIndex, lastIndex
                 );
@@ -424,19 +434,14 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
 
         CollectionVaultData storage vaultData = collectionVaultsData[collectionAddress];
         if (!isCollectionRegistered[collectionAddress]) {
-            // This check is good, _ensure... would have been called by _accrue...
             revert CollectionNotRegistered(collectionAddress);
         }
 
-        // Use collectionTotalAssetsDeposited view function which considers pending yield
         uint256 currentTotalAssetsView = collectionTotalAssetsDeposited(collectionAddress);
         if (amount > currentTotalAssetsView) {
-            // Check against the view that includes potential yield
             revert CollectionInsufficientBalance(collectionAddress, amount, currentTotalAssetsView);
         }
-        // However, for actual deduction, use the stored vaultData.totalAssetsDeposited
         if (amount > vaultData.totalAssetsDeposited) {
-            // Double check against actual stored assets if different from view logic
             revert CollectionInsufficientBalance(collectionAddress, amount, vaultData.totalAssetsDeposited);
         }
 
@@ -664,6 +669,40 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
                 ++i;
             }
         }
+    }
+
+    function getCollectionTotalBorrowVolume(address collectionAddress) external view returns (uint256) {
+        return collectionTotalBorrowVolume[collectionAddress];
+    }
+
+    function getCollectionTotalYieldGenerated(address collectionAddress) external view returns (uint256) {
+        return collectionTotalYieldGenerated[collectionAddress];
+    }
+
+    function getCollectionPerformanceScore(address collectionAddress) external view returns (uint256) {
+        return collectionPerformanceScore[collectionAddress];
+    }
+
+    function updateCollectionPerformanceScore(address collectionAddress, uint256 score)
+        external
+        onlyRole(ADMIN_ROLE)
+        whenNotPaused
+    {
+        if (collectionAddress == address(0)) revert AddressZero();
+        collectionPerformanceScore[collectionAddress] = score;
+        emit CollectionPerformanceUpdated(collectionAddress, score, block.timestamp);
+    }
+
+    function recordCollectionBorrowVolume(address collectionAddress, uint256 borrowAmount)
+        external
+        onlyRole(ADMIN_ROLE)
+        whenNotPaused
+    {
+        if (collectionAddress == address(0)) revert AddressZero();
+        collectionTotalBorrowVolume[collectionAddress] += borrowAmount;
+        emit CollectionBorrowVolumeUpdated(
+            collectionAddress, collectionTotalBorrowVolume[collectionAddress], borrowAmount, block.timestamp
+        );
     }
 
     function pause() external onlyRole(ADMIN_ROLE) {

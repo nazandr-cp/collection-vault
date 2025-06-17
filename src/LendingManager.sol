@@ -36,6 +36,17 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
     uint256 public cachedExchangeRate;
     uint256 public lastExchangeRateTimestamp;
 
+    // Statistical tracking variables
+    mapping(address => bool) public supportedMarkets;
+    uint256 public totalMarketParticipants;
+    uint256 public totalSupplyVolume;
+    uint256 public totalBorrowVolume;
+    uint256 public totalLiquidationVolume;
+
+    // Risk parameters
+    uint256 public globalCollateralFactor;
+    uint256 public liquidationIncentive;
+
     constructor(address initialAdmin, address vaultAddress, address _assetAddress, address _cTokenAddress) {
         if (
             initialAdmin == address(0) || vaultAddress == address(0) || _assetAddress == address(0)
@@ -59,6 +70,15 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
 
         cachedExchangeRate = CTokenInterface(address(_cToken)).exchangeRateStored();
         lastExchangeRateTimestamp = block.timestamp;
+
+        supportedMarkets[address(_cToken)] = true;
+        totalMarketParticipants = 0;
+        totalSupplyVolume = 0;
+        totalBorrowVolume = 0;
+        totalLiquidationVolume = 0;
+
+        globalCollateralFactor = 7500;
+        liquidationIncentive = 500;
     }
 
     modifier onlyVault() {
@@ -124,8 +144,10 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         }
 
         totalPrincipalDeposited += amount;
+        totalSupplyVolume += amount;
 
         emit DepositToProtocol(msg.sender, amount);
+        emit SupplyVolumeUpdated(totalSupplyVolume, amount, block.timestamp);
         return true;
     }
 
@@ -158,7 +180,6 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
             revert LendingManagerCTokenRedeemUnderlyingFailedBytes(data);
         }
         uint256 balanceAfterRedeem = _asset.balanceOf(address(this));
-        // If redeemUnderlying(amount) is successful, this contract should receive 'amount' of the underlying asset.
         if (balanceAfterRedeem != balanceBeforeRedeem + amount) {
             revert LendingManager__BalanceCheckFailed(
                 "LM: withdraw cToken.redeemUnderlying receipt mismatch",
@@ -200,22 +221,26 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
     function grantVaultRole(address newVault) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
         if (newVault == address(0)) revert AddressZero();
         _grantRole(VAULT_ROLE, newVault);
+        emit LendingManagerRoleGranted(VAULT_ROLE, newVault, msg.sender, block.timestamp);
     }
 
     function revokeVaultRole(address vault) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
         if (vault == address(0)) revert AddressZero();
         _revokeRole(VAULT_ROLE, vault);
+        emit LendingManagerRoleRevoked(VAULT_ROLE, vault, msg.sender, block.timestamp);
     }
 
     function grantAdminRole(address newAdmin) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
         if (newAdmin == address(0)) revert AddressZero();
         _grantRole(ADMIN_ROLE, newAdmin);
+        emit LendingManagerRoleGranted(ADMIN_ROLE, newAdmin, msg.sender, block.timestamp);
     }
 
     function revokeAdminRole(address admin) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
         if (admin == address(0)) revert AddressZero();
         require(getRoleMemberCount(ADMIN_ROLE) > 1, "Cannot remove last admin");
         _revokeRole(ADMIN_ROLE, admin);
+        emit LendingManagerRoleRevoked(ADMIN_ROLE, admin, msg.sender, block.timestamp);
     }
 
     function grantAdminRoleAsDefaultAdmin(address newAdmin)
@@ -226,6 +251,7 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
     {
         if (newAdmin == address(0)) revert AddressZero();
         _grantRole(ADMIN_ROLE, newAdmin);
+        emit LendingManagerRoleGranted(ADMIN_ROLE, newAdmin, msg.sender, block.timestamp);
     }
 
     function revokeAdminRoleAsDefaultAdmin(address admin)
@@ -237,6 +263,7 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         if (admin == address(0)) revert AddressZero();
         require(getRoleMemberCount(ADMIN_ROLE) > 1, "Cannot remove last admin");
         _revokeRole(ADMIN_ROLE, admin);
+        emit LendingManagerRoleRevoked(ADMIN_ROLE, admin, msg.sender, block.timestamp);
     }
 
     function redeemAllCTokens(address recipient)
@@ -255,23 +282,15 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         }
 
         uint256 accrualResult = CTokenInterface(address(_cToken)).accrueInterest();
-        accrualResult; // Consume accrualResult to avoid unused variable warning
+        accrualResult;
 
-        // Calculate the expected amount of underlying tokens to receive *before* redemption.
         uint256 exchangeRate = CTokenInterface(address(_cToken)).exchangeRateStored();
-        // This check is important because if exchangeRate is 0, the multiplication below would be 0.
-        // While cTokenBalance > 0, if exchangeRate is 0, it implies an issue or no value.
         if (exchangeRate == 0 && cTokenBalance > 0) {
-            // This case should ideally not happen if cTokens are held, but as a safeguard.
             revert LendingManager__BalanceCheckFailed("LM: redeemAll cToken.redeem exchange rate is zero", 1, 0);
         }
         uint256 expectedUnderlyingToReceive = (cTokenBalance * exchangeRate) / EXCHANGE_RATE_DENOMINATOR;
 
         uint256 balanceBeforeRedeem = _asset.balanceOf(address(this));
-        // uint256 redeemResult = _cToken.redeem(cTokenBalance); // Redeem all cTokens
-        // if (redeemResult != 0) {
-        //     revert RedeemFailed(); // Old generic error
-        // }
         try _cToken.redeem(cTokenBalance) returns (uint256 redeemResult) {
             if (redeemResult != 0) {
                 revert LendingManagerCTokenRedeemFailed(redeemResult);
@@ -282,9 +301,8 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
             revert LendingManagerCTokenRedeemFailedBytes(data);
         }
         uint256 balanceAfterRedeem = _asset.balanceOf(address(this));
-        amountRedeemed = balanceAfterRedeem - balanceBeforeRedeem; // This is the actual amount received after any fees
+        amountRedeemed = balanceAfterRedeem - balanceBeforeRedeem;
 
-        // Allow minor rounding differences when comparing the actual amount received.
         uint256 diff = amountRedeemed > expectedUnderlyingToReceive
             ? amountRedeemed - expectedUnderlyingToReceive
             : expectedUnderlyingToReceive - amountRedeemed;
@@ -323,20 +341,16 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
     function repayBorrowBehalf(address borrower, uint256 repayAmount)
         external
         override
-        onlyVault // Or a new role if CollectionsVault shouldn't directly call this
+        onlyVault
         nonReentrant
         whenNotPaused
         returns (uint256)
     {
         if (borrower == address(0)) revert AddressZero();
-        if (repayAmount == 0) return 0; // No error, just nothing to do
+        if (repayAmount == 0) return 0;
 
-        // Ensure this contract (LendingManager) has enough underlying to cover the repayment
-        // The actual transfer of 'repayAmount' from CollectionsVault to LendingManager
-        // must happen *before* this function is called.
-        // This function assumes LendingManager already holds the assets.
         uint256 balanceBeforeTransfer = _asset.balanceOf(address(this));
-        _asset.safeTransferFrom(msg.sender, address(this), repayAmount); // Vault sends asset to LM
+        _asset.safeTransferFrom(msg.sender, address(this), repayAmount);
         uint256 balanceAfterTransfer = _asset.balanceOf(address(this));
         if (balanceAfterTransfer != balanceBeforeTransfer + repayAmount) {
             revert LendingManager__BalanceCheckFailed(
@@ -346,7 +360,7 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
 
         uint256 cTokenError;
         try _cToken.repayBorrowBehalf(borrower, repayAmount) returns (uint256 repayResult) {
-            cTokenError = repayResult; // 0 on success, non-zero on failure
+            cTokenError = repayResult;
         } catch Error(string memory reason) {
             revert LendingManagerCTokenRepayBorrowBehalfFailedReason(reason);
         } catch (bytes memory data) {
@@ -354,18 +368,89 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         }
 
         if (cTokenError != 0) {
-            // Optionally, revert here or let the caller handle the cTokenError
             revert LendingManagerCTokenRepayBorrowBehalfFailed(cTokenError);
         }
-        // If successful, the cToken would have pulled 'repayAmount' of '_asset' from this contract.
-        // No need to adjust totalPrincipalDeposited as this is a passthrough for repayment.
-        return cTokenError; // Should be 0 if successful
+
+        totalBorrowVolume += repayAmount;
+        emit BorrowVolumeUpdated(totalBorrowVolume, repayAmount, block.timestamp);
+
+        return cTokenError;
     }
 
     function updateExchangeRate() external onlyRole(ADMIN_ROLE) whenNotPaused returns (uint256 newRate) {
         newRate = CTokenInterface(address(_cToken)).exchangeRateCurrent();
         cachedExchangeRate = newRate;
         lastExchangeRateTimestamp = block.timestamp;
+    }
+
+    // --- Statistical Tracking Functions ---
+
+    function updateMarketParticipants(uint256 _totalMarketParticipants) external onlyRole(ADMIN_ROLE) whenNotPaused {
+        totalMarketParticipants = _totalMarketParticipants;
+    }
+
+    function recordLiquidationVolume(uint256 liquidationAmount) external onlyRole(ADMIN_ROLE) whenNotPaused {
+        totalLiquidationVolume += liquidationAmount;
+        emit LiquidationVolumeUpdated(totalLiquidationVolume, liquidationAmount, block.timestamp);
+    }
+
+    function setGlobalCollateralFactor(uint256 _globalCollateralFactor) external onlyRole(ADMIN_ROLE) whenNotPaused {
+        require(_globalCollateralFactor <= BASIS_POINTS_DENOMINATOR, "Collateral factor cannot exceed 100%");
+        globalCollateralFactor = _globalCollateralFactor;
+        emit GlobalCollateralFactorUpdated(_globalCollateralFactor, block.timestamp);
+    }
+
+    function setLiquidationIncentive(uint256 _liquidationIncentive) external onlyRole(ADMIN_ROLE) whenNotPaused {
+        require(_liquidationIncentive <= BASIS_POINTS_DENOMINATOR, "Liquidation incentive cannot exceed 100%");
+        liquidationIncentive = _liquidationIncentive;
+        emit LiquidationIncentiveUpdated(_liquidationIncentive, block.timestamp);
+    }
+
+    function addSupportedMarket(address market) external onlyRole(ADMIN_ROLE) whenNotPaused {
+        if (market == address(0)) revert AddressZero();
+        if (!supportedMarkets[market]) {
+            supportedMarkets[market] = true;
+            emit SupportedMarketAdded(market, block.timestamp);
+        }
+    }
+
+    function removeSupportedMarket(address market) external onlyRole(ADMIN_ROLE) whenNotPaused {
+        if (market == address(0)) revert AddressZero();
+        if (supportedMarkets[market]) {
+            supportedMarkets[market] = false;
+            emit SupportedMarketRemoved(market, block.timestamp);
+        }
+    }
+
+    // --- Getter Functions for Statistics ---
+
+    function getSupportedMarkets() external view returns (address[] memory markets) {
+        markets = new address[](1);
+        markets[0] = address(_cToken);
+    }
+
+    function getTotalMarketParticipants() external view returns (uint256) {
+        return totalMarketParticipants;
+    }
+
+    function getTotalSupplyVolume() external view returns (uint256) {
+        return totalSupplyVolume;
+    }
+
+    function getTotalBorrowVolume() external view returns (uint256) {
+        return totalBorrowVolume;
+    }
+
+    function getTotalLiquidationVolume() external view returns (uint256) {
+        return totalLiquidationVolume;
+    }
+
+    function getGlobalCollateralFactor() external view returns (uint256) {
+        return globalCollateralFactor;
+    }
+
+    function getLiquidationIncentive() external view returns (uint256) {
+        return liquidationIncentive;
     }
 
     // --- Pausable Functions ---
