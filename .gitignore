@@ -23,3 +23,4 @@ docs/
 .roo
 broadcast
 verification_*
+crytic-export/

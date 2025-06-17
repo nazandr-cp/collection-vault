@@ -45,6 +45,7 @@ contract DebtSubsidizer is
     mapping(address => mapping(address => uint256)) internal _claimedTotals; // vault => user => total claimed
 
     mapping(address => mapping(address => bool)) internal _isCollectionWhitelisted;
+    mapping(address => address[]) internal _vaultWhitelistedCollections; // vault => array of whitelisted collections
     mapping(address => mapping(address => uint256)) internal _userSecondsClaimed;
     mapping(address => uint256) internal _userTotalSecondsClaimed;
     ICollectionRegistry public collectionRegistry;
@@ -100,6 +101,13 @@ contract DebtSubsidizer is
             revert IDebtSubsidizer.VaultNotRegistered(vaultAddress_);
         }
 
+        // Clean up whitelisted collections for this vault
+        address[] memory whitelistedCollections = _vaultWhitelistedCollections[vaultAddress_];
+        for (uint256 i = 0; i < whitelistedCollections.length; i++) {
+            delete _isCollectionWhitelisted[vaultAddress_][whitelistedCollections[i]];
+        }
+        delete _vaultWhitelistedCollections[vaultAddress_];
+
         delete _vaultsData[vaultAddress_];
 
         emit VaultRemoved(vaultAddress_);
@@ -130,6 +138,7 @@ contract DebtSubsidizer is
         }
 
         _isCollectionWhitelisted[vaultAddress][collectionAddress] = true;
+        _vaultWhitelistedCollections[vaultAddress].push(collectionAddress);
 
         emit NewCollectionWhitelisted(vaultAddress, collectionAddress);
     }
@@ -145,6 +154,17 @@ contract DebtSubsidizer is
         }
 
         delete _isCollectionWhitelisted[vaultAddress][collectionAddress];
+
+        // Remove from the whitelisted collections array
+        address[] storage collections = _vaultWhitelistedCollections[vaultAddress];
+        for (uint256 i = 0; i < collections.length; i++) {
+            if (collections[i] == collectionAddress) {
+                collections[i] = collections[collections.length - 1];
+                collections.pop();
+                break;
+            }
+        }
+
         emit WhitelistCollectionRemoved(vaultAddress, collectionAddress);
     }
 
