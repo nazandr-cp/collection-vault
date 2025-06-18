@@ -55,6 +55,13 @@ contract DebtSubsidizer is
     uint256 public totalEligibleUsers;
     mapping(address => bool) public eligibleUsers;
 
+    mapping(address => bool) internal _vaultRemoved;
+    mapping(address => mapping(address => bool)) internal _collectionRemoved;
+    mapping(address => bool) internal _vaultHasDeposits;
+
+    event VaultDeactivated(address indexed vault);
+    event CollectionDeactivated(address indexed vault, address indexed collection);
+
     constructor() {
         _disableInitializers();
     }
@@ -94,6 +101,7 @@ contract DebtSubsidizer is
         }
 
         _vaultsData[vaultAddress_].cToken = cTokenAddress;
+        _vaultRemoved[vaultAddress_] = false;
 
         emit VaultAdded(vaultAddress_, cTokenAddress, lendingManagerAddress_);
     }
@@ -106,13 +114,21 @@ contract DebtSubsidizer is
             revert IDebtSubsidizer.VaultNotRegistered(vaultAddress_);
         }
 
+        if (_vaultHasDeposits[vaultAddress_]) {
+            _vaultRemoved[vaultAddress_] = true;
+            emit VaultDeactivated(vaultAddress_);
+            return;
+        }
+
         address[] memory whitelistedCollections = _vaultWhitelistedCollections[vaultAddress_];
         for (uint256 i = 0; i < whitelistedCollections.length; i++) {
             delete _isCollectionWhitelisted[vaultAddress_][whitelistedCollections[i]];
+            delete _collectionRemoved[vaultAddress_][whitelistedCollections[i]];
         }
         delete _vaultWhitelistedCollections[vaultAddress_];
 
         delete _vaultsData[vaultAddress_];
+        delete _vaultRemoved[vaultAddress_];
 
         emit VaultRemoved(vaultAddress_);
     }
@@ -155,6 +171,11 @@ contract DebtSubsidizer is
         if (vaultAddress == address(0) || collectionAddress == address(0)) revert IDebtSubsidizer.AddressZero();
         if (!_isCollectionWhitelisted[vaultAddress][collectionAddress]) {
             revert IDebtSubsidizer.CollectionNotWhitelistedInVault(vaultAddress, collectionAddress);
+        }
+        if (_vaultHasDeposits[vaultAddress]) {
+            _collectionRemoved[vaultAddress][collectionAddress] = true;
+            emit CollectionDeactivated(vaultAddress, collectionAddress);
+            return;
         }
 
         delete _isCollectionWhitelisted[vaultAddress][collectionAddress];
@@ -204,6 +225,7 @@ contract DebtSubsidizer is
         _claimedTotals[vaultAddress][recipient] = newTotal;
 
         if (amountToSubsidize > 0) {
+            _vaultHasDeposits[vaultAddress] = true;
             IEpochManager em = ICollectionsVault(vaultAddress).epochManager();
             uint256 epochId = em.getCurrentEpochId();
             uint256 remainingYield = ICollectionsVault(vaultAddress).getEpochYieldAllocated(epochId);
@@ -278,7 +300,7 @@ contract DebtSubsidizer is
         override(IDebtSubsidizer)
         returns (bool)
     {
-        return _isCollectionWhitelisted[vaultAddress][collectionAddress];
+        return _isCollectionWhitelisted[vaultAddress][collectionAddress] && !_collectionRemoved[vaultAddress][collectionAddress];
     }
 
     function pause() external override(IDebtSubsidizer) onlyOwner {
@@ -344,6 +366,14 @@ contract DebtSubsidizer is
 
     function isUserEligible(address user) external view returns (bool) {
         return eligibleUsers[user];
+    }
+
+    function isVaultRemoved(address vaultAddress) external view returns (bool) {
+        return _vaultRemoved[vaultAddress];
+    }
+
+    function isCollectionRemoved(address vaultAddress, address collection) external view returns (bool) {
+        return _collectionRemoved[vaultAddress][collection];
     }
 
     function userSecondsClaimed(address user) external view returns (uint256) {
