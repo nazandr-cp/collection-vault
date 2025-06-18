@@ -9,15 +9,35 @@ import {Roles} from "./Roles.sol";
 contract CollectionRegistry is ICollectionRegistry, AccessControl {
     bytes32 public constant MANAGER_ROLE = Roles.MANAGER_ROLE;
 
+    event CollectionRemoved(address indexed collection);
+    event CollectionReactivated(address indexed collection);
+
     mapping(address => ICollectionRegistry.Collection) private _collections;
     address[] private _allCollections;
     mapping(address => bool) private _isRegistered;
+    mapping(address => bool) private _isRemoved;
     mapping(address => mapping(address => bool)) private _collectionHasVault;
     mapping(address => uint256) private _vaultIndexInCollection;
 
     constructor(address admin) {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(MANAGER_ROLE, admin);
+    }
+
+    function removeCollection(address collection) external onlyRole(MANAGER_ROLE) {
+        require(_isRegistered[collection], "CollectionRegistry: Not registered");
+        if (!_isRemoved[collection]) {
+            _isRemoved[collection] = true;
+            emit CollectionRemoved(collection);
+        }
+    }
+
+    function reactivateCollection(address collection) external onlyRole(MANAGER_ROLE) {
+        require(_isRegistered[collection], "CollectionRegistry: Not registered");
+        if (_isRemoved[collection]) {
+            _isRemoved[collection] = false;
+            emit CollectionReactivated(collection);
+        }
     }
 
     function registerCollection(ICollectionRegistry.Collection calldata collectionData)
@@ -31,6 +51,7 @@ contract CollectionRegistry is ICollectionRegistry, AccessControl {
             _isRegistered[collectionAddress] = true;
             _allCollections.push(collectionAddress);
             _collections[collectionAddress] = collectionData;
+            _isRemoved[collectionAddress] = false;
         }
     }
 
@@ -79,15 +100,34 @@ contract CollectionRegistry is ICollectionRegistry, AccessControl {
     // --- View Functions ---
 
     function getCollection(address collection) external view override returns (ICollectionRegistry.Collection memory) {
-        require(_isRegistered[collection], "CollectionRegistry: Not registered");
+        require(_isRegistered[collection] && !_isRemoved[collection], "CollectionRegistry: Not registered");
         return _collections[collection];
     }
 
     function isRegistered(address collection) external view override returns (bool) {
-        return _isRegistered[collection];
+        return _isRegistered[collection] && !_isRemoved[collection];
+    }
+
+    function isCollectionRemoved(address collection) external view returns (bool) {
+        return _isRemoved[collection];
     }
 
     function allCollections() external view override returns (address[] memory) {
-        return _allCollections;
+        uint256 length = _allCollections.length;
+        uint256 count;
+        for (uint256 i = 0; i < length; i++) {
+            if (!_isRemoved[_allCollections[i]]) {
+                count++;
+            }
+        }
+        address[] memory active = new address[](count);
+        uint256 index;
+        for (uint256 i = 0; i < length; i++) {
+            address col = _allCollections[i];
+            if (!_isRemoved[col]) {
+                active[index++] = col;
+            }
+        }
+        return active;
     }
 }
