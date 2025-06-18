@@ -1,0 +1,44 @@
+FROM ghcr.io/foundry-rs/foundry:latest
+
+# Install required system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    jq \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /workspace
+
+# Copy foundry configuration
+COPY foundry.toml .
+COPY remappings.txt .
+
+# Copy source files
+COPY src/ src/
+COPY test/ test/
+COPY script/ script/
+COPY lib/ lib/
+
+# Copy package manager files if they exist
+COPY soldeer.lock* ./
+COPY .env.test* ./
+
+# Install dependencies and build
+RUN forge install --no-commit || true
+RUN forge build
+
+# Create directories for artifacts
+RUN mkdir -p out test/artifacts
+
+# Health check script
+RUN echo '#!/bin/bash\nforge --version' > /healthcheck.sh && chmod +x /healthcheck.sh
+
+# Default command for contract deployment and testing
+CMD ["forge", "test", "--match-contract", "MainWorkflowIntegrationTest", "-vvv"]
+
+# Expose commonly used ports
+EXPOSE 8545
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD /healthcheck.sh
