@@ -34,6 +34,8 @@ interface IDebtSubsidizer {
     event DebtSubsidizerRoleGranted(bytes32 indexed role, address indexed account, address sender, uint256 timestamp);
     event DebtSubsidizerRoleRevoked(bytes32 indexed role, address indexed account, address sender, uint256 timestamp);
 
+    event CollectionRegistryUpdated(address indexed oldRegistry, address indexed newRegistry);
+
     error AddressZero();
     error CollectionNotWhitelisted(address collection);
     error CollectionAlreadyExists(address collection);

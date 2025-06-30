@@ -9,9 +9,6 @@ import {Roles} from "./Roles.sol";
 contract CollectionRegistry is ICollectionRegistry, AccessControl {
     bytes32 public constant MANAGER_ROLE = Roles.MANAGER_ROLE;
 
-    event CollectionRemoved(address indexed collection);
-    event CollectionReactivated(address indexed collection);
-
     mapping(address => ICollectionRegistry.Collection) private _collections;
     address[] private _allCollections;
     mapping(address => bool) private _isRegistered;
@@ -52,24 +49,33 @@ contract CollectionRegistry is ICollectionRegistry, AccessControl {
             _allCollections.push(collectionAddress);
             _collections[collectionAddress] = collectionData;
             _isRemoved[collectionAddress] = false;
+
+            emit CollectionRegistered(
+                collectionAddress,
+                collectionData.collectionType,
+                collectionData.weightFunction.fnType,
+                collectionData.weightFunction.p1,
+                collectionData.weightFunction.p2,
+                collectionData.yieldSharePercentage
+            );
         }
     }
 
     function setYieldShare(address collection, uint16 share) external override onlyRole(MANAGER_ROLE) {
         require(_isRegistered[collection], "CollectionRegistry: Not registered");
+        uint16 oldShare = _collections[collection].yieldSharePercentage;
         _collections[collection].yieldSharePercentage = share;
+        emit YieldShareUpdated(collection, oldShare, share);
     }
 
-    function setWeightFunction(
-        address collection,
-        ICollectionRegistry.WeightFunction calldata weightFunction,
-        int256 p1,
-        int256 p2
-    ) external override onlyRole(MANAGER_ROLE) {
+    function setWeightFunction(address collection, ICollectionRegistry.WeightFunction calldata weightFunction)
+        external
+        override
+        onlyRole(MANAGER_ROLE)
+    {
         require(_isRegistered[collection], "CollectionRegistry: Not registered");
         _collections[collection].weightFunction = weightFunction;
-        _collections[collection].p1 = p1;
-        _collections[collection].p2 = p2;
+        emit WeightFunctionUpdated(collection, weightFunction.fnType, weightFunction.p1, weightFunction.p2);
     }
 
     function addVaultToCollection(address collection, address vault) external override onlyRole(MANAGER_ROLE) {
@@ -80,6 +86,7 @@ contract CollectionRegistry is ICollectionRegistry, AccessControl {
         _collections[collection].vaults.push(vault);
         _collectionHasVault[collection][vault] = true;
         _vaultIndexInCollection[vault] = _collections[collection].vaults.length - 1;
+        emit VaultAddedToCollection(collection, vault);
     }
 
     function removeVaultFromCollection(address collection, address vault) external override onlyRole(MANAGER_ROLE) {
@@ -95,6 +102,7 @@ contract CollectionRegistry is ICollectionRegistry, AccessControl {
 
         delete _collectionHasVault[collection][vault];
         delete _vaultIndexInCollection[vault];
+        emit VaultRemovedFromCollection(collection, vault);
     }
 
     // --- View Functions ---

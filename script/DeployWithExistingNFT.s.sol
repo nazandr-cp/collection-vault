@@ -3,8 +3,6 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Script.sol";
 import {MockERC20} from "../src/mocks/MockERC20.sol";
-import {MockERC721} from "../src/mocks/MockERC721.sol";
-import {SimpleMockCToken} from "../src/mocks/SimpleMockCToken.sol";
 import {LendingManager} from "../src/LendingManager.sol";
 import {CollectionsVault} from "../src/CollectionsVault.sol";
 import {EpochManager} from "../src/EpochManager.sol";
@@ -12,49 +10,43 @@ import {CollectionRegistry} from "../src/CollectionRegistry.sol";
 import {ICollectionRegistry} from "../src/interfaces/ICollectionRegistry.sol";
 import {DebtSubsidizer} from "../src/DebtSubsidizer.sol";
 import {ComptrollerInterface, InterestRateModel} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol";
-import {Comptroller} from "compound-protocol-2.8.1/contracts/Comptroller.sol";
-import {WhitePaperInterestRateModel} from "compound-protocol-2.8.1/contracts/WhitePaperInterestRateModel.sol";
+import {CErc20Immutable} from "compound-protocol-2.8.1/contracts/CErc20Immutable.sol";
 import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 
-contract DeployAndSave is Script {
+contract DeployWithExistingNFT is Script {
     function run() external {
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
+        address existingNFT = vm.envAddress("EXISTING_NFT_ADDRESS");
         vm.startBroadcast(deployerKey);
 
-        // Deployments
-        MockERC20 asset = new MockERC20("Mock Token", "MOCK", 18, 0);
-        MockERC721 nft = new MockERC721("MockNFT", "MNFT");
-        Comptroller comp = new Comptroller();
-        WhitePaperInterestRateModel irm = new WhitePaperInterestRateModel(0, 0);
-        SimpleMockCToken cToken = new SimpleMockCToken(
-            address(asset),
-            ComptrollerInterface(address(comp)),
-            InterestRateModel(address(irm)),
-            2e28,
-            "Mock cToken",
-            "mcTOKEN",
-            18,
-            payable(msg.sender)
-        );
-        LendingManager lendingManager = new LendingManager(msg.sender, msg.sender, address(asset), address(cToken));
+        // Use already deployed Compound addresses
+        address asset = 0x4dd42d4559f7F5026364550FABE7824AECF5a1d1; // underlyingAddr
+        address cToken = 0x642d97319cd50D2E5FC7F0FE022Ed87407045e90; // cTokenAddr
+        address comptroller = 0x7E81fAaF1132A17DCc0C76b1280E0C0e598D5635;
+        // address interestRateModel = 0x13431E4D4a4281Be1A405681ECADb9F445Cd8Eb6;
+
+        // Deploy new contracts that depend on Compound
+        LendingManager lendingManager = new LendingManager(msg.sender, msg.sender, asset, cToken);
         CollectionRegistry collectionRegistry = new CollectionRegistry(msg.sender);
         CollectionsVault vault = new CollectionsVault(
-            asset, "Vault", "vMOCK", msg.sender, address(lendingManager), address(collectionRegistry)
+            MockERC20(asset), "Vault", "vMOCK", msg.sender, address(lendingManager), address(collectionRegistry)
         );
         EpochManager epochManager = new EpochManager(1 days, msg.sender, msg.sender);
         DebtSubsidizer debtImpl = new DebtSubsidizer();
+
         bytes memory initData =
             abi.encodeWithSelector(DebtSubsidizer.initialize.selector, msg.sender, address(collectionRegistry));
+
         TransparentUpgradeableProxy proxy = new TransparentUpgradeableProxy(address(debtImpl), msg.sender, initData);
         DebtSubsidizer debtSubsidizer = DebtSubsidizer(address(proxy));
 
-        // Register the NFT collection
+        // Register the existing NFT collection
         ICollectionRegistry.Collection memory collectionData = ICollectionRegistry.Collection({
-            collectionAddress: address(nft),
+            collectionAddress: existingNFT,
             collectionType: ICollectionRegistry.CollectionType.ERC721,
             weightFunction: ICollectionRegistry.WeightFunction({
                 fnType: ICollectionRegistry.WeightFunctionType.LINEAR,
-                p1: 0,
+                p1: 1.0e18, // 1.0 in 18 decimals
                 p2: 0
             }),
             yieldSharePercentage: 5000,
@@ -68,32 +60,24 @@ contract DeployAndSave is Script {
         vault.setEpochManager(address(epochManager));
         debtSubsidizer.addVault(address(vault), address(lendingManager));
         vault.setDebtSubsidizer(address(debtSubsidizer));
-        debtSubsidizer.whitelistCollection(address(vault), address(nft));
-        collectionRegistry.setYieldShare(address(nft), 5000);
+        debtSubsidizer.whitelistCollection(address(vault), existingNFT);
+        collectionRegistry.setYieldShare(existingNFT, 5000);
+
+        // Support the new cToken market
+        address[] memory markets = new address[](1);
+        markets[0] = cToken;
+        ComptrollerInterface(comptroller).enterMarkets(markets);
 
         vm.stopBroadcast();
 
-        // Save addresses to a file
-        string memory filePath = "deployed-contracts.json";
-        string memory json = string.concat(
-            '{"asset": "',
-            vm.toString(address(asset)),
-            '", "nft": "',
-            vm.toString(address(nft)),
-            '", "cToken": "',
-            vm.toString(address(cToken)),
-            '", "lendingManager": "',
-            vm.toString(address(lendingManager)),
-            '", "collectionRegistry": "',
-            vm.toString(address(collectionRegistry)),
-            '", "collectionsVault": "',
-            vm.toString(address(vault)),
-            '", "epochManager": "',
-            vm.toString(address(epochManager)),
-            '", "debtSubsidizer": "',
-            vm.toString(address(debtSubsidizer)),
-            '"}'
-        );
-        vm.writeFile(filePath, json);
+        // Log deployed contract addresses
+        console.log("Asset:", asset);
+        console.log("cToken:", cToken);
+        console.log("Existing NFT:", existingNFT);
+        console.log("LendingManager:", address(lendingManager));
+        console.log("CollectionRegistry:", address(collectionRegistry));
+        console.log("CollectionsVault:", address(vault));
+        console.log("EpochManager:", address(epochManager));
+        console.log("DebtSubsidizer:", address(debtSubsidizer));
     }
 }

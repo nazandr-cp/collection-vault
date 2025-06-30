@@ -52,6 +52,8 @@ interface ICollectionsVault is IERC4626 {
         address indexed oldLendingManager, address indexed newLendingManager, address indexed changedBy
     );
 
+    event CollectionRegistryUpdated(address indexed oldRegistry, address indexed newRegistry);
+
     event YieldBatchRepaid(uint256 totalAmount, address indexed recipient);
     event CollectionYieldIndexed(
         address indexed collectionAddress, uint256 indexed epochId, uint256 assets, uint256 shares, uint256 cTokenAmount

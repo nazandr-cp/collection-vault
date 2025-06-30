@@ -2,7 +2,26 @@
 pragma solidity ^0.8.20;
 
 interface ICollectionRegistry {
+    // --- Events ---
+    event CollectionRegistered(
+        address indexed collection,
+        CollectionType collectionType,
+        WeightFunctionType weightFunctionType,
+        int256 p1,
+        int256 p2,
+        uint16 yieldSharePercentage
+    );
+    event YieldShareUpdated(address indexed collection, uint16 oldShare, uint16 newShare);
+    event WeightFunctionUpdated(
+        address indexed collection, WeightFunctionType weightFunctionType, int256 p1, int256 p2
+    );
+    event VaultAddedToCollection(address indexed collection, address indexed vault);
+    event VaultRemovedFromCollection(address indexed collection, address indexed vault);
+
+    event CollectionRemoved(address indexed collection);
+    event CollectionReactivated(address indexed collection);
     // --- Structs ---
+
     enum CollectionType {
         ERC721,
         ERC1155
@@ -23,8 +42,6 @@ interface ICollectionRegistry {
         address collectionAddress;
         CollectionType collectionType;
         WeightFunction weightFunction;
-        int256 p1; // Parameter 1 for the weight function
-        int256 p2; // Parameter 2 for the weight function
         uint16 yieldSharePercentage;
         address[] vaults;
     }
@@ -32,8 +49,7 @@ interface ICollectionRegistry {
     // --- Functions ---
     function registerCollection(Collection calldata collection) external;
     function setYieldShare(address collection, uint16 share) external;
-    function setWeightFunction(address collection, WeightFunction calldata weightFunction, int256 p1, int256 p2)
-        external;
+    function setWeightFunction(address collection, WeightFunction calldata weightFunction) external;
     function addVaultToCollection(address collection, address vault) external;
     function removeVaultFromCollection(address collection, address vault) external;
     function isRegistered(address collection) external view returns (bool);

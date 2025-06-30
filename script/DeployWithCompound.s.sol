@@ -23,7 +23,7 @@ contract DeployWithCompound is Script {
         address asset = 0x4dd42d4559f7F5026364550FABE7824AECF5a1d1; // underlyingAddr
         address cToken = 0x642d97319cd50D2E5FC7F0FE022Ed87407045e90; // cTokenAddr
         address comptroller = 0x7E81fAaF1132A17DCc0C76b1280E0C0e598D5635;
-        address interestRateModel = 0x13431E4D4a4281Be1A405681ECADb9F445Cd8Eb6;
+        // address interestRateModel = 0x13431E4D4a4281Be1A405681ECADb9F445Cd8Eb6;
 
         // Deploy new contracts that depend on Compound
         MockERC721 nft = new MockERC721("MockNFT", "MNFT");
@@ -34,8 +34,10 @@ contract DeployWithCompound is Script {
         );
         EpochManager epochManager = new EpochManager(1 days, msg.sender, msg.sender);
         DebtSubsidizer debtImpl = new DebtSubsidizer();
+
         bytes memory initData =
             abi.encodeWithSelector(DebtSubsidizer.initialize.selector, msg.sender, address(collectionRegistry));
+
         TransparentUpgradeableProxy proxy = new TransparentUpgradeableProxy(address(debtImpl), msg.sender, initData);
         DebtSubsidizer debtSubsidizer = DebtSubsidizer(address(proxy));
 
@@ -45,11 +47,9 @@ contract DeployWithCompound is Script {
             collectionType: ICollectionRegistry.CollectionType.ERC721,
             weightFunction: ICollectionRegistry.WeightFunction({
                 fnType: ICollectionRegistry.WeightFunctionType.LINEAR,
-                p1: 0,
+                p1: 1.0e18, // 1.0 in 18 decimals
                 p2: 0
             }),
-            p1: 0,
-            p2: 0,
             yieldSharePercentage: 5000,
             vaults: new address[](0)
         });
@@ -65,7 +65,9 @@ contract DeployWithCompound is Script {
         collectionRegistry.setYieldShare(address(nft), 5000);
 
         // Support the new cToken market
-        ComptrollerInterface(comptroller)._supportMarket(cToken);
+        address[] memory markets = new address[](1);
+        markets[0] = cToken;
+        ComptrollerInterface(comptroller).enterMarkets(markets);
 
         vm.stopBroadcast();
 

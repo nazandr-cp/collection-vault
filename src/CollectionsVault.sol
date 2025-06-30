@@ -169,6 +169,13 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         epochManager = IEpochManager(_epochManagerAddress);
     }
 
+    function setCollectionRegistry(address _collectionRegistryAddress) external onlyRole(ADMIN_ROLE) whenNotPaused {
+        if (_collectionRegistryAddress == address(0)) revert AddressZero();
+        address oldRegistry = address(collectionRegistry);
+        collectionRegistry = ICollectionRegistry(_collectionRegistryAddress);
+        emit CollectionRegistryUpdated(oldRegistry, _collectionRegistryAddress);
+    }
+
     function setDebtSubsidizer(address _debtSubsidizerAddress) external onlyRole(ADMIN_ROLE) whenNotPaused {
         if (_debtSubsidizerAddress == address(0)) revert AddressZero();
         _grantRole(DEBT_SUBSIDIZER_ROLE, _debtSubsidizerAddress);

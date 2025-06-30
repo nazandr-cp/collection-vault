@@ -300,7 +300,8 @@ contract DebtSubsidizer is
         override(IDebtSubsidizer)
         returns (bool)
     {
-        return _isCollectionWhitelisted[vaultAddress][collectionAddress] && !_collectionRemoved[vaultAddress][collectionAddress];
+        return _isCollectionWhitelisted[vaultAddress][collectionAddress]
+            && !_collectionRemoved[vaultAddress][collectionAddress];
     }
 
     function pause() external override(IDebtSubsidizer) onlyOwner {
@@ -381,5 +382,14 @@ contract DebtSubsidizer is
             revert IDebtSubsidizer.AddressZero();
         }
         return _userTotalSecondsClaimed[user];
+    }
+
+    function setCollectionRegistry(address newRegistry) external onlyOwner {
+        if (newRegistry == address(0)) {
+            revert IDebtSubsidizer.AddressZero();
+        }
+        address oldRegistry = address(collectionRegistry);
+        collectionRegistry = ICollectionRegistry(newRegistry);
+        emit CollectionRegistryUpdated(oldRegistry, newRegistry);
     }
 }
