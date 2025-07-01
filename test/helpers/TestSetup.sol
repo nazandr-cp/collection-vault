@@ -182,8 +182,6 @@ contract TestSetup is Test {
             collectionAddress: address(nftCollection1),
             collectionType: ICollectionRegistry.CollectionType.ERC721,
             weightFunction: weightFunc,
-            p1: 1000,
-            p2: 0,
             yieldSharePercentage: 5000, // 50%
             vaults: new address[](0)
         });
@@ -192,8 +190,6 @@ contract TestSetup is Test {
             collectionAddress: address(nftCollection2),
             collectionType: ICollectionRegistry.CollectionType.ERC721,
             weightFunction: weightFunc,
-            p1: 1000,
-            p2: 0,
             yieldSharePercentage: 3000, // 30%
             vaults: new address[](0)
         });

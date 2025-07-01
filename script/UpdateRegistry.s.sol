@@ -75,8 +75,6 @@ contract UpdateRegistry is Script {
                 p1: 100,
                 p2: 0
             }),
-            p1: 100,
-            p2: 0,
             yieldSharePercentage: 5000,
             vaults: new address[](0)
         });

@@ -232,8 +232,8 @@ contract MainWorkflowIntegrationTest is TestSetup {
         epochManager.finalizeEpoch(currentEpochId, 1_800e6); // 1k + 800 subsidies distributed
 
         // Verify epoch is completed
-        (,,,,, EpochManager.EpochStatus status) = epochManager.getEpochDetails(currentEpochId);
-        assertEq(uint256(status), uint256(EpochManager.EpochStatus.Completed), "Epoch should be completed");
+        (,,,,, IEpochManager.EpochStatus status) = epochManager.getEpochDetails(currentEpochId);
+        assertEq(uint256(status), uint256(IEpochManager.EpochStatus.Completed), "Epoch should be completed");
 
         // Verify final state
         assertTrue(collectionsVault.totalAssets() > 30_000e6, "Vault should have grown from yield");

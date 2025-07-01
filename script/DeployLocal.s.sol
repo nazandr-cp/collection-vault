@@ -61,8 +61,6 @@ contract DeployLocal is Script {
                 p1: 0,
                 p2: 0
             }),
-            p1: 0, // Corresponds to weightFunction.p1
-            p2: 0, // Corresponds to weightFunction.p2
             yieldSharePercentage: 5000, // 50%
             vaults: new address[](0) // Initially no vaults, or add `address(vault)` if appropriate
         });
