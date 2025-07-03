@@ -6,6 +6,7 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Roles} from "./Roles.sol";
 import {IEpochManager} from "./interfaces/IEpochManager.sol";
+import {IDebtSubsidizer} from "./interfaces/IDebtSubsidizer.sol";
 
 /**
  * @title EpochManager
@@ -21,42 +22,7 @@ contract EpochManager is IEpochManager, Ownable, AccessControl, ReentrancyGuard 
     mapping(uint256 => Epoch) public epochs;
 
     address public automatedSystem; // Address authorized to call certain functions (e.g., Go server)
-
-    /**
-     * @dev Thrown when an action is attempted by an unauthorized address.
-     */
-    error EpochManager__Unauthorized();
-
-    /**
-     * @dev Thrown when trying to start a new epoch while the current one is still active.
-     */
-    error EpochManager__EpochStillActive();
-
-    /**
-     * @dev Thrown when trying to operate on an epoch that is not in the expected state.
-     * @param epochId The ID of the epoch.
-     * @param currentStatus The current status of the epoch.
-     * @param expectedStatus The expected status for the operation.
-     */
-    error EpochManager__InvalidEpochStatus(uint256 epochId, EpochStatus currentStatus, EpochStatus expectedStatus);
-
-    /**
-     * @dev Thrown when trying to finalize an epoch that has not ended yet.
-     * @param epochId The ID of the epoch.
-     * @param endTime The end time of the epoch.
-     */
-    error EpochManager__EpochNotEnded(uint256 epochId, uint256 endTime);
-
-    /**
-     * @dev Thrown when an invalid epoch ID is provided.
-     * @param epochId The invalid epoch ID.
-     */
-    error EpochManager__InvalidEpochId(uint256 epochId);
-
-    /**
-     * @dev Thrown when the epoch duration is set to zero.
-     */
-    error EpochManager__InvalidEpochDuration();
+    IDebtSubsidizer public debtSubsidizer; // DebtSubsidizer contract for Merkle root updates
 
     modifier onlyAutomatedSystem() {
         if (msg.sender != automatedSystem && msg.sender != owner()) {
@@ -70,46 +36,23 @@ contract EpochManager is IEpochManager, Ownable, AccessControl, ReentrancyGuard 
      * @param _initialEpochDuration The initial duration for epochs (e.g., 7 days in seconds).
      * @param _initialAutomatedSystem The address of the automated system that will interact with this contract.
      * @param _initialOwner The initial owner of the contract.
+     * @param _debtSubsidizer The address of the DebtSubsidizer contract.
      */
-    constructor(uint256 _initialEpochDuration, address _initialAutomatedSystem, address _initialOwner)
-        Ownable(_initialOwner)
-    {
+    constructor(
+        uint256 _initialEpochDuration,
+        address _initialAutomatedSystem,
+        address _initialOwner,
+        address _debtSubsidizer
+    ) Ownable(_initialOwner) {
         if (_initialEpochDuration == 0) {
             revert EpochManager__InvalidEpochDuration();
         }
         epochDuration = _initialEpochDuration;
         automatedSystem = _initialAutomatedSystem;
+        debtSubsidizer = IDebtSubsidizer(_debtSubsidizer);
         _grantRole(DEFAULT_ADMIN_ROLE, _initialOwner);
         _grantRole(VAULT_ROLE, _initialOwner);
-        // currentEpochId is 0 initially, startNewEpoch will create epoch 1.
-    }
-
-    /**
-     * @notice Starts a new epoch.
-     * @dev Can only be called by the automated system or owner.
-     * The previous epoch (if any) must be 'Completed' or this is the first epoch.
-     */
-    function startNewEpoch() external nonReentrant onlyAutomatedSystem {
-        if (currentEpochId > 0) {
-            Epoch storage currentEpoch = epochs[currentEpochId];
-            if (currentEpoch.status != EpochStatus.Completed) {
-                revert EpochManager__InvalidEpochStatus(currentEpochId, currentEpoch.status, EpochStatus.Completed);
-            }
-        }
-
-        currentEpochId++;
-        uint256 startTime = block.timestamp;
-        uint256 endTime = startTime + epochDuration;
-
-        Epoch storage newEpoch = epochs[currentEpochId];
-        newEpoch.id = currentEpochId;
-        newEpoch.startTime = startTime;
-        newEpoch.endTime = endTime;
-        newEpoch.totalYieldAvailable = 0;
-        newEpoch.totalSubsidiesDistributed = 0;
-        newEpoch.status = EpochStatus.Active;
-        emit EpochStarted(currentEpochId, startTime, endTime);
-        emit EpochStartedWithParticipants(currentEpochId, startTime, endTime, 0);
+        // currentEpochId is 0 initially, startEpoch will create epoch 1.
     }
 
     /**
@@ -135,65 +78,6 @@ contract EpochManager is IEpochManager, Ownable, AccessControl, ReentrancyGuard 
     }
 
     /**
-     * @notice Transitions an active epoch to the Processing state.
-     * @dev This indicates that the epoch has ended and subsidy calculations/distributions are underway.
-     * Can only be called by the automated system or owner.
-     * @param epochId The ID of the epoch to begin processing.
-     */
-    function beginEpochProcessing(uint256 epochId) external nonReentrant onlyAutomatedSystem {
-        if (epochId == 0 || epochId > currentEpochId) {
-            revert EpochManager__InvalidEpochId(epochId);
-        }
-        Epoch storage epoch = epochs[epochId];
-
-        if (epoch.status != EpochStatus.Active) {
-            revert EpochManager__InvalidEpochStatus(epochId, epoch.status, EpochStatus.Active);
-        }
-        if (block.timestamp < epoch.endTime) {
-            revert EpochManager__EpochNotEnded(epochId, epoch.endTime);
-        }
-
-        epoch.status = EpochStatus.Processing;
-        emit EpochProcessingStarted(epochId);
-        emit ProcessingStarted(epochId);
-    }
-
-    /**
-     * @notice Finalizes a processing epoch, marking it as Completed.
-     * @dev Records the total subsidies distributed during the epoch.
-     * Can only be called by the automated system or owner.
-     * @param epochId The ID of the epoch to finalize.
-     * @param subsidiesDistributed The total amount of subsidies distributed for this epoch.
-     */
-    function finalizeEpoch(uint256 epochId, uint256 subsidiesDistributed) external nonReentrant onlyAutomatedSystem {
-        if (epochId == 0 || epochId > currentEpochId) {
-            revert EpochManager__InvalidEpochId(epochId);
-        }
-        Epoch storage epoch = epochs[epochId];
-
-        if (epoch.status != EpochStatus.Processing) {
-            revert EpochManager__InvalidEpochStatus(epochId, epoch.status, EpochStatus.Processing);
-        }
-
-        epoch.totalSubsidiesDistributed = subsidiesDistributed;
-        epoch.status = EpochStatus.Completed;
-
-        emit EpochFinalized(epochId, epoch.totalYieldAvailable, epoch.totalSubsidiesDistributed);
-    }
-
-    /**
-     * @notice Updates the duration for epochs.
-     * @param newDuration The new duration in seconds.
-     */
-    function setEpochDuration(uint256 newDuration) external onlyOwner {
-        if (newDuration == 0) {
-            revert EpochManager__InvalidEpochDuration();
-        }
-        epochDuration = newDuration;
-        emit EpochDurationUpdated(newDuration);
-    }
-
-    /**
      * @notice Updates the address of the automated system.
      * @param newAutomatedSystem The new address for the automated system.
      */
@@ -203,6 +87,15 @@ contract EpochManager is IEpochManager, Ownable, AccessControl, ReentrancyGuard 
         }
         automatedSystem = newAutomatedSystem;
         emit AutomatedSystemUpdated(newAutomatedSystem);
+    }
+
+    /**
+     * @notice Updates the address of the DebtSubsidizer contract.
+     * @param newDebtSubsidizer The new address for the DebtSubsidizer contract.
+     */
+    function setDebtSubsidizer(address newDebtSubsidizer) external onlyOwner {
+        debtSubsidizer = IDebtSubsidizer(newDebtSubsidizer);
+        emit DebtSubsidizerUpdated(newDebtSubsidizer);
     }
 
     /**
@@ -337,7 +230,12 @@ contract EpochManager is IEpochManager, Ownable, AccessControl, ReentrancyGuard 
         emit ProcessingFailed(epochId, reason);
     }
 
-    function startNewEpochWithParticipants(uint256 participantCount) external nonReentrant onlyAutomatedSystem {
+    /**
+     * @notice Starts a new epoch with simplified interface.
+     * @dev Streamlined version that just starts the epoch and returns the ID.
+     * @return epochId The ID of the newly started epoch.
+     */
+    function startEpoch() external nonReentrant onlyAutomatedSystem returns (uint256) {
         if (currentEpochId > 0) {
             Epoch storage currentEpoch = epochs[currentEpochId];
             if (currentEpoch.status != EpochStatus.Completed) {
@@ -358,37 +256,23 @@ contract EpochManager is IEpochManager, Ownable, AccessControl, ReentrancyGuard 
         newEpoch.status = EpochStatus.Active;
 
         emit EpochStarted(currentEpochId, startTime, endTime);
-        emit EpochStartedWithParticipants(currentEpochId, startTime, endTime, participantCount);
+        return currentEpochId;
     }
 
-    function finalizeEpochWithMetrics(uint256 epochId, uint256 subsidiesDistributed, uint256 processingTimeMs)
-        external
-        nonReentrant
-        onlyAutomatedSystem
-    {
-        if (epochId == 0 || epochId > currentEpochId) {
-            revert EpochManager__InvalidEpochId(epochId);
-        }
-        Epoch storage epoch = epochs[epochId];
-
-        if (epoch.status != EpochStatus.Processing) {
-            revert EpochManager__InvalidEpochStatus(epochId, epoch.status, EpochStatus.Processing);
-        }
-
-        epoch.totalSubsidiesDistributed = subsidiesDistributed;
-        epoch.status = EpochStatus.Completed;
-
-        emit EpochFinalized(epochId, epoch.totalYieldAvailable, epoch.totalSubsidiesDistributed);
-        emit EpochFinalizedWithMetrics(
-            epochId, epoch.totalYieldAvailable, epoch.totalSubsidiesDistributed, processingTimeMs
-        );
-    }
-
-    function beginEpochProcessingWithMetrics(uint256 epochId, uint256 participantCount, uint256 estimatedProcessingTime)
-        external
-        nonReentrant
-        onlyAutomatedSystem
-    {
+    /**
+     * @notice Ends an epoch with subsidies in a single atomic operation.
+     * @dev Combines Merkle root update and epoch finalization for simplified workflow.
+     * @param epochId The ID of the epoch to end.
+     * @param vaultAddress The address of the vault for which to update the Merkle root.
+     * @param merkleRoot The Merkle root for subsidy claims.
+     * @param subsidiesDistributed The total amount of subsidies distributed.
+     */
+    function endEpochWithSubsidies(
+        uint256 epochId,
+        address vaultAddress,
+        bytes32 merkleRoot,
+        uint256 subsidiesDistributed
+    ) external nonReentrant onlyAutomatedSystem {
         if (epochId == 0 || epochId > currentEpochId) {
             revert EpochManager__InvalidEpochId(epochId);
         }
@@ -397,14 +281,17 @@ contract EpochManager is IEpochManager, Ownable, AccessControl, ReentrancyGuard 
         if (epoch.status != EpochStatus.Active) {
             revert EpochManager__InvalidEpochStatus(epochId, epoch.status, EpochStatus.Active);
         }
-        if (block.timestamp < epoch.endTime) {
-            revert EpochManager__EpochNotEnded(epochId, epoch.endTime);
+
+        // Update subsidies and complete epoch
+        epoch.totalSubsidiesDistributed = subsidiesDistributed;
+        epoch.status = EpochStatus.Completed;
+
+        // Update Merkle root in DebtSubsidizer for subsidy claims
+        if (address(debtSubsidizer) != address(0) && merkleRoot != bytes32(0)) {
+            debtSubsidizer.updateMerkleRoot(vaultAddress, merkleRoot);
         }
 
-        epoch.status = EpochStatus.Processing;
-        emit EpochProcessingStarted(epochId);
-        emit ProcessingStarted(epochId);
-        emit EpochProcessingStartedWithMetrics(epochId, participantCount, estimatedProcessingTime);
+        emit EpochFinalized(epochId, epoch.totalYieldAvailable, epoch.totalSubsidiesDistributed);
     }
 
     function grantVaultRole(address vault) external onlyOwner {

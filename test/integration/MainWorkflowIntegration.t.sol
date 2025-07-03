@@ -99,7 +99,7 @@ contract MainWorkflowIntegrationTest is TestSetup {
 
         // Start a new epoch
         vm.prank(AUTOMATED_SYSTEM);
-        epochManager.startNewEpoch();
+        epochManager.startEpoch();
 
         uint256 epochId = epochManager.getCurrentEpochId();
         assertEq(epochId, 1, "First epoch should have ID 1");
@@ -146,10 +146,6 @@ contract MainWorkflowIntegrationTest is TestSetup {
 
         // Advance time to end epoch
         vm.warp(block.timestamp + EPOCH_DURATION + 1);
-
-        // Begin epoch processing
-        vm.prank(AUTOMATED_SYSTEM);
-        epochManager.beginEpochProcessing(currentEpochId);
 
         // Apply collection yield for the epoch
         vm.startPrank(ADMIN);
@@ -227,9 +223,11 @@ contract MainWorkflowIntegrationTest is TestSetup {
 
         uint256 currentEpochId = epochManager.getCurrentEpochId();
 
-        // Finalize the epoch
+        // End the epoch with subsidies (simplified workflow)
         vm.prank(AUTOMATED_SYSTEM);
-        epochManager.finalizeEpoch(currentEpochId, 1_800e6); // 1k + 800 subsidies distributed
+        bytes32 dummyMerkleRoot = keccak256("test-merkle-root");
+        address dummyVaultAddress = address(collectionsVault);
+        epochManager.endEpochWithSubsidies(currentEpochId, dummyVaultAddress, dummyMerkleRoot, 1_800e6); // 1k + 800 subsidies distributed
 
         // Verify epoch is completed
         (,,,,, IEpochManager.EpochStatus status) = epochManager.getEpochDetails(currentEpochId);

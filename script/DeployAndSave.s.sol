@@ -38,15 +38,18 @@ contract DeployAndSave is Script {
         );
         LendingManager lendingManager = new LendingManager(msg.sender, msg.sender, address(asset), address(cToken));
         CollectionRegistry collectionRegistry = new CollectionRegistry(msg.sender);
-        CollectionsVault vault = new CollectionsVault(
-            asset, "Vault", "vMOCK", msg.sender, address(lendingManager), address(collectionRegistry)
-        );
-        EpochManager epochManager = new EpochManager(1 days, msg.sender, msg.sender);
+
+        // Deploy DebtSubsidizer first since EpochManager needs its address
         DebtSubsidizer debtImpl = new DebtSubsidizer();
         bytes memory initData =
             abi.encodeWithSelector(DebtSubsidizer.initialize.selector, msg.sender, address(collectionRegistry));
         TransparentUpgradeableProxy proxy = new TransparentUpgradeableProxy(address(debtImpl), msg.sender, initData);
         DebtSubsidizer debtSubsidizer = DebtSubsidizer(address(proxy));
+
+        CollectionsVault vault = new CollectionsVault(
+            asset, "Vault", "vMOCK", msg.sender, address(lendingManager), address(collectionRegistry)
+        );
+        EpochManager epochManager = new EpochManager(1 days, msg.sender, msg.sender, address(debtSubsidizer));
 
         // Register the NFT collection
         ICollectionRegistry.Collection memory collectionData = ICollectionRegistry.Collection({

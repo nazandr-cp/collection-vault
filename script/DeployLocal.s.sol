@@ -40,17 +40,18 @@ contract DeployLocal is Script {
 
         LendingManager lendingManager = new LendingManager(msg.sender, msg.sender, address(asset), address(cToken));
         CollectionRegistry collectionRegistry = new CollectionRegistry(msg.sender);
-        vault = new CollectionsVault(
-            asset, "Vault", "vMOCK", msg.sender, address(lendingManager), address(collectionRegistry)
-        );
-        EpochManager epochManager = new EpochManager(1 days, msg.sender, msg.sender);
 
+        // Deploy DebtSubsidizer first since EpochManager needs its address
         DebtSubsidizer debtImpl = new DebtSubsidizer();
-        // For DebtSubsidizer.initialize, the second argument is the CollectionRegistry address
         bytes memory initData =
             abi.encodeWithSelector(DebtSubsidizer.initialize.selector, msg.sender, address(collectionRegistry));
         TransparentUpgradeableProxy proxy = new TransparentUpgradeableProxy(address(debtImpl), msg.sender, initData);
         DebtSubsidizer debtSubsidizer = DebtSubsidizer(address(proxy));
+
+        vault = new CollectionsVault(
+            asset, "Vault", "vMOCK", msg.sender, address(lendingManager), address(collectionRegistry)
+        );
+        EpochManager epochManager = new EpochManager(1 days, msg.sender, msg.sender, address(debtSubsidizer));
 
         // Register the NFT collection in the CollectionRegistry first
         ICollectionRegistry.Collection memory collectionData = ICollectionRegistry.Collection({

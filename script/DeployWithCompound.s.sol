@@ -32,7 +32,7 @@ contract DeployWithCompound is Script {
         CollectionsVault vault = new CollectionsVault(
             MockERC20(asset), "Vault", "vMOCK", msg.sender, address(lendingManager), address(collectionRegistry)
         );
-        EpochManager epochManager = new EpochManager(1 days, msg.sender, msg.sender);
+        EpochManager epochManager = new EpochManager(1 days, msg.sender, msg.sender, address(0));
         DebtSubsidizer debtImpl = new DebtSubsidizer();
 
         bytes memory initData =

@@ -129,7 +129,7 @@ contract TestSetup is Test {
         emit ContractDeployed("CollectionRegistry", address(collectionRegistry));
 
         // Deploy Epoch Manager
-        epochManager = new EpochManager(EPOCH_DURATION, AUTOMATED_SYSTEM, ADMIN);
+        epochManager = new EpochManager(EPOCH_DURATION, AUTOMATED_SYSTEM, ADMIN, address(debtSubsidizer));
         emit ContractDeployed("EpochManager", address(epochManager));
 
         // Deploy Lending Manager
@@ -282,7 +282,7 @@ contract TestSetup is Test {
     // Helper functions for tests
     function createEpochAndAdvanceTime() public {
         vm.prank(AUTOMATED_SYSTEM);
-        epochManager.startNewEpoch();
+        epochManager.startEpoch();
         vm.warp(block.timestamp + EPOCH_DURATION + 1);
     }
 

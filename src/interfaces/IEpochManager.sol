@@ -2,6 +2,49 @@
 pragma solidity ^0.8.20;
 
 interface IEpochManager {
+    enum EpochStatus {
+        Active, // Epoch is currently active and accumulating yield
+        Completed, // Epoch processing is finished, subsidies distributed
+        Failed // Epoch was aborted due to an issue
+
+    }
+
+    /**
+     * @dev Thrown when an action is attempted by an unauthorized address.
+     */
+    error EpochManager__Unauthorized();
+
+    /**
+     * @dev Thrown when trying to start a new epoch while the current one is still active.
+     */
+    error EpochManager__EpochStillActive();
+
+    /**
+     * @dev Thrown when trying to operate on an epoch that is not in the expected state.
+     * @param epochId The ID of the epoch.
+     * @param currentStatus The current status of the epoch.
+     * @param expectedStatus The expected status for the operation.
+     */
+    error EpochManager__InvalidEpochStatus(uint256 epochId, EpochStatus currentStatus, EpochStatus expectedStatus);
+
+    /**
+     * @dev Thrown when trying to finalize an epoch that has not ended yet.
+     * @param epochId The ID of the epoch.
+     * @param endTime The end time of the epoch.
+     */
+    error EpochManager__EpochNotEnded(uint256 epochId, uint256 endTime);
+
+    /**
+     * @dev Thrown when an invalid epoch ID is provided.
+     * @param epochId The invalid epoch ID.
+     */
+    error EpochManager__InvalidEpochId(uint256 epochId);
+
+    /**
+     * @dev Thrown when the epoch duration is set to zero.
+     */
+    error EpochManager__InvalidEpochDuration();
+
     /**
      * @dev Emitted when a new epoch is started.
      * @param epochId The ID of the new epoch.
@@ -52,43 +95,20 @@ interface IEpochManager {
     event VaultYieldAllocated(uint256 indexed epochId, address indexed vault, uint256 amount);
 
     /**
-     * @dev Emitted when the epoch duration is updated.
-     * @param newDuration The new duration for epochs in seconds.
-     */
-    event EpochDurationUpdated(uint256 newDuration);
-
-    /**
      * @dev Emitted when the automated system address is updated.
      * @param newAutomatedSystem The new address authorized for automated system interactions.
      */
     event AutomatedSystemUpdated(address indexed newAutomatedSystem);
 
-    // Enhanced events with participant counts and processing metrics
-    event EpochStartedWithParticipants(
-        uint256 indexed epochId, uint256 startTime, uint256 endTime, uint256 participantCount
-    );
-    event EpochFinalizedWithMetrics(
-        uint256 indexed epochId,
-        uint256 totalYieldAvailable,
-        uint256 totalSubsidiesDistributed,
-        uint256 processingTimeMs
-    );
-    event EpochProcessingStartedWithMetrics(
-        uint256 indexed epochId, uint256 participantCount, uint256 estimatedProcessingTime
-    );
+    /**
+     * @dev Emitted when the DebtSubsidizer address is updated.
+     * @param newDebtSubsidizer The new address for the DebtSubsidizer contract.
+     */
+    event DebtSubsidizerUpdated(address indexed newDebtSubsidizer);
 
     // Role management events with context
     event EpochManagerRoleGranted(bytes32 indexed role, address indexed account, address sender, uint256 timestamp);
     event EpochManagerRoleRevoked(bytes32 indexed role, address indexed account, address sender, uint256 timestamp);
-
-    enum EpochStatus {
-        Pending, // Epoch has not started yet
-        Active, // Epoch is currently active and accumulating yield
-        Processing, // Epoch has ended, subsidies are being calculated and processed
-        Completed, // Epoch processing is finished, subsidies distributed
-        Failed // Epoch was aborted due to an issue
-
-    }
 
     struct Epoch {
         uint256 id;
@@ -103,9 +123,12 @@ interface IEpochManager {
     function getCurrentEpochId() external view returns (uint256);
     function allocateVaultYield(address vault, uint256 amount) external;
 
-    function startNewEpochWithParticipants(uint256 participantCount) external;
-    function finalizeEpochWithMetrics(uint256 epochId, uint256 subsidiesDistributed, uint256 processingTimeMs)
-        external;
-    function beginEpochProcessingWithMetrics(uint256 epochId, uint256 participantCount, uint256 estimatedProcessingTime)
-        external;
+    // Simplified workflow functions - only 2 calls needed per epoch
+    function startEpoch() external returns (uint256 epochId);
+    function endEpochWithSubsidies(
+        uint256 epochId,
+        address vaultAddress,
+        bytes32 merkleRoot,
+        uint256 subsidiesDistributed
+    ) external;
 }
