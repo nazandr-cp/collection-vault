@@ -68,6 +68,18 @@ contract DeployWithExistingNFT is Script {
         markets[0] = cToken;
         ComptrollerInterface(comptroller).enterMarkets(markets);
 
+        // Grant epoch server roles for automated epoch processing
+        address epochServerAddress = 0xD620932690E1ae01126CDf541CBAdd0C7C1B918F;
+        console.log("Granting roles to epoch server:", epochServerAddress);
+        
+        // Grant admin role on vault (for allocateYieldToEpoch)
+        vault.grantRole(0x0000000000000000000000000000000000000000000000000000000000000000, epochServerAddress);
+        console.log("Granted vault admin role to epoch server");
+        
+        // Grant automated system role on epoch manager (for endEpochWithSubsidies)
+        epochManager.grantRole(keccak256("AUTOMATED_SYSTEM_ROLE"), epochServerAddress);
+        console.log("Granted automated system role to epoch server");
+
         vm.stopBroadcast();
 
         // Log deployed contract addresses
