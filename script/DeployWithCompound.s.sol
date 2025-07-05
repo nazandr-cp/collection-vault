@@ -10,6 +10,7 @@ import {EpochManager} from "../src/EpochManager.sol";
 import {CollectionRegistry} from "../src/CollectionRegistry.sol";
 import {ICollectionRegistry} from "../src/interfaces/ICollectionRegistry.sol";
 import {DebtSubsidizer} from "../src/DebtSubsidizer.sol";
+import {Roles} from "../src/Roles.sol";
 import {ComptrollerInterface, InterestRateModel} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol";
 import {CErc20Immutable} from "compound-protocol-2.8.1/contracts/CErc20Immutable.sol";
 import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";

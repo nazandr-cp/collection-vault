@@ -2,9 +2,9 @@
 pragma solidity ^0.8.20;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {AccessControlBaseUpgradeable} from "./AccessControlBaseUpgradeable.sol";
+import {Roles} from "./Roles.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
@@ -26,9 +26,7 @@ import {ICollectionRegistry} from "./interfaces/ICollectionRegistry.sol";
 contract DebtSubsidizer is
     Initializable,
     IDebtSubsidizer,
-    OwnableUpgradeable,
-    ReentrancyGuardUpgradeable,
-    PausableUpgradeable
+    AccessControlBaseUpgradeable
 {
     using SafeERC20 for IERC20;
     using ERC165Checker for address;
@@ -66,23 +64,21 @@ contract DebtSubsidizer is
         _disableInitializers();
     }
 
-    function initialize(address initialOwner, address registry) public initializer {
-        if (initialOwner == address(0)) {
+    function initialize(address initialAdmin, address registry) public initializer {
+        if (initialAdmin == address(0)) {
             revert IDebtSubsidizer.AddressZero();
         }
         if (registry == address(0)) {
             revert IDebtSubsidizer.AddressZero();
         }
-        __Ownable_init(initialOwner);
-        __ReentrancyGuard_init();
-        __Pausable_init();
+        __AccessControlBase_init(initialAdmin);
         collectionRegistry = ICollectionRegistry(registry);
     }
 
     function addVault(address vaultAddress_, address lendingManagerAddress_)
         external
         override(IDebtSubsidizer)
-        onlyOwner
+        onlyRole(Roles.ADMIN_ROLE)
     {
         if (vaultAddress_ == address(0) || lendingManagerAddress_ == address(0)) {
             revert IDebtSubsidizer.AddressZero();
@@ -106,7 +102,7 @@ contract DebtSubsidizer is
         emit VaultAdded(vaultAddress_, cTokenAddress, lendingManagerAddress_);
     }
 
-    function removeVault(address vaultAddress_) external override(IDebtSubsidizer) onlyOwner {
+    function removeVault(address vaultAddress_) external override(IDebtSubsidizer) onlyRole(Roles.ADMIN_ROLE) {
         if (vaultAddress_ == address(0)) {
             revert IDebtSubsidizer.AddressZero();
         }
@@ -149,7 +145,7 @@ contract DebtSubsidizer is
     function whitelistCollection(address vaultAddress, address collectionAddress)
         external
         override(IDebtSubsidizer)
-        onlyOwner
+        onlyRole(Roles.ADMIN_ROLE)
     {
         if (vaultAddress == address(0) || collectionAddress == address(0)) revert IDebtSubsidizer.AddressZero();
         if (_vaultsData[vaultAddress].cToken == address(0)) revert IDebtSubsidizer.VaultNotRegistered(vaultAddress);
@@ -166,7 +162,7 @@ contract DebtSubsidizer is
     function removeCollection(address vaultAddress, address collectionAddress)
         external
         override(IDebtSubsidizer)
-        onlyOwner
+        onlyRole(Roles.ADMIN_ROLE)
     {
         if (vaultAddress == address(0) || collectionAddress == address(0)) revert IDebtSubsidizer.AddressZero();
         if (!_isCollectionWhitelisted[vaultAddress][collectionAddress]) {
@@ -283,7 +279,7 @@ contract DebtSubsidizer is
         }
     }
 
-    function updateMerkleRoot(address vaultAddress, bytes32 merkleRoot_) external override(IDebtSubsidizer) onlyOwner {
+    function updateMerkleRoot(address vaultAddress, bytes32 merkleRoot_) external override(IDebtSubsidizer) onlyRole(Roles.ADMIN_ROLE) {
         if (vaultAddress == address(0)) {
             revert IDebtSubsidizer.AddressZero();
         }
@@ -304,26 +300,18 @@ contract DebtSubsidizer is
             && !_collectionRemoved[vaultAddress][collectionAddress];
     }
 
-    function pause() external override(IDebtSubsidizer) onlyOwner {
-        super._pause();
-    }
-
-    function unpause() external override(IDebtSubsidizer) onlyOwner {
-        super._unpause();
-    }
-
     function paused() public view override(IDebtSubsidizer, PausableUpgradeable) returns (bool) {
         return super.paused();
     }
 
-    function initializeSubsidyPool(uint256 poolAmount) external onlyOwner {
+    function initializeSubsidyPool(uint256 poolAmount) external onlyRole(Roles.ADMIN_ROLE) {
         require(poolAmount > 0, "Pool amount must be greater than zero");
         totalSubsidyPool = poolAmount;
         totalSubsidiesRemaining = poolAmount;
         emit SubsidyPoolInitialized(poolAmount, block.timestamp);
     }
 
-    function updateSubsidyPool(uint256 newPoolAmount) external onlyOwner {
+    function updateSubsidyPool(uint256 newPoolAmount) external onlyRole(Roles.ADMIN_ROLE) {
         require(newPoolAmount >= 0, "Pool amount cannot be negative");
         uint256 oldAmount = totalSubsidyPool;
         totalSubsidyPool = newPoolAmount;
@@ -331,7 +319,7 @@ contract DebtSubsidizer is
         emit SubsidyPoolUpdated(oldAmount, newPoolAmount, block.timestamp);
     }
 
-    function addEligibleUser(address user) external onlyOwner {
+    function addEligibleUser(address user) external onlyRole(Roles.ADMIN_ROLE) {
         if (user == address(0)) {
             revert IDebtSubsidizer.AddressZero();
         }
@@ -342,7 +330,7 @@ contract DebtSubsidizer is
         }
     }
 
-    function removeEligibleUser(address user) external onlyOwner {
+    function removeEligibleUser(address user) external onlyRole(Roles.ADMIN_ROLE) {
         if (user == address(0)) {
             revert IDebtSubsidizer.AddressZero();
         }
@@ -384,7 +372,7 @@ contract DebtSubsidizer is
         return _userTotalSecondsClaimed[user];
     }
 
-    function setCollectionRegistry(address newRegistry) external onlyOwner {
+    function setCollectionRegistry(address newRegistry) external onlyRole(Roles.ADMIN_ROLE) {
         if (newRegistry == address(0)) {
             revert IDebtSubsidizer.AddressZero();
         }

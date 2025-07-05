@@ -70,8 +70,6 @@ interface IDebtSubsidizer {
     function claimAllSubsidies(address[] calldata vaultAddresses, ClaimData[] calldata claims) external;
     function updateMerkleRoot(address vaultAddress, bytes32 merkleRoot) external;
 
-    function pause() external;
-    function unpause() external;
     function paused() external view returns (bool);
 
     function initializeSubsidyPool(uint256 poolAmount) external;

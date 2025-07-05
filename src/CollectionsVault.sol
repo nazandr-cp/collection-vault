@@ -27,7 +27,12 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
     using Math for uint256;
 
     bytes32 public constant ADMIN_ROLE = Roles.ADMIN_ROLE;
-    bytes32 public constant DEBT_SUBSIDIZER_ROLE = Roles.DEBT_SUBSIDIZER_ROLE;
+    bytes32 public constant OPERATOR_ROLE = Roles.OPERATOR_ROLE;
+    
+    // For interface compatibility - returns OPERATOR_ROLE 
+    function DEBT_SUBSIDIZER_ROLE() external pure returns (bytes32) {
+        return OPERATOR_ROLE;
+    }
 
     ILendingManager public lendingManager;
     IEpochManager public epochManager;
@@ -178,7 +183,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
 
     function setDebtSubsidizer(address _debtSubsidizerAddress) external onlyRole(ADMIN_ROLE) whenNotPaused {
         if (_debtSubsidizerAddress == address(0)) revert AddressZero();
-        _grantRole(DEBT_SUBSIDIZER_ROLE, _debtSubsidizerAddress);
+        _grantRole(OPERATOR_ROLE, _debtSubsidizerAddress);
     }
 
     function grantCollectionAccess(address collectionAddress, address operator) external onlyRole(ADMIN_ROLE) {
@@ -372,9 +377,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         CollectionVaultData storage vaultData = collectionVaultsData[collectionAddress];
         uint256 currentCollectionTotalAssets = vaultData.totalAssetsDeposited;
 
-        uint256 _totalSupply = totalSupply();
         assets = previewRedeem(shares);
-
         if (assets == 0) {
             require(shares == 0, "ERC4626: redeem rounds down to zero assets");
         }
@@ -384,8 +387,20 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         _burn(owner, shares);
         emit Transfer(owner, address(0), shares);
 
-        uint256 finalAssetsToTransfer = assets;
+        uint256 finalAssetsToTransfer = _handleFullRedemption(assets, shares);
+        
+        _performAssetTransfer(receiver, finalAssetsToTransfer, owner, shares);
+        _updateCollectionData(vaultData, assets, shares, currentCollectionTotalAssets);
+
+        emit CollectionWithdraw(collectionAddress, _msgSender(), receiver, assets, shares, shares);
+        return finalAssetsToTransfer;
+    }
+
+    function _handleFullRedemption(uint256 assets, uint256 shares) internal returns (uint256 finalAssetsToTransfer) {
+        finalAssetsToTransfer = assets;
+        uint256 _totalSupply = totalSupply();
         bool isFullRedeem = (shares == _totalSupply && shares != 0);
+        
         if (isFullRedeem) {
             uint256 remainingDustInLM = lendingManager.totalAssets();
             uint256 reserve = totalYieldReserved;
@@ -398,14 +413,23 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
                 }
             }
         }
+    }
 
+    function _performAssetTransfer(address receiver, uint256 finalAssetsToTransfer, address owner, uint256 shares) internal {
         uint256 vaultBalance = IERC20(asset()).balanceOf(address(this));
         if (vaultBalance < finalAssetsToTransfer) {
             revert Vault_InsufficientBalancePostLMWithdraw();
         }
         SafeERC20.safeTransfer(IERC20(asset()), receiver, finalAssetsToTransfer);
         emit Withdraw(msg.sender, receiver, owner, finalAssetsToTransfer, shares);
+    }
 
+    function _updateCollectionData(
+        CollectionVaultData storage vaultData, 
+        uint256 assets, 
+        uint256 shares, 
+        uint256 currentCollectionTotalAssets
+    ) internal {
         uint256 deduction;
         if (assets <= currentCollectionTotalAssets) {
             vaultData.totalAssetsDeposited = currentCollectionTotalAssets - assets;
@@ -420,9 +444,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         }
         vaultData.totalSharesMinted -= shares;
         vaultData.totalCTokensMinted -= shares;
-
-        emit CollectionWithdraw(collectionAddress, _msgSender(), receiver, assets, shares, shares);
-        return finalAssetsToTransfer;
     }
 
     function transferForCollection(address to, uint256 amount, address collectionAddress)
@@ -482,7 +503,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
             uint256 neededFromLM = assets - directBalance;
             uint256 availableInLM = lendingManager.totalAssets();
             uint256 reserve = totalYieldReserved;
-            uint256 usableInLM = hasRole(DEBT_SUBSIDIZER_ROLE, _msgSender())
+            uint256 usableInLM = hasRole(OPERATOR_ROLE, _msgSender())
                 ? availableInLM
                 : (availableInLM > reserve ? availableInLM - reserve : 0);
             if (neededFromLM <= usableInLM) {
@@ -500,7 +521,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
 
     function repayBorrowBehalf(uint256 amount, address borrower)
         external
-        onlyRole(DEBT_SUBSIDIZER_ROLE)
+        onlyRole(OPERATOR_ROLE)
         whenNotPaused
         nonReentrant
     {
@@ -534,7 +555,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
 
     function repayBorrowBehalfBatch(uint256[] calldata amounts, address[] calldata borrowers, uint256 totalAmount)
         external
-        onlyRole(DEBT_SUBSIDIZER_ROLE)
+        onlyRole(OPERATOR_ROLE)
         whenNotPaused
         nonReentrant
     {
@@ -712,11 +733,11 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         );
     }
 
-    function pause() external onlyRole(ADMIN_ROLE) {
+    function pause() external onlyRole(Roles.GUARDIAN_ROLE) {
         _pause();
     }
 
-    function unpause() external onlyRole(ADMIN_ROLE) {
+    function unpause() external onlyRole(Roles.GUARDIAN_ROLE) {
         _unpause();
     }
 

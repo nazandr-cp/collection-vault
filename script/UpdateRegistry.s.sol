@@ -6,6 +6,7 @@ import {CollectionRegistry} from "../src/CollectionRegistry.sol";
 import {ICollectionRegistry} from "../src/interfaces/ICollectionRegistry.sol";
 import {CollectionsVault} from "../src/CollectionsVault.sol";
 import {DebtSubsidizer} from "../src/DebtSubsidizer.sol";
+import {Roles} from "../src/Roles.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract UpdateRegistry is Script {
@@ -62,9 +63,8 @@ contract UpdateRegistry is Script {
 
     function setupCollectionData(CollectionRegistry registry, address vaultAddress) internal {
         // Grant COLLECTION_MANAGER_ROLE to the deployer
-        bytes32 COLLECTION_MANAGER_ROLE = keccak256("COLLECTION_MANAGER_ROLE");
         address deployer = vm.addr(vm.envUint("PRIVATE_KEY"));
-        registry.grantRole(COLLECTION_MANAGER_ROLE, deployer);
+        registry.grantRole(Roles.COLLECTION_MANAGER_ROLE, deployer);
 
         // Register the collection with the same parameters
         ICollectionRegistry.Collection memory collectionData = ICollectionRegistry.Collection({

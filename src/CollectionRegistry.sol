@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {AccessControlBase} from "./AccessControlBase.sol";
 import {ICollectionsVault} from "./interfaces/ICollectionsVault.sol";
 import {ICollectionRegistry} from "./interfaces/ICollectionRegistry.sol";
 import {Roles} from "./Roles.sol";
 
-contract CollectionRegistry is ICollectionRegistry, AccessControl {
-    bytes32 public constant MANAGER_ROLE = Roles.MANAGER_ROLE;
+contract CollectionRegistry is ICollectionRegistry, AccessControlBase {
+    bytes32 public constant COLLECTION_MANAGER_ROLE = Roles.COLLECTION_MANAGER_ROLE;
 
     mapping(address => ICollectionRegistry.Collection) private _collections;
     address[] private _allCollections;
@@ -16,12 +16,11 @@ contract CollectionRegistry is ICollectionRegistry, AccessControl {
     mapping(address => mapping(address => bool)) private _collectionHasVault;
     mapping(address => uint256) private _vaultIndexInCollection;
 
-    constructor(address admin) {
-        _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(MANAGER_ROLE, admin);
+    constructor(address admin) AccessControlBase(admin) {
+        _grantRole(COLLECTION_MANAGER_ROLE, admin);
     }
 
-    function removeCollection(address collection) external onlyRole(MANAGER_ROLE) {
+    function removeCollection(address collection) external onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE) {
         require(_isRegistered[collection], "CollectionRegistry: Not registered");
         if (!_isRemoved[collection]) {
             _isRemoved[collection] = true;
@@ -29,7 +28,7 @@ contract CollectionRegistry is ICollectionRegistry, AccessControl {
         }
     }
 
-    function reactivateCollection(address collection) external onlyRole(MANAGER_ROLE) {
+    function reactivateCollection(address collection) external onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE) {
         require(_isRegistered[collection], "CollectionRegistry: Not registered");
         if (_isRemoved[collection]) {
             _isRemoved[collection] = false;
@@ -40,7 +39,7 @@ contract CollectionRegistry is ICollectionRegistry, AccessControl {
     function registerCollection(ICollectionRegistry.Collection calldata collectionData)
         public
         override
-        onlyRole(MANAGER_ROLE)
+        onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE)
     {
         address collectionAddress = collectionData.collectionAddress;
         require(collectionAddress != address(0), "CollectionRegistry: Zero address");
@@ -61,7 +60,7 @@ contract CollectionRegistry is ICollectionRegistry, AccessControl {
         }
     }
 
-    function setYieldShare(address collection, uint16 share) external override onlyRole(MANAGER_ROLE) {
+    function setYieldShare(address collection, uint16 share) external override onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE) {
         require(_isRegistered[collection], "CollectionRegistry: Not registered");
         uint16 oldShare = _collections[collection].yieldSharePercentage;
         _collections[collection].yieldSharePercentage = share;
@@ -71,14 +70,14 @@ contract CollectionRegistry is ICollectionRegistry, AccessControl {
     function setWeightFunction(address collection, ICollectionRegistry.WeightFunction calldata weightFunction)
         external
         override
-        onlyRole(MANAGER_ROLE)
+        onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE)
     {
         require(_isRegistered[collection], "CollectionRegistry: Not registered");
         _collections[collection].weightFunction = weightFunction;
         emit WeightFunctionUpdated(collection, weightFunction.fnType, weightFunction.p1, weightFunction.p2);
     }
 
-    function addVaultToCollection(address collection, address vault) external override onlyRole(MANAGER_ROLE) {
+    function addVaultToCollection(address collection, address vault) external override onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE) {
         require(_isRegistered[collection], "CollectionRegistry: Not registered");
         require(vault != address(0), "CollectionRegistry: Zero address");
         require(!_collectionHasVault[collection][vault], "CollectionRegistry: Vault already added");
@@ -89,7 +88,7 @@ contract CollectionRegistry is ICollectionRegistry, AccessControl {
         emit VaultAddedToCollection(collection, vault);
     }
 
-    function removeVaultFromCollection(address collection, address vault) external override onlyRole(MANAGER_ROLE) {
+    function removeVaultFromCollection(address collection, address vault) external override onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE) {
         require(_isRegistered[collection], "CollectionRegistry: Not registered");
         require(_collectionHasVault[collection][vault], "CollectionRegistry: Vault not found");
 

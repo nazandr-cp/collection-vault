@@ -5,6 +5,7 @@ import "forge-std/Script.sol";
 import {EpochManager} from "../src/EpochManager.sol";
 import {CollectionsVault} from "../src/CollectionsVault.sol";
 import {IEpochManager} from "../src/interfaces/IEpochManager.sol";
+import {Roles} from "../src/Roles.sol";
 
 contract RedeployEpochManager is Script {
     // Current deployed contract addresses from config
@@ -24,18 +25,30 @@ contract RedeployEpochManager is Script {
         // Get existing configuration from current EpochManager
         EpochManager existingEpochManager = EpochManager(EXISTING_EPOCH_MANAGER);
         uint256 currentEpochDuration = existingEpochManager.epochDuration();
-        address currentAutomatedSystem = existingEpochManager.automatedSystem();
-        address currentOwner = existingEpochManager.owner();
+        
+        // Get automated system from OPERATOR_ROLE members (previously AUTOMATION_ROLE)
+        address currentAutomatedSystem = address(0);
+        uint256 operatorRoleMemberCount = existingEpochManager.getRoleMemberCount(Roles.OPERATOR_ROLE);
+        if (operatorRoleMemberCount > 0) {
+            currentAutomatedSystem = existingEpochManager.getRoleMember(Roles.OPERATOR_ROLE, 0);
+        }
+        
+        // Get current admin (equivalent to old owner)
+        address currentAdmin = address(0);
+        uint256 adminRoleMemberCount = existingEpochManager.getRoleMemberCount(Roles.ADMIN_ROLE);
+        if (adminRoleMemberCount > 0) {
+            currentAdmin = existingEpochManager.getRoleMember(Roles.ADMIN_ROLE, 0);
+        }
 
         console.log("Current epoch duration:", currentEpochDuration);
         console.log("Current automated system:", currentAutomatedSystem);
-        console.log("Current owner:", currentOwner);
+        console.log("Current admin:", currentAdmin);
 
         // Deploy new EpochManager with same configuration
         EpochManager newEpochManager = new EpochManager(
             currentEpochDuration,
             currentAutomatedSystem,
-            currentOwner,
+            currentAdmin,
             DEBT_SUBSIDIZER
         );
 
@@ -56,17 +69,17 @@ contract RedeployEpochManager is Script {
         vault.setEpochManager(address(newEpochManager));
         console.log("Updated CollectionsVault epochManager to:", address(newEpochManager));
 
-        // Grant VAULT_ROLE to CollectionsVault on new EpochManager
+        // Grant OPERATOR_ROLE to CollectionsVault on new EpochManager
         newEpochManager.grantVaultRole(COLLECTIONS_VAULT);
-        console.log("Granted VAULT_ROLE to CollectionsVault on new EpochManager");
+        console.log("Granted OPERATOR_ROLE to CollectionsVault on new EpochManager");
 
         // Verify the update was successful
         address updatedEpochManager = address(vault.epochManager());
         require(updatedEpochManager == address(newEpochManager), "EpochManager update failed");
 
-        // Verify VAULT_ROLE was granted
-        bytes32 vaultRole = newEpochManager.VAULT_ROLE();
-        require(newEpochManager.hasRole(vaultRole, COLLECTIONS_VAULT), "VAULT_ROLE grant failed");
+        // Verify OPERATOR_ROLE was granted
+        bytes32 operatorRole = newEpochManager.OPERATOR_ROLE();
+        require(newEpochManager.hasRole(operatorRole, COLLECTIONS_VAULT), "OPERATOR_ROLE grant failed");
 
         vm.stopBroadcast();
 

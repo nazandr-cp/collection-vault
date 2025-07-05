@@ -11,8 +11,8 @@ contract DepositToVault is Script {
         address assetAddress = vm.envAddress("ASSET_ADDRESS");
         address nftAddress = vm.envAddress("NFT_ADDRESS");
 
-        // Use the new vault address from recent deployment
-        address vaultAddress = 0x4A4be724F522946296a51d8c82c7C2e8e5a62655;
+        // Use vault address from environment
+        address vaultAddress = vm.envAddress("VAULT_ADDRESS");
 
         MockERC20 asset = MockERC20(assetAddress);
         CollectionsVault vault = CollectionsVault(vaultAddress);
@@ -23,14 +23,16 @@ contract DepositToVault is Script {
 
         vm.startBroadcast(deployerKey);
 
+        address sender = vm.addr(deployerKey);
+
         // Grant collection operator access to the deployer
-        vault.grantCollectionAccess(nftAddress, msg.sender);
+        vault.grantCollectionAccess(nftAddress, sender);
 
         // Approve the vault to spend MDAI tokens
         asset.approve(vaultAddress, depositAmount);
 
         // Deposit to the vault for the NFT collection
-        vault.depositForCollection(depositAmount, msg.sender, nftAddress);
+        vault.depositForCollection(depositAmount, sender, nftAddress);
 
         vm.stopBroadcast();
 

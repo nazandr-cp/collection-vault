@@ -3,10 +3,8 @@ pragma solidity ^0.8.20;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {AccessControlBase} from "./AccessControlBase.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {Roles} from "./Roles.sol";
 
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
@@ -16,10 +14,10 @@ import {CErc20Interface, CTokenInterface} from "compound-protocol-2.8.1/contract
  * @title LendingManager (Compound V2 Fork Adapter)
  * @notice Manages deposits and withdrawals to a specific Compound V2 fork cToken market.
  */
-contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyGuard, Pausable {
+contract LendingManager is ILendingManager, AccessControlBase {
     using SafeERC20 for IERC20;
 
-    bytes32 public constant VAULT_ROLE = Roles.VAULT_ROLE;
+    bytes32 public constant OPERATOR_ROLE = Roles.OPERATOR_ROLE;
     bytes32 public constant ADMIN_ROLE = Roles.ADMIN_ROLE;
 
     uint256 public constant R0_BASIS_POINTS = 5;
@@ -47,7 +45,8 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
     uint256 public globalCollateralFactor;
     uint256 public liquidationIncentive;
 
-    constructor(address initialAdmin, address vaultAddress, address _assetAddress, address _cTokenAddress) {
+    constructor(address initialAdmin, address vaultAddress, address _assetAddress, address _cTokenAddress) 
+        AccessControlBase(initialAdmin) {
         if (
             initialAdmin == address(0) || vaultAddress == address(0) || _assetAddress == address(0)
                 || _cTokenAddress == address(0)
@@ -62,9 +61,7 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         underlyingDecimals = IERC20Metadata(_assetAddress).decimals();
         cTokenDecimals = IERC20Metadata(_cTokenAddress).decimals();
 
-        _grantRole(DEFAULT_ADMIN_ROLE, initialAdmin);
-        _grantRole(ADMIN_ROLE, initialAdmin);
-        _grantRole(VAULT_ROLE, vaultAddress);
+        _grantRole(OPERATOR_ROLE, vaultAddress);
 
         _asset.approve(address(_cToken), type(uint256).max);
 
@@ -82,7 +79,7 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
     }
 
     modifier onlyVault() {
-        if (!hasRole(VAULT_ROLE, msg.sender)) {
+        if (!hasRole(OPERATOR_ROLE, msg.sender)) {
             revert LM_CallerNotVault(msg.sender);
         }
         _;
@@ -218,25 +215,25 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
 
     // --- Administrative Functions for Role Management ---
 
-    function grantVaultRole(address newVault) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
+    function grantVaultRole(address newVault) external onlyRoleWhenNotPaused(ADMIN_ROLE) nonReentrant {
         if (newVault == address(0)) revert AddressZero();
-        _grantRole(VAULT_ROLE, newVault);
-        emit LendingManagerRoleGranted(VAULT_ROLE, newVault, msg.sender, block.timestamp);
+        _grantRole(OPERATOR_ROLE, newVault);
+        emit LendingManagerRoleGranted(OPERATOR_ROLE, newVault, msg.sender, block.timestamp);
     }
 
-    function revokeVaultRole(address vault) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
+    function revokeVaultRole(address vault) external onlyRoleWhenNotPaused(ADMIN_ROLE) nonReentrant {
         if (vault == address(0)) revert AddressZero();
-        _revokeRole(VAULT_ROLE, vault);
-        emit LendingManagerRoleRevoked(VAULT_ROLE, vault, msg.sender, block.timestamp);
+        _revokeRole(OPERATOR_ROLE, vault);
+        emit LendingManagerRoleRevoked(OPERATOR_ROLE, vault, msg.sender, block.timestamp);
     }
 
-    function grantAdminRole(address newAdmin) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
+    function grantAdminRole(address newAdmin) external onlyRoleWhenNotPaused(ADMIN_ROLE) nonReentrant {
         if (newAdmin == address(0)) revert AddressZero();
         _grantRole(ADMIN_ROLE, newAdmin);
         emit LendingManagerRoleGranted(ADMIN_ROLE, newAdmin, msg.sender, block.timestamp);
     }
 
-    function revokeAdminRole(address admin) external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
+    function revokeAdminRole(address admin) external onlyRoleWhenNotPaused(ADMIN_ROLE) nonReentrant {
         if (admin == address(0)) revert AddressZero();
         require(getRoleMemberCount(ADMIN_ROLE) > 1, "Cannot remove last admin");
         _revokeRole(ADMIN_ROLE, admin);
@@ -245,9 +242,8 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
 
     function grantAdminRoleAsDefaultAdmin(address newAdmin)
         external
-        onlyRole(DEFAULT_ADMIN_ROLE)
+        onlyRoleWhenNotPaused(DEFAULT_ADMIN_ROLE)
         nonReentrant
-        whenNotPaused
     {
         if (newAdmin == address(0)) revert AddressZero();
         _grantRole(ADMIN_ROLE, newAdmin);
@@ -256,9 +252,8 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
 
     function revokeAdminRoleAsDefaultAdmin(address admin)
         external
-        onlyRole(DEFAULT_ADMIN_ROLE)
+        onlyRoleWhenNotPaused(DEFAULT_ADMIN_ROLE)
         nonReentrant
-        whenNotPaused
     {
         if (admin == address(0)) revert AddressZero();
         require(getRoleMemberCount(ADMIN_ROLE) > 1, "Cannot remove last admin");
@@ -332,7 +327,7 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
      * @dev This function is restricted to ADMIN_ROLE.
      * It emits a PrincipalReset event.
      */
-    function resetTotalPrincipalDeposited() external onlyRole(ADMIN_ROLE) nonReentrant whenNotPaused {
+    function resetTotalPrincipalDeposited() external onlyRoleWhenNotPaused(ADMIN_ROLE) nonReentrant {
         uint256 oldValue = totalPrincipalDeposited;
         totalPrincipalDeposited = 0;
         emit PrincipalReset(oldValue, msg.sender);
@@ -377,7 +372,7 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         return cTokenError;
     }
 
-    function updateExchangeRate() external onlyRole(ADMIN_ROLE) whenNotPaused returns (uint256 newRate) {
+    function updateExchangeRate() external onlyRoleWhenNotPaused(ADMIN_ROLE) returns (uint256 newRate) {
         newRate = CTokenInterface(address(_cToken)).exchangeRateCurrent();
         cachedExchangeRate = newRate;
         lastExchangeRateTimestamp = block.timestamp;
@@ -385,28 +380,28 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
 
     // --- Statistical Tracking Functions ---
 
-    function updateMarketParticipants(uint256 _totalMarketParticipants) external onlyRole(ADMIN_ROLE) whenNotPaused {
+    function updateMarketParticipants(uint256 _totalMarketParticipants) external onlyRoleWhenNotPaused(ADMIN_ROLE) {
         totalMarketParticipants = _totalMarketParticipants;
     }
 
-    function recordLiquidationVolume(uint256 liquidationAmount) external onlyRole(ADMIN_ROLE) whenNotPaused {
+    function recordLiquidationVolume(uint256 liquidationAmount) external onlyRoleWhenNotPaused(ADMIN_ROLE) {
         totalLiquidationVolume += liquidationAmount;
         emit LiquidationVolumeUpdated(totalLiquidationVolume, liquidationAmount, block.timestamp);
     }
 
-    function setGlobalCollateralFactor(uint256 _globalCollateralFactor) external onlyRole(ADMIN_ROLE) whenNotPaused {
+    function setGlobalCollateralFactor(uint256 _globalCollateralFactor) external onlyRoleWhenNotPaused(ADMIN_ROLE) {
         require(_globalCollateralFactor <= BASIS_POINTS_DENOMINATOR, "Collateral factor cannot exceed 100%");
         globalCollateralFactor = _globalCollateralFactor;
         emit GlobalCollateralFactorUpdated(_globalCollateralFactor, block.timestamp);
     }
 
-    function setLiquidationIncentive(uint256 _liquidationIncentive) external onlyRole(ADMIN_ROLE) whenNotPaused {
+    function setLiquidationIncentive(uint256 _liquidationIncentive) external onlyRoleWhenNotPaused(ADMIN_ROLE) {
         require(_liquidationIncentive <= BASIS_POINTS_DENOMINATOR, "Liquidation incentive cannot exceed 100%");
         liquidationIncentive = _liquidationIncentive;
         emit LiquidationIncentiveUpdated(_liquidationIncentive, block.timestamp);
     }
 
-    function addSupportedMarket(address market) external onlyRole(ADMIN_ROLE) whenNotPaused {
+    function addSupportedMarket(address market) external onlyRoleWhenNotPaused(ADMIN_ROLE) {
         if (market == address(0)) revert AddressZero();
         if (!supportedMarkets[market]) {
             supportedMarkets[market] = true;
@@ -414,7 +409,7 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
         }
     }
 
-    function removeSupportedMarket(address market) external onlyRole(ADMIN_ROLE) whenNotPaused {
+    function removeSupportedMarket(address market) external onlyRoleWhenNotPaused(ADMIN_ROLE) {
         if (market == address(0)) revert AddressZero();
         if (supportedMarkets[market]) {
             supportedMarkets[market] = false;
@@ -455,21 +450,4 @@ contract LendingManager is ILendingManager, AccessControlEnumerable, ReentrancyG
 
     // --- Pausable Functions ---
 
-    /**
-     * @notice Pauses the contract.
-     * @dev This function can only be called by an address with the ADMIN_ROLE.
-     * All pausable functions will revert when the contract is paused.
-     */
-    function pause() external onlyRole(ADMIN_ROLE) {
-        _pause();
-    }
-
-    /**
-     * @notice Unpauses the contract.
-     * @dev This function can only be called by an address with the ADMIN_ROLE.
-     * All pausable functions will resume normal operation when unpaused.
-     */
-    function unpause() external onlyRole(ADMIN_ROLE) {
-        _unpause();
-    }
 }

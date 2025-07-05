@@ -12,6 +12,7 @@ import {CollectionRegistry} from "../src/CollectionRegistry.sol";
 import {ICollectionRegistry} from "../src/interfaces/ICollectionRegistry.sol";
 import {DebtSubsidizer} from "../src/DebtSubsidizer.sol";
 import {IDebtSubsidizer} from "../src/interfaces/IDebtSubsidizer.sol";
+import {Roles} from "../src/Roles.sol";
 import {ComptrollerInterface, InterestRateModel} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol";
 import {Comptroller} from "compound-protocol-2.8.1/contracts/Comptroller.sol";
 import {WhitePaperInterestRateModel} from "compound-protocol-2.8.1/contracts/WhitePaperInterestRateModel.sol";
@@ -69,7 +70,8 @@ contract DeployLocal is Script {
         // If the vault needs to be explicitly added to the collection in the registry:
         // collectionRegistry.addVaultToCollection(address(nft), address(vault));
 
-        lendingManager.revokeVaultRole(address(msg.sender));
+        // Grant OPERATOR_ROLE to vault for cross-contract operations
+        lendingManager.revokeRole(Roles.OPERATOR_ROLE, address(msg.sender));
         lendingManager.grantVaultRole(address(vault));
         epochManager.grantVaultRole(address(vault));
         vault.setEpochManager(address(epochManager));

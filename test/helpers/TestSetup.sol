@@ -174,28 +174,8 @@ contract TestSetup is Test {
         // Configure Epoch Manager
         epochManager.grantVaultRole(address(collectionsVault));
 
-        // Register collections
-        ICollectionRegistry.WeightFunction memory weightFunc =
-            ICollectionRegistry.WeightFunction({fnType: ICollectionRegistry.WeightFunctionType.LINEAR, p1: 1000, p2: 0});
-
-        ICollectionRegistry.Collection memory collection1 = ICollectionRegistry.Collection({
-            collectionAddress: address(nftCollection1),
-            collectionType: ICollectionRegistry.CollectionType.ERC721,
-            weightFunction: weightFunc,
-            yieldSharePercentage: 5000, // 50%
-            vaults: new address[](0)
-        });
-
-        ICollectionRegistry.Collection memory collection2 = ICollectionRegistry.Collection({
-            collectionAddress: address(nftCollection2),
-            collectionType: ICollectionRegistry.CollectionType.ERC721,
-            weightFunction: weightFunc,
-            yieldSharePercentage: 3000, // 30%
-            vaults: new address[](0)
-        });
-
-        collectionRegistry.registerCollection(collection1);
-        collectionRegistry.registerCollection(collection2);
+        // Register collections using separate function to reduce stack depth
+        _registerCollections();
 
         // Add vaults to collections
         collectionRegistry.addVaultToCollection(address(nftCollection1), address(collectionsVault));
@@ -208,6 +188,37 @@ contract TestSetup is Test {
         debtSubsidizer.initializeSubsidyPool(500_000e6); // 500k USDC subsidy pool
 
         vm.stopPrank();
+    }
+
+    function _registerCollections() internal {
+        _registerCollection1();
+        _registerCollection2();
+    }
+
+    function _registerCollection1() internal {
+        ICollectionRegistry.WeightFunction memory weightFunc =
+            ICollectionRegistry.WeightFunction({fnType: ICollectionRegistry.WeightFunctionType.LINEAR, p1: 1000, p2: 0});
+
+        collectionRegistry.registerCollection(ICollectionRegistry.Collection({
+            collectionAddress: address(nftCollection1),
+            collectionType: ICollectionRegistry.CollectionType.ERC721,
+            weightFunction: weightFunc,
+            yieldSharePercentage: 5000, // 50%
+            vaults: new address[](0)
+        }));
+    }
+
+    function _registerCollection2() internal {
+        ICollectionRegistry.WeightFunction memory weightFunc =
+            ICollectionRegistry.WeightFunction({fnType: ICollectionRegistry.WeightFunctionType.LINEAR, p1: 1000, p2: 0});
+
+        collectionRegistry.registerCollection(ICollectionRegistry.Collection({
+            collectionAddress: address(nftCollection2),
+            collectionType: ICollectionRegistry.CollectionType.ERC721,
+            weightFunction: weightFunc,
+            yieldSharePercentage: 3000, // 30%
+            vaults: new address[](0)
+        }));
     }
 
     function _distributeTokens() internal {
@@ -236,47 +247,35 @@ contract TestSetup is Test {
     }
 
     function _exportContractAddresses() internal {
-        string memory contractAddresses = string(
-            abi.encodePacked(
-                "{\n",
-                '  "collectionsVault": "',
-                vm.toString(address(collectionsVault)),
-                '",\n',
-                '  "lendingManager": "',
-                vm.toString(address(lendingManager)),
-                '",\n',
-                '  "debtSubsidizer": "',
-                vm.toString(address(debtSubsidizer)),
-                '",\n',
-                '  "epochManager": "',
-                vm.toString(address(epochManager)),
-                '",\n',
-                '  "collectionRegistry": "',
-                vm.toString(address(collectionRegistry)),
-                '",\n',
-                '  "usdc": "',
-                vm.toString(address(usdc)),
-                '",\n',
-                '  "cUsdc": "',
-                vm.toString(address(cUsdc)),
-                '",\n',
-                '  "nftCollection1": "',
-                vm.toString(address(nftCollection1)),
-                '",\n',
-                '  "nftCollection2": "',
-                vm.toString(address(nftCollection2)),
-                '",\n',
-                '  "comptroller": "',
-                vm.toString(address(comptroller)),
-                '"\n',
-                "}"
-            )
-        );
+        // Simplified approach to avoid stack too deep
+        string memory part1 = _buildAddressesPart1();
+        string memory part2 = _buildAddressesPart2();
+        string memory contractAddresses = string(abi.encodePacked("{\n", part1, part2, "}"));
 
         emit TestDataExported("contract-addresses.json", contractAddresses);
 
         // Write to file for backend integration
         vm.writeFile("test-exports/contract-addresses.json", contractAddresses);
+    }
+
+    function _buildAddressesPart1() internal view returns (string memory) {
+        return string(abi.encodePacked(
+            '  "collectionsVault": "', vm.toString(address(collectionsVault)), '",\n',
+            '  "lendingManager": "', vm.toString(address(lendingManager)), '",\n',
+            '  "debtSubsidizer": "', vm.toString(address(debtSubsidizer)), '",\n',
+            '  "epochManager": "', vm.toString(address(epochManager)), '",\n',
+            '  "collectionRegistry": "', vm.toString(address(collectionRegistry)), '",\n'
+        ));
+    }
+
+    function _buildAddressesPart2() internal view returns (string memory) {
+        return string(abi.encodePacked(
+            '  "usdc": "', vm.toString(address(usdc)), '",\n',
+            '  "cUsdc": "', vm.toString(address(cUsdc)), '",\n',
+            '  "nftCollection1": "', vm.toString(address(nftCollection1)), '",\n',
+            '  "nftCollection2": "', vm.toString(address(nftCollection2)), '",\n',
+            '  "comptroller": "', vm.toString(address(comptroller)), '"\n'
+        ));
     }
 
     // Helper functions for tests

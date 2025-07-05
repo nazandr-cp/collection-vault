@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {AccessControlBase} from "./AccessControlBase.sol";
 import {Roles} from "./Roles.sol";
 import {IEpochManager} from "./interfaces/IEpochManager.sol";
 import {IDebtSubsidizer} from "./interfaces/IDebtSubsidizer.sol";
@@ -14,44 +12,36 @@ import {IDebtSubsidizer} from "./interfaces/IDebtSubsidizer.sol";
  * @notice Manages the lifecycle of epochs for distributing rewards.
  * It handles epoch creation, state transitions, and yield allocation tracking.
  */
-contract EpochManager is IEpochManager, Ownable, AccessControl, ReentrancyGuard {
-    bytes32 public constant VAULT_ROLE = Roles.VAULT_ROLE;
+contract EpochManager is IEpochManager, AccessControlBase {
+    bytes32 public constant OPERATOR_ROLE = Roles.OPERATOR_ROLE;
 
     uint256 public epochDuration; // Duration of each epoch in seconds (e.g., 7 days)
     uint256 public currentEpochId;
     mapping(uint256 => Epoch) public epochs;
 
-    address public automatedSystem; // Address authorized to call certain functions (e.g., Go server)
     IDebtSubsidizer public debtSubsidizer; // DebtSubsidizer contract for Merkle root updates
-
-    modifier onlyAutomatedSystem() {
-        if (msg.sender != automatedSystem && msg.sender != owner()) {
-            revert EpochManager__Unauthorized();
-        }
-        _;
-    }
 
     /**
      * @notice Initializes the EpochManager contract.
      * @param _initialEpochDuration The initial duration for epochs (e.g., 7 days in seconds).
      * @param _initialAutomatedSystem The address of the automated system that will interact with this contract.
-     * @param _initialOwner The initial owner of the contract.
+     * @param _initialAdmin The initial admin of the contract.
      * @param _debtSubsidizer The address of the DebtSubsidizer contract.
      */
     constructor(
         uint256 _initialEpochDuration,
         address _initialAutomatedSystem,
-        address _initialOwner,
+        address _initialAdmin,
         address _debtSubsidizer
-    ) Ownable(_initialOwner) {
+    ) AccessControlBase(_initialAdmin) {
         if (_initialEpochDuration == 0) {
             revert EpochManager__InvalidEpochDuration();
         }
         epochDuration = _initialEpochDuration;
-        automatedSystem = _initialAutomatedSystem;
+        if (_initialAutomatedSystem != address(0)) {
+            _grantRole(Roles.OPERATOR_ROLE, _initialAutomatedSystem);
+        }
         debtSubsidizer = IDebtSubsidizer(_debtSubsidizer);
-        _grantRole(DEFAULT_ADMIN_ROLE, _initialOwner);
-        _grantRole(VAULT_ROLE, _initialOwner);
         // currentEpochId is 0 initially, startEpoch will create epoch 1.
     }
 
@@ -62,7 +52,7 @@ contract EpochManager is IEpochManager, Ownable, AccessControl, ReentrancyGuard 
      * @param vault The address of the CollectionsVault.
      * @param amount The amount of yield being allocated.
      */
-    function allocateVaultYield(address vault, uint256 amount) external nonReentrant onlyRole(VAULT_ROLE) {
+    function allocateVaultYield(address vault, uint256 amount) external nonReentrant onlyRoleWhenNotPaused(OPERATOR_ROLE) {
         if (currentEpochId == 0) {
             revert EpochManager__InvalidEpochId(0);
         }
@@ -81,11 +71,20 @@ contract EpochManager is IEpochManager, Ownable, AccessControl, ReentrancyGuard 
      * @notice Updates the address of the automated system.
      * @param newAutomatedSystem The new address for the automated system.
      */
-    function setAutomatedSystem(address newAutomatedSystem) external onlyOwner {
+    function setAutomatedSystem(address newAutomatedSystem) external onlyRole(Roles.ADMIN_ROLE) {
         if (newAutomatedSystem == address(0)) {
             revert("EpochManager: Automated system address cannot be zero.");
         }
-        automatedSystem = newAutomatedSystem;
+        // Revoke old automation system role if any
+        uint256 memberCount = getRoleMemberCount(Roles.OPERATOR_ROLE);
+        for (uint256 i = 0; i < memberCount; i++) {
+            address oldAutomation = getRoleMember(Roles.OPERATOR_ROLE, 0);
+            _revokeRole(Roles.OPERATOR_ROLE, oldAutomation);
+        }
+        // Grant role to new automation system
+        if (newAutomatedSystem != address(0)) {
+            _grantRole(Roles.OPERATOR_ROLE, newAutomatedSystem);
+        }
         emit AutomatedSystemUpdated(newAutomatedSystem);
     }
 
@@ -93,7 +92,7 @@ contract EpochManager is IEpochManager, Ownable, AccessControl, ReentrancyGuard 
      * @notice Updates the address of the DebtSubsidizer contract.
      * @param newDebtSubsidizer The new address for the DebtSubsidizer contract.
      */
-    function setDebtSubsidizer(address newDebtSubsidizer) external onlyOwner {
+    function setDebtSubsidizer(address newDebtSubsidizer) external onlyRole(Roles.ADMIN_ROLE) {
         debtSubsidizer = IDebtSubsidizer(newDebtSubsidizer);
         emit DebtSubsidizerUpdated(newDebtSubsidizer);
     }
@@ -213,7 +212,7 @@ contract EpochManager is IEpochManager, Ownable, AccessControl, ReentrancyGuard 
      * @param epochId The ID of the epoch to mark as failed.
      * @param reason A string describing the reason for failure.
      */
-    function markEpochFailed(uint256 epochId, string calldata reason) external nonReentrant onlyAutomatedSystem {
+    function markEpochFailed(uint256 epochId, string calldata reason) external nonReentrant onlyRoleWhenNotPaused(Roles.OPERATOR_ROLE) {
         if (epochId == 0 || epochId > currentEpochId) {
             revert EpochManager__InvalidEpochId(epochId);
         }
@@ -235,7 +234,7 @@ contract EpochManager is IEpochManager, Ownable, AccessControl, ReentrancyGuard 
      * @dev Streamlined version that just starts the epoch and returns the ID.
      * @return epochId The ID of the newly started epoch.
      */
-    function startEpoch() external nonReentrant onlyAutomatedSystem returns (uint256) {
+    function startEpoch() external nonReentrant onlyRoleWhenNotPaused(Roles.OPERATOR_ROLE) returns (uint256) {
         if (currentEpochId > 0) {
             Epoch storage currentEpoch = epochs[currentEpochId];
             if (currentEpoch.status != EpochStatus.Completed) {
@@ -272,7 +271,7 @@ contract EpochManager is IEpochManager, Ownable, AccessControl, ReentrancyGuard 
         address vaultAddress,
         bytes32 merkleRoot,
         uint256 subsidiesDistributed
-    ) external nonReentrant onlyAutomatedSystem {
+    ) external nonReentrant onlyRoleWhenNotPaused(Roles.OPERATOR_ROLE) {
         if (epochId == 0 || epochId > currentEpochId) {
             revert EpochManager__InvalidEpochId(epochId);
         }
@@ -294,13 +293,13 @@ contract EpochManager is IEpochManager, Ownable, AccessControl, ReentrancyGuard 
         emit EpochFinalized(epochId, epoch.totalYieldAvailable, epoch.totalSubsidiesDistributed);
     }
 
-    function grantVaultRole(address vault) external onlyOwner {
-        _grantRole(VAULT_ROLE, vault);
-        emit EpochManagerRoleGranted(VAULT_ROLE, vault, msg.sender, block.timestamp);
+    function grantVaultRole(address vault) external onlyRoleWhenNotPaused(Roles.ADMIN_ROLE) {
+        _grantRole(OPERATOR_ROLE, vault);
+        emit EpochManagerRoleGranted(OPERATOR_ROLE, vault, msg.sender, block.timestamp);
     }
 
-    function revokeVaultRole(address vault) external onlyOwner {
-        _revokeRole(VAULT_ROLE, vault);
-        emit EpochManagerRoleRevoked(VAULT_ROLE, vault, msg.sender, block.timestamp);
+    function revokeVaultRole(address vault) external onlyRoleWhenNotPaused(Roles.ADMIN_ROLE) {
+        _revokeRole(OPERATOR_ROLE, vault);
+        emit EpochManagerRoleRevoked(OPERATOR_ROLE, vault, msg.sender, block.timestamp);
     }
 }

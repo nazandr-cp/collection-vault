@@ -9,6 +9,7 @@ import {EpochManager} from "../src/EpochManager.sol";
 import {CollectionRegistry} from "../src/CollectionRegistry.sol";
 import {ICollectionRegistry} from "../src/interfaces/ICollectionRegistry.sol";
 import {DebtSubsidizer} from "../src/DebtSubsidizer.sol";
+import {Roles} from "../src/Roles.sol";
 import {ComptrollerInterface, InterestRateModel} from "compound-protocol-2.8.1/contracts/CTokenInterfaces.sol";
 import {CErc20Immutable} from "compound-protocol-2.8.1/contracts/CErc20Immutable.sol";
 import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
@@ -19,11 +20,10 @@ contract DeployWithExistingNFT is Script {
         address existingNFT = vm.envAddress("EXISTING_NFT_ADDRESS");
         vm.startBroadcast(deployerKey);
 
-        // Use already deployed Compound addresses
-        address asset = 0x4dd42d4559f7F5026364550FABE7824AECF5a1d1; // underlyingAddr
-        address cToken = 0x642d97319cd50D2E5FC7F0FE022Ed87407045e90; // cTokenAddr
-        address comptroller = 0x7E81fAaF1132A17DCc0C76b1280E0C0e598D5635;
-        // address interestRateModel = 0x13431E4D4a4281Be1A405681ECADb9F445Cd8Eb6;
+        // Use already deployed Compound addresses from environment
+        address asset = vm.envAddress("COMPOUND_ASSET_ADDRESS"); // underlyingAddr
+        address cToken = vm.envAddress("COMPOUND_CTOKEN_ADDRESS"); // cTokenAddr
+        address comptroller = vm.envAddress("COMPOUND_COMPTROLLER_ADDRESS");
 
         // Deploy new contracts that depend on Compound
         LendingManager lendingManager = new LendingManager(msg.sender, msg.sender, asset, cToken);
@@ -40,6 +40,8 @@ contract DeployWithExistingNFT is Script {
         TransparentUpgradeableProxy proxy = new TransparentUpgradeableProxy(address(debtImpl), msg.sender, initData);
         DebtSubsidizer debtSubsidizer = DebtSubsidizer(address(proxy));
 
+        // The deployer (msg.sender) should already have all roles via the constructor
+        
         // Register the existing NFT collection
         ICollectionRegistry.Collection memory collectionData = ICollectionRegistry.Collection({
             collectionAddress: existingNFT,
@@ -69,16 +71,16 @@ contract DeployWithExistingNFT is Script {
         ComptrollerInterface(comptroller).enterMarkets(markets);
 
         // Grant epoch server roles for automated epoch processing
-        address epochServerAddress = 0xD620932690E1ae01126CDf541CBAdd0C7C1B918F;
+        address epochServerAddress = vm.envAddress("EPOCH_SERVER_ADDRESS");
         console.log("Granting roles to epoch server:", epochServerAddress);
         
-        // Grant admin role on vault (for allocateYieldToEpoch)
-        vault.grantRole(0x0000000000000000000000000000000000000000000000000000000000000000, epochServerAddress);
-        console.log("Granted vault admin role to epoch server");
+        // Grant ADMIN_ROLE on vault (for allocateYieldToEpoch)
+        vault.grantRole(Roles.ADMIN_ROLE, epochServerAddress);
+        console.log("Granted vault ADMIN_ROLE to epoch server");
         
-        // Grant automated system role on epoch manager (for endEpochWithSubsidies)
-        epochManager.grantRole(keccak256("AUTOMATED_SYSTEM_ROLE"), epochServerAddress);
-        console.log("Granted automated system role to epoch server");
+        // Grant OPERATOR_ROLE on epoch manager (for endEpochWithSubsidies)
+        epochManager.grantRole(Roles.OPERATOR_ROLE, epochServerAddress);
+        console.log("Granted epoch manager OPERATOR_ROLE to epoch server");
 
         vm.stopBroadcast();
 
