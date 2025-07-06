@@ -199,26 +199,30 @@ contract TestSetup is Test {
         ICollectionRegistry.WeightFunction memory weightFunc =
             ICollectionRegistry.WeightFunction({fnType: ICollectionRegistry.WeightFunctionType.LINEAR, p1: 1000, p2: 0});
 
-        collectionRegistry.registerCollection(ICollectionRegistry.Collection({
-            collectionAddress: address(nftCollection1),
-            collectionType: ICollectionRegistry.CollectionType.ERC721,
-            weightFunction: weightFunc,
-            yieldSharePercentage: 5000, // 50%
-            vaults: new address[](0)
-        }));
+        collectionRegistry.registerCollection(
+            ICollectionRegistry.Collection({
+                collectionAddress: address(nftCollection1),
+                collectionType: ICollectionRegistry.CollectionType.ERC721,
+                weightFunction: weightFunc,
+                yieldSharePercentage: 5000, // 50%
+                vaults: new address[](0)
+            })
+        );
     }
 
     function _registerCollection2() internal {
         ICollectionRegistry.WeightFunction memory weightFunc =
             ICollectionRegistry.WeightFunction({fnType: ICollectionRegistry.WeightFunctionType.LINEAR, p1: 1000, p2: 0});
 
-        collectionRegistry.registerCollection(ICollectionRegistry.Collection({
-            collectionAddress: address(nftCollection2),
-            collectionType: ICollectionRegistry.CollectionType.ERC721,
-            weightFunction: weightFunc,
-            yieldSharePercentage: 3000, // 30%
-            vaults: new address[](0)
-        }));
+        collectionRegistry.registerCollection(
+            ICollectionRegistry.Collection({
+                collectionAddress: address(nftCollection2),
+                collectionType: ICollectionRegistry.CollectionType.ERC721,
+                weightFunction: weightFunc,
+                yieldSharePercentage: 3000, // 30%
+                vaults: new address[](0)
+            })
+        );
     }
 
     function _distributeTokens() internal {
@@ -259,23 +263,47 @@ contract TestSetup is Test {
     }
 
     function _buildAddressesPart1() internal view returns (string memory) {
-        return string(abi.encodePacked(
-            '  "collectionsVault": "', vm.toString(address(collectionsVault)), '",\n',
-            '  "lendingManager": "', vm.toString(address(lendingManager)), '",\n',
-            '  "debtSubsidizer": "', vm.toString(address(debtSubsidizer)), '",\n',
-            '  "epochManager": "', vm.toString(address(epochManager)), '",\n',
-            '  "collectionRegistry": "', vm.toString(address(collectionRegistry)), '",\n'
-        ));
+        return string(
+            abi.encodePacked(
+                '  "collectionsVault": "',
+                vm.toString(address(collectionsVault)),
+                '",\n',
+                '  "lendingManager": "',
+                vm.toString(address(lendingManager)),
+                '",\n',
+                '  "debtSubsidizer": "',
+                vm.toString(address(debtSubsidizer)),
+                '",\n',
+                '  "epochManager": "',
+                vm.toString(address(epochManager)),
+                '",\n',
+                '  "collectionRegistry": "',
+                vm.toString(address(collectionRegistry)),
+                '",\n'
+            )
+        );
     }
 
     function _buildAddressesPart2() internal view returns (string memory) {
-        return string(abi.encodePacked(
-            '  "usdc": "', vm.toString(address(usdc)), '",\n',
-            '  "cUsdc": "', vm.toString(address(cUsdc)), '",\n',
-            '  "nftCollection1": "', vm.toString(address(nftCollection1)), '",\n',
-            '  "nftCollection2": "', vm.toString(address(nftCollection2)), '",\n',
-            '  "comptroller": "', vm.toString(address(comptroller)), '"\n'
-        ));
+        return string(
+            abi.encodePacked(
+                '  "usdc": "',
+                vm.toString(address(usdc)),
+                '",\n',
+                '  "cUsdc": "',
+                vm.toString(address(cUsdc)),
+                '",\n',
+                '  "nftCollection1": "',
+                vm.toString(address(nftCollection1)),
+                '",\n',
+                '  "nftCollection2": "',
+                vm.toString(address(nftCollection2)),
+                '",\n',
+                '  "comptroller": "',
+                vm.toString(address(comptroller)),
+                '"\n'
+            )
+        );
     }
 
     // Helper functions for tests

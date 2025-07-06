@@ -28,8 +28,8 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
 
     bytes32 public constant ADMIN_ROLE = Roles.ADMIN_ROLE;
     bytes32 public constant OPERATOR_ROLE = Roles.OPERATOR_ROLE;
-    
-    // For interface compatibility - returns OPERATOR_ROLE 
+
+    // For interface compatibility - returns OPERATOR_ROLE
     function DEBT_SUBSIDIZER_ROLE() external pure returns (bytes32) {
         return OPERATOR_ROLE;
     }
@@ -388,7 +388,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         emit Transfer(owner, address(0), shares);
 
         uint256 finalAssetsToTransfer = _handleFullRedemption(assets, shares);
-        
+
         _performAssetTransfer(receiver, finalAssetsToTransfer, owner, shares);
         _updateCollectionData(vaultData, assets, shares, currentCollectionTotalAssets);
 
@@ -400,7 +400,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         finalAssetsToTransfer = assets;
         uint256 _totalSupply = totalSupply();
         bool isFullRedeem = (shares == _totalSupply && shares != 0);
-        
+
         if (isFullRedeem) {
             uint256 remainingDustInLM = lendingManager.totalAssets();
             uint256 reserve = totalYieldReserved;
@@ -415,7 +415,9 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         }
     }
 
-    function _performAssetTransfer(address receiver, uint256 finalAssetsToTransfer, address owner, uint256 shares) internal {
+    function _performAssetTransfer(address receiver, uint256 finalAssetsToTransfer, address owner, uint256 shares)
+        internal
+    {
         uint256 vaultBalance = IERC20(asset()).balanceOf(address(this));
         if (vaultBalance < finalAssetsToTransfer) {
             revert Vault_InsufficientBalancePostLMWithdraw();
@@ -425,9 +427,9 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
     }
 
     function _updateCollectionData(
-        CollectionVaultData storage vaultData, 
-        uint256 assets, 
-        uint256 shares, 
+        CollectionVaultData storage vaultData,
+        uint256 assets,
+        uint256 shares,
         uint256 currentCollectionTotalAssets
     ) internal {
         uint256 deduction;

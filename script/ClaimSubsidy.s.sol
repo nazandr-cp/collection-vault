@@ -9,7 +9,7 @@ contract ClaimSubsidy is Script {
         // Load addresses from .env
         address vaultAddress = vm.envAddress("VAULT_ADDRESS");
         address debtSubsidizerAddress = vm.envAddress("DEBT_SUBSIDIZER_ADDRESS");
-        
+
         // Load user details from .env
         address user2 = vm.envAddress("USER2"); // 0x8F37c5C4fA708E06a656d858003EF7dc5F60A29B
         uint256 user2Key = vm.envUint("USER2_PRIVATE_KEY");
@@ -36,11 +36,8 @@ contract ClaimSubsidy is Script {
 
         // For USER2: 0x8F37c5C4fA708E06a656d858003EF7dc5F60A29B
         // Total earned: 2093968 (from epoch server logs)
-        IDebtSubsidizer.ClaimData memory user2Claim = IDebtSubsidizer.ClaimData({
-            recipient: user2,
-            totalEarned: 2093968,
-            merkleProof: _getMerkleProofForUser2()
-        });
+        IDebtSubsidizer.ClaimData memory user2Claim =
+            IDebtSubsidizer.ClaimData({recipient: user2, totalEarned: 2093968, merkleProof: _getMerkleProofForUser2()});
 
         try debtSubsidizer.claimSubsidy(vaultAddress, user2Claim) {
             console.log("USER2 subsidy claimed successfully!");
@@ -58,11 +55,8 @@ contract ClaimSubsidy is Script {
 
         // For USER3: 0x3575B992C5337226AEcf4e7f93Dfbe80c576CE15
         // Total earned: 4187936 (from epoch server logs)
-        IDebtSubsidizer.ClaimData memory user3Claim = IDebtSubsidizer.ClaimData({
-            recipient: user3,
-            totalEarned: 4187936,
-            merkleProof: _getMerkleProofForUser3()
-        });
+        IDebtSubsidizer.ClaimData memory user3Claim =
+            IDebtSubsidizer.ClaimData({recipient: user3, totalEarned: 4187936, merkleProof: _getMerkleProofForUser3()});
 
         try debtSubsidizer.claimSubsidy(vaultAddress, user3Claim) {
             console.log("USER3 subsidy claimed successfully!");
@@ -81,48 +75,38 @@ contract ClaimSubsidy is Script {
     // This is calculated based on the merkle tree structure from epoch server
     function _getMerkleProofForUser2() internal pure returns (bytes32[] memory) {
         bytes32[] memory proof = new bytes32[](1);
-        
+
         // For a 2-leaf tree, each leaf's proof is the sibling leaf hash
         // USER3 leaf hash (which comes first in sorted order)
-        proof[0] = keccak256(abi.encodePacked(
-            address(0x3575B992C5337226AEcf4e7f93Dfbe80c576CE15),
-            uint256(4187936)
-        ));
-        
+        proof[0] = keccak256(abi.encodePacked(address(0x3575B992C5337226AEcf4e7f93Dfbe80c576CE15), uint256(4187936)));
+
         return proof;
     }
 
     // Generate merkle proof for USER3 (0x3575B992C5337226AEcf4e7f93Dfbe80c576CE15)
     function _getMerkleProofForUser3() internal pure returns (bytes32[] memory) {
         bytes32[] memory proof = new bytes32[](1);
-        
+
         // For a 2-leaf tree, each leaf's proof is the sibling leaf hash
         // USER2 leaf hash (which comes second in sorted order)
-        proof[0] = keccak256(abi.encodePacked(
-            address(0x8F37c5C4fA708E06a656d858003EF7dc5F60A29B),
-            uint256(2093968)
-        ));
-        
+        proof[0] = keccak256(abi.encodePacked(address(0x8F37c5C4fA708E06a656d858003EF7dc5F60A29B), uint256(2093968)));
+
         return proof;
     }
 
     // Helper function to verify merkle root calculation
     function verifyMerkleRoot() external pure returns (bytes32) {
         // Calculate leaf hashes
-        bytes32 user2Leaf = keccak256(abi.encodePacked(
-            address(0x8F37c5C4fA708E06a656d858003EF7dc5F60A29B),
-            uint256(2093968)
-        ));
-        
-        bytes32 user3Leaf = keccak256(abi.encodePacked(
-            address(0x3575B992C5337226AEcf4e7f93Dfbe80c576CE15),
-            uint256(4187936)
-        ));
-        
+        bytes32 user2Leaf =
+            keccak256(abi.encodePacked(address(0x8F37c5C4fA708E06a656d858003EF7dc5F60A29B), uint256(2093968)));
+
+        bytes32 user3Leaf =
+            keccak256(abi.encodePacked(address(0x3575B992C5337226AEcf4e7f93Dfbe80c576CE15), uint256(4187936)));
+
         // Sort leaves for OpenZeppelin compatibility
         bytes32 left = user2Leaf < user3Leaf ? user2Leaf : user3Leaf;
         bytes32 right = user2Leaf < user3Leaf ? user3Leaf : user2Leaf;
-        
+
         // Calculate root
         return keccak256(abi.encodePacked(left, right));
     }

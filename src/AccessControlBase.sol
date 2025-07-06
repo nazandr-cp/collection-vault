@@ -13,41 +13,44 @@ import {Roles} from "./Roles.sol";
  * @dev Establishes role hierarchy and common security patterns for the Collection Vault system
  */
 abstract contract AccessControlBase is AccessControlEnumerable, ReentrancyGuard, Pausable {
-    
     // Events for role management
-    event RoleGrantedWithDetails(bytes32 indexed role, address indexed account, address indexed sender, uint256 timestamp);
-    event RoleRevokedWithDetails(bytes32 indexed role, address indexed account, address indexed sender, uint256 timestamp);
+    event RoleGrantedWithDetails(
+        bytes32 indexed role, address indexed account, address indexed sender, uint256 timestamp
+    );
+    event RoleRevokedWithDetails(
+        bytes32 indexed role, address indexed account, address indexed sender, uint256 timestamp
+    );
     event EmergencyActionTaken(address indexed actor, string action, uint256 timestamp);
-    
+
     // Errors
     error AccessControlBase__InvalidAddress();
     error AccessControlBase__CannotRemoveLastAdmin();
     error AccessControlBase__UnauthorizedEmergencyAction();
-    
+
     constructor(address initialAdmin) {
         if (initialAdmin == address(0)) revert AccessControlBase__InvalidAddress();
-        
+
         // Set up simplified role hierarchy
         // OWNER_ROLE is managed by DEFAULT_ADMIN_ROLE
         _setRoleAdmin(Roles.OWNER_ROLE, DEFAULT_ADMIN_ROLE);
-        
+
         // ADMIN_ROLE is managed by OWNER_ROLE
         _setRoleAdmin(Roles.ADMIN_ROLE, Roles.OWNER_ROLE);
-        
+
         // Operational roles are managed by ADMIN_ROLE
         _setRoleAdmin(Roles.OPERATOR_ROLE, Roles.ADMIN_ROLE);
         _setRoleAdmin(Roles.COLLECTION_MANAGER_ROLE, Roles.ADMIN_ROLE);
-        
+
         // GUARDIAN_ROLE is managed by OWNER_ROLE for security
         _setRoleAdmin(Roles.GUARDIAN_ROLE, Roles.OWNER_ROLE);
-        
+
         // Grant initial roles to establish proper hierarchy
         _grantRole(DEFAULT_ADMIN_ROLE, initialAdmin);
         _grantRole(Roles.OWNER_ROLE, initialAdmin);
         _grantRole(Roles.ADMIN_ROLE, initialAdmin);
         _grantRole(Roles.GUARDIAN_ROLE, initialAdmin);
     }
-    
+
     /**
      * @dev Enhanced role granting with event emission
      */
@@ -56,23 +59,25 @@ abstract contract AccessControlBase is AccessControlEnumerable, ReentrancyGuard,
         _grantRole(role, account);
         emit RoleGrantedWithDetails(role, account, msg.sender, block.timestamp);
     }
-    
+
     /**
      * @dev Enhanced role revoking with safety checks
      */
     function revokeRoleWithDetails(bytes32 role, address account) external onlyRole(getRoleAdmin(role)) {
         if (account == address(0)) revert AccessControlBase__InvalidAddress();
-        
+
         // Prevent removing the last admin
-        if ((role == Roles.ADMIN_ROLE || role == Roles.OWNER_ROLE || role == DEFAULT_ADMIN_ROLE) && 
-            getRoleMemberCount(role) <= 1) {
+        if (
+            (role == Roles.ADMIN_ROLE || role == Roles.OWNER_ROLE || role == DEFAULT_ADMIN_ROLE)
+                && getRoleMemberCount(role) <= 1
+        ) {
             revert AccessControlBase__CannotRemoveLastAdmin();
         }
-        
+
         _revokeRole(role, account);
         emit RoleRevokedWithDetails(role, account, msg.sender, block.timestamp);
     }
-    
+
     /**
      * @dev Pause contract - restricted to GUARDIAN_ROLE
      */
@@ -80,7 +85,7 @@ abstract contract AccessControlBase is AccessControlEnumerable, ReentrancyGuard,
         _pause();
         emit EmergencyActionTaken(msg.sender, "pause", block.timestamp);
     }
-    
+
     /**
      * @dev Unpause contract - restricted to GUARDIAN_ROLE
      */
@@ -88,7 +93,7 @@ abstract contract AccessControlBase is AccessControlEnumerable, ReentrancyGuard,
         _unpause();
         emit EmergencyActionTaken(msg.sender, "unpause", block.timestamp);
     }
-    
+
     /**
      * @dev Emergency pause - can be called by GUARDIAN_ROLE even when paused
      */
@@ -98,7 +103,7 @@ abstract contract AccessControlBase is AccessControlEnumerable, ReentrancyGuard,
         }
         emit EmergencyActionTaken(msg.sender, "emergency_pause", block.timestamp);
     }
-    
+
     /**
      * @dev Check if caller has any of the specified roles
      */
@@ -113,7 +118,7 @@ abstract contract AccessControlBase is AccessControlEnumerable, ReentrancyGuard,
         require(roleFound, "AccessControlBase: missing required role");
         _;
     }
-    
+
     /**
      * @dev Modifier that combines role check with pause check
      */
@@ -122,7 +127,7 @@ abstract contract AccessControlBase is AccessControlEnumerable, ReentrancyGuard,
         _requireNotPaused();
         _;
     }
-    
+
     /**
      * @dev Get all role members for a specific role (limited to first 100 for gas efficiency)
      */
@@ -130,20 +135,18 @@ abstract contract AccessControlBase is AccessControlEnumerable, ReentrancyGuard,
         uint256 count = getRoleMemberCount(role);
         uint256 returnCount = count > 100 ? 100 : count;
         address[] memory members = new address[](returnCount);
-        
+
         for (uint256 i = 0; i < returnCount; i++) {
             members[i] = getRoleMember(role, i);
         }
         return members;
     }
-    
+
     /**
      * @dev Check if an address has admin privileges (any admin role)
      */
     function isAdmin(address account) external view returns (bool) {
-        return hasRole(DEFAULT_ADMIN_ROLE, account) || 
-               hasRole(Roles.OWNER_ROLE, account) || 
-               hasRole(Roles.ADMIN_ROLE, account);
+        return hasRole(DEFAULT_ADMIN_ROLE, account) || hasRole(Roles.OWNER_ROLE, account)
+            || hasRole(Roles.ADMIN_ROLE, account);
     }
-    
 }

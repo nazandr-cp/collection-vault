@@ -60,7 +60,11 @@ contract CollectionRegistry is ICollectionRegistry, AccessControlBase {
         }
     }
 
-    function setYieldShare(address collection, uint16 share) external override onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE) {
+    function setYieldShare(address collection, uint16 share)
+        external
+        override
+        onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE)
+    {
         require(_isRegistered[collection], "CollectionRegistry: Not registered");
         uint16 oldShare = _collections[collection].yieldSharePercentage;
         _collections[collection].yieldSharePercentage = share;
@@ -77,7 +81,11 @@ contract CollectionRegistry is ICollectionRegistry, AccessControlBase {
         emit WeightFunctionUpdated(collection, weightFunction.fnType, weightFunction.p1, weightFunction.p2);
     }
 
-    function addVaultToCollection(address collection, address vault) external override onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE) {
+    function addVaultToCollection(address collection, address vault)
+        external
+        override
+        onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE)
+    {
         require(_isRegistered[collection], "CollectionRegistry: Not registered");
         require(vault != address(0), "CollectionRegistry: Zero address");
         require(!_collectionHasVault[collection][vault], "CollectionRegistry: Vault already added");
@@ -88,7 +96,11 @@ contract CollectionRegistry is ICollectionRegistry, AccessControlBase {
         emit VaultAddedToCollection(collection, vault);
     }
 
-    function removeVaultFromCollection(address collection, address vault) external override onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE) {
+    function removeVaultFromCollection(address collection, address vault)
+        external
+        override
+        onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE)
+    {
         require(_isRegistered[collection], "CollectionRegistry: Not registered");
         require(_collectionHasVault[collection][vault], "CollectionRegistry: Vault not found");
 

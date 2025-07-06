@@ -45,8 +45,9 @@ contract LendingManager is ILendingManager, AccessControlBase {
     uint256 public globalCollateralFactor;
     uint256 public liquidationIncentive;
 
-    constructor(address initialAdmin, address vaultAddress, address _assetAddress, address _cTokenAddress) 
-        AccessControlBase(initialAdmin) {
+    constructor(address initialAdmin, address vaultAddress, address _assetAddress, address _cTokenAddress)
+        AccessControlBase(initialAdmin)
+    {
         if (
             initialAdmin == address(0) || vaultAddress == address(0) || _assetAddress == address(0)
                 || _cTokenAddress == address(0)
@@ -449,5 +450,4 @@ contract LendingManager is ILendingManager, AccessControlBase {
     }
 
     // --- Pausable Functions ---
-
 }

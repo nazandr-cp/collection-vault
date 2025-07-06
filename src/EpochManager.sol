@@ -52,7 +52,11 @@ contract EpochManager is IEpochManager, AccessControlBase {
      * @param vault The address of the CollectionsVault.
      * @param amount The amount of yield being allocated.
      */
-    function allocateVaultYield(address vault, uint256 amount) external nonReentrant onlyRoleWhenNotPaused(OPERATOR_ROLE) {
+    function allocateVaultYield(address vault, uint256 amount)
+        external
+        nonReentrant
+        onlyRoleWhenNotPaused(OPERATOR_ROLE)
+    {
         if (currentEpochId == 0) {
             revert EpochManager__InvalidEpochId(0);
         }
@@ -212,7 +216,11 @@ contract EpochManager is IEpochManager, AccessControlBase {
      * @param epochId The ID of the epoch to mark as failed.
      * @param reason A string describing the reason for failure.
      */
-    function markEpochFailed(uint256 epochId, string calldata reason) external nonReentrant onlyRoleWhenNotPaused(Roles.OPERATOR_ROLE) {
+    function markEpochFailed(uint256 epochId, string calldata reason)
+        external
+        nonReentrant
+        onlyRoleWhenNotPaused(Roles.OPERATOR_ROLE)
+    {
         if (epochId == 0 || epochId > currentEpochId) {
             revert EpochManager__InvalidEpochId(epochId);
         }

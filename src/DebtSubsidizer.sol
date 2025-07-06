@@ -23,11 +23,7 @@ import {ILendingManager} from "./interfaces/ILendingManager.sol";
 import {IEpochManager} from "./interfaces/IEpochManager.sol";
 import {ICollectionRegistry} from "./interfaces/ICollectionRegistry.sol";
 
-contract DebtSubsidizer is
-    Initializable,
-    IDebtSubsidizer,
-    AccessControlBaseUpgradeable
-{
+contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgradeable {
     using SafeERC20 for IERC20;
     using ERC165Checker for address;
 
@@ -279,7 +275,11 @@ contract DebtSubsidizer is
         }
     }
 
-    function updateMerkleRoot(address vaultAddress, bytes32 merkleRoot_) external override(IDebtSubsidizer) onlyRole(Roles.ADMIN_ROLE) {
+    function updateMerkleRoot(address vaultAddress, bytes32 merkleRoot_)
+        external
+        override(IDebtSubsidizer)
+        onlyRole(Roles.ADMIN_ROLE)
+    {
         if (vaultAddress == address(0)) {
             revert IDebtSubsidizer.AddressZero();
         }
