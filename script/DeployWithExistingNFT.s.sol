@@ -114,6 +114,26 @@ contract DeployWithExistingNFT is Script {
             console.log("Vault already has OPERATOR_ROLE on EpochManager");
         }
 
+        // 4. Add vault to DebtSubsidizer to enable subgraph CollectionVault template
+        console.log("Adding vault to DebtSubsidizer for subgraph indexing...");
+        debtSubsidizer.addVault(address(vault), address(lendingManager));
+        console.log("Vault added to DebtSubsidizer successfully");
+
+        // 5. Make initial deposit to create CollectionParticipation for subgraph
+        console.log("Making initial deposit to create CollectionParticipation...");
+        uint256 initialDepositAmount = 1000 * (10 ** MockERC20(asset).decimals()); // 1000 tokens
+        
+        // Grant collection operator access to the deployer
+        vault.grantCollectionAccess(existingNFT, admin);
+        
+        // Approve the vault to spend tokens
+        MockERC20(asset).approve(address(vault), initialDepositAmount);
+        
+        // Deposit to the vault for the NFT collection
+        vault.depositForCollection(initialDepositAmount, admin, existingNFT);
+        
+        console.log("Initial deposit of {} tokens completed for collection {}", initialDepositAmount, existingNFT);
+
         vm.stopBroadcast();
         console.log("Successfully connected collection", existingNFT, "to vault", address(vault));
 
@@ -123,7 +143,9 @@ contract DeployWithExistingNFT is Script {
         console.log("Collection registered and connected to vault");
         console.log("EpochManager configured on vault");
         console.log("OPERATOR_ROLE granted to admin and vault");
-        console.log("System ready for epoch operations!");
+        console.log("Vault added to DebtSubsidizer for subgraph indexing");
+        console.log("Initial deposit made to create CollectionParticipation");
+        console.log("System ready for epoch operations and subgraph indexing!");
 
         // Log deployed contract addresses
         console.log("Asset:", asset);
