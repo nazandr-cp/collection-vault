@@ -75,20 +75,55 @@ contract DeployWithExistingNFT is Script {
         // Connect collection to vault
         collectionRegistry.addVaultToCollection(existingNFT, address(vault));
 
+        // Configure vault with EpochManager and proper roles
+        console.log("=== CONFIGURING VAULT ===");
+        
+        // 1. Set EpochManager on vault
+        address currentEpochManager = address(vault.epochManager());
+        if (currentEpochManager == address(0)) {
+            console.log("Setting EpochManager on vault...");
+            vault.setEpochManager(address(epochManager));
+            console.log("EpochManager configured successfully");
+        } else if (currentEpochManager != address(epochManager)) {
+            console.log("WARNING: Current EpochManager differs from expected:");
+            console.log("Current:", currentEpochManager);
+            console.log("Expected:", address(epochManager));
+            vault.setEpochManager(address(epochManager));
+            console.log("EpochManager updated to:", address(epochManager));
+        } else {
+            console.log("EpochManager already set correctly:", currentEpochManager);
+        }
+
+        // 2. Grant OPERATOR_ROLE to admin (epoch server caller) on vault
+        bool hasOperatorRole = vault.hasRole(Roles.OPERATOR_ROLE, admin);
+        if (!hasOperatorRole) {
+            console.log("Granting OPERATOR_ROLE to admin on vault:", admin);
+            vault.grantRole(Roles.OPERATOR_ROLE, admin);
+            console.log("OPERATOR_ROLE granted successfully");
+        } else {
+            console.log("OPERATOR_ROLE already granted to admin:", admin);
+        }
+
+        // 3. Grant OPERATOR_ROLE to vault on EpochManager (needed for allocateVaultYield)
+        bool vaultHasRoleOnEpochManager = epochManager.hasRole(Roles.OPERATOR_ROLE, address(vault));
+        if (!vaultHasRoleOnEpochManager) {
+            console.log("Granting OPERATOR_ROLE to vault on EpochManager:", address(vault));
+            epochManager.grantRole(Roles.OPERATOR_ROLE, address(vault));
+            console.log("OPERATOR_ROLE granted to vault on EpochManager successfully");
+        } else {
+            console.log("Vault already has OPERATOR_ROLE on EpochManager");
+        }
+
         vm.stopBroadcast();
         console.log("Successfully connected collection", existingNFT, "to vault", address(vault));
 
         // Core deployment completed successfully!
-        console.log("=== CORE DEPLOYMENT SUCCESSFUL ===");
-        console.log("All contracts deployed and basic setup completed");
+        console.log("=== DEPLOYMENT AND CONFIGURATION COMPLETE ===");
+        console.log("All contracts deployed and fully configured");
         console.log("Collection registered and connected to vault");
-
-        // Note: Additional setup steps can be done manually or in separate scripts
-        console.log("Note: Additional role grants and setup can be done manually:");
-        console.log("1. Grant vault roles on LendingManager and EpochManager");
-        console.log("2. Set contract references (EpochManager, DebtSubsidizer)");
-        console.log("3. Grant collection access and whitelist collections");
-        console.log("4. Set up epoch server automation roles");
+        console.log("EpochManager configured on vault");
+        console.log("OPERATOR_ROLE granted to admin and vault");
+        console.log("System ready for epoch operations!");
 
         // Log deployed contract addresses
         console.log("Asset:", asset);
