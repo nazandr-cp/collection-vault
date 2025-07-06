@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import "forge-std/Script.sol";
 import {MockERC20} from "../src/mocks/MockERC20.sol";
 import {CollectionsVault} from "../src/CollectionsVault.sol";
+import {LendingManager} from "../src/LendingManager.sol";
 import {Roles} from "../src/Roles.sol";
 
 contract DepositToVault is Script {
@@ -14,27 +15,23 @@ contract DepositToVault is Script {
 
         // Use vault address from environment
         address vaultAddress = vm.envAddress("VAULT_ADDRESS");
+        address lendingManagerAddress = vm.envAddress("LENDING_MANAGER_ADDRESS");
 
         MockERC20 asset = MockERC20(assetAddress);
         CollectionsVault vault = CollectionsVault(vaultAddress);
+        LendingManager lendingManager = LendingManager(lendingManagerAddress);
 
         // Amount to deposit: 100,000 MDAI
         uint8 decimals = asset.decimals();
         uint256 depositAmount = 100000 * (10 ** decimals);
 
-        address sender = vm.addr(deployerKey);
-
-        // Use the DefaultSender who has DEFAULT_ADMIN_ROLE to grant ADMIN_ROLE to sender
-        address roleHolder = 0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38; // DefaultSender that gets roles
-
-        // Grant ADMIN_ROLE to sender first
-        vm.startPrank(roleHolder);
-        vault.grantRole(Roles.ADMIN_ROLE, sender);
-        vm.stopPrank();
-
-        console.log("Granted ADMIN_ROLE to sender for vault operations");
+        // Use the actual SENDER address as admin (already has all required roles)
+        address sender = vm.envAddress("SENDER");
 
         vm.startBroadcast(deployerKey);
+
+        // Grant OPERATOR_ROLE to vault on LendingManager (needed for depositToLendingProtocol)
+        lendingManager.grantRole(Roles.OPERATOR_ROLE, vaultAddress);
 
         // Grant collection operator access to the deployer
         vault.grantCollectionAccess(nftAddress, sender);

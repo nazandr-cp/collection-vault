@@ -50,8 +50,12 @@ contract DeployWithExistingNFT is Script {
         // Since admin is now SENDER and contracts grant roles to admin, SENDER already has all required roles
         // Grant COLLECTION_MANAGER_ROLE to SENDER (admin already has admin role to grant this)
         collectionRegistry.grantRole(Roles.COLLECTION_MANAGER_ROLE, admin);
-        
+
+        // Grant OPERATOR_ROLE to vault on LendingManager (needed for depositToLendingProtocol)
+        lendingManager.grantRole(Roles.OPERATOR_ROLE, address(vault));
+
         console.log("Granted COLLECTION_MANAGER_ROLE to admin for collection operations");
+        console.log("Granted OPERATOR_ROLE to vault on LendingManager");
 
         // Register the existing NFT collection
         collectionRegistry.registerCollection(
