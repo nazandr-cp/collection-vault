@@ -21,9 +21,9 @@ contract DepositToVault is Script {
         CollectionsVault vault = CollectionsVault(vaultAddress);
         LendingManager lendingManager = LendingManager(lendingManagerAddress);
 
-        // Amount to deposit: 1,000 MDAI
+        // Amount to deposit: 100,000 MDAI
         uint8 decimals = asset.decimals();
-        uint256 depositAmount = 1000 * (10 ** decimals);
+        uint256 depositAmount = 100000 * (10 ** decimals);
 
         // Use the actual SENDER address as admin (already has all required roles)
         address sender = vm.envAddress("SENDER");

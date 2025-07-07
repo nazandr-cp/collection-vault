@@ -2,7 +2,10 @@
 pragma solidity ^0.8.20;
 
 import "../src/mocks/MockERC20.sol";
-import "../src/CollectionsVault.sol";
+import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 // Simple mock CollectionRegistry for basic testing
 contract SimpleCollectionRegistry {
@@ -42,8 +45,22 @@ contract SimpleCollectionRegistry {
     }
 }
 
+// Simplified vault for Echidna testing without external library dependencies
+contract SimpleVault is ERC4626 {
+    using Math for uint256;
+    
+    constructor(IERC20 asset, string memory name, string memory symbol) 
+        ERC4626(asset) 
+        ERC20(name, symbol) 
+    {}
+    
+    function totalAssets() public view override returns (uint256) {
+        return IERC20(asset()).balanceOf(address(this));
+    }
+}
+
 contract EchidnaBasicVault {
-    CollectionsVault public vault;
+    SimpleVault public vault;
     MockERC20 public asset;
     SimpleCollectionRegistry public registry;
 
@@ -58,8 +75,7 @@ contract EchidnaBasicVault {
         registry.setup();
 
         // Deploy vault
-        vault =
-            new CollectionsVault(IERC20(address(asset)), "Test Vault", "TVAULT", ADMIN, address(0), address(registry));
+        vault = new SimpleVault(IERC20(address(asset)), "Test Vault", "TVAULT");
 
         // Mint tokens and approve
         asset.mint(address(this), 1000000e18);

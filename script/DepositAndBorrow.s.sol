@@ -14,9 +14,9 @@ contract DepositAndBorrow is Script {
         address comptrollerAddress = vm.envAddress("COMPTROLLER_ADDRESS");
 
         // Load user details from .env
-        address user2 = vm.envAddress("USER2");
+        // address user2 = vm.envAddress("USER2");
         uint256 user2Key = vm.envUint("USER2_PRIVATE_KEY");
-        address user3 = vm.envAddress("USER3");
+        // address user3 = vm.envAddress("USER3");
         uint256 user3Key = vm.envUint("USER3_PRIVATE_KEY");
 
         // Create contract instances

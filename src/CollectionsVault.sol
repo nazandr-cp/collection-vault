@@ -16,6 +16,11 @@ import {ICollectionsVault} from "./interfaces/ICollectionsVault.sol";
 import {IEpochManager} from "./interfaces/IEpochManager.sol";
 import {ICollectionRegistry} from "./interfaces/ICollectionRegistry.sol";
 
+// Import libraries for size optimization
+import {CollectionYieldLib} from "./libraries/CollectionYieldLib.sol";
+import {CollectionOperationsLib} from "./libraries/CollectionOperationsLib.sol";
+import {CollectionValidationLib} from "./libraries/CollectionValidationLib.sol";
+
 interface ICToken {
     function repayBorrowBehalf(address borrower, uint256 repayAmount) external returns (uint256);
     function underlying() external view returns (address);
@@ -24,6 +29,7 @@ interface ICToken {
 contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, CrossContractSecurity {
     using SafeERC20 for IERC20;
     using Math for uint256;
+    using CollectionOperationsLib for *;
 
     bytes32 public constant ADMIN_ROLE = Roles.ADMIN_ROLE;
     bytes32 public constant OPERATOR_ROLE = Roles.OPERATOR_ROLE;
@@ -58,9 +64,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
     mapping(address => uint256) public collectionPerformanceScore;
 
     modifier onlyCollectionOperator(address collection) {
-        if (!collectionOperators[collection][_msgSender()]) {
-            revert UnauthorizedCollectionAccess(collection, _msgSender());
-        }
+        CollectionValidationLib.validateCollectionOperator(collection, _msgSender(), collectionOperators);
         _;
     }
 
@@ -90,67 +94,43 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
     }
 
     function _updateGlobalDepositIndex() internal {
-        if (address(lendingManager) == address(0)) return;
-        uint256 totalPrincipal = lendingManager.totalPrincipalDeposited();
-        if (totalPrincipal == 0) {
-            return;
-        }
-        uint256 lmAssets = lendingManager.totalAssets();
-        uint256 currentTotalAssets = lmAssets > totalYieldReserved ? lmAssets - totalYieldReserved : 0;
-        uint256 newIndex = (currentTotalAssets * GLOBAL_DEPOSIT_INDEX_PRECISION) / totalPrincipal;
-        if (newIndex > globalDepositIndex) {
-            globalDepositIndex = newIndex;
-        }
+        globalDepositIndex = CollectionYieldLib.updateGlobalDepositIndex(
+            lendingManager,
+            totalYieldReserved,
+            globalDepositIndex
+        );
     }
 
     function _accrueCollectionYield(address collectionAddress) internal {
         if (!isCollectionRegistered[collectionAddress]) {
             return;
         }
-        ICollectionRegistry.Collection memory registryCollection = collectionRegistry.getCollection(collectionAddress);
+        
         CollectionVaultData storage vaultData = collectionVaultsData[collectionAddress];
-
-        if (registryCollection.yieldSharePercentage == 0) {
-            vaultData.lastGlobalDepositIndex = globalDepositIndex;
-            return;
-        }
-
-        uint256 lastIndex = vaultData.lastGlobalDepositIndex;
-        if (globalDepositIndex > lastIndex) {
-            uint256 accruedRatio = globalDepositIndex - lastIndex;
-            uint256 yieldAccrued = (
-                vaultData.totalAssetsDeposited * accruedRatio * registryCollection.yieldSharePercentage
-            ) / (GLOBAL_DEPOSIT_INDEX_PRECISION * 10000);
-
-            if (yieldAccrued > 0) {
-                vaultData.totalAssetsDeposited += yieldAccrued;
-                totalAssetsDepositedAllCollections += yieldAccrued;
-
-                // Track collection-specific yield generation
-                collectionTotalYieldGenerated[collectionAddress] += yieldAccrued;
-                emit CollectionYieldGenerated(collectionAddress, yieldAccrued, block.timestamp);
-
-                emit CollectionYieldAccrued(
-                    collectionAddress, yieldAccrued, vaultData.totalAssetsDeposited, globalDepositIndex, lastIndex
-                );
-            }
-        }
-        vaultData.lastGlobalDepositIndex = globalDepositIndex;
+        (, uint256 newTotal) = CollectionYieldLib.accrueCollectionYield(
+            collectionAddress,
+            vaultData,
+            collectionRegistry,
+            globalDepositIndex,
+            totalAssetsDepositedAllCollections,
+            collectionTotalYieldGenerated
+        );
+        totalAssetsDepositedAllCollections = newTotal;
     }
 
     function _ensureCollectionKnownAndRegistered(address collectionAddress) private {
-        if (!collectionRegistry.isRegistered(collectionAddress)) {
-            revert CollectionNotRegistered(collectionAddress);
-        }
-        if (!isCollectionRegistered[collectionAddress]) {
-            isCollectionRegistered[collectionAddress] = true;
-            allCollectionAddresses.push(collectionAddress);
-            collectionVaultsData[collectionAddress].lastGlobalDepositIndex = globalDepositIndex;
-        }
+        CollectionValidationLib.ensureCollectionKnownAndRegistered(
+            collectionAddress,
+            collectionRegistry,
+            isCollectionRegistered,
+            allCollectionAddresses,
+            collectionVaultsData[collectionAddress],
+            globalDepositIndex
+        );
     }
 
     function setLendingManager(address _lendingManagerAddress) external onlyRole(ADMIN_ROLE) whenNotPaused {
-        if (_lendingManagerAddress == address(0)) revert AddressZero();
+        CollectionValidationLib.validateAddress(_lendingManagerAddress);
         address oldLendingManagerAddress = address(lendingManager);
         lendingManager = ILendingManager(_lendingManagerAddress);
         if (address(lendingManager.asset()) != address(asset())) {
@@ -167,7 +147,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
     }
 
     function setEpochManager(address _epochManagerAddress) external onlyRole(ADMIN_ROLE) whenNotPaused {
-        if (_epochManagerAddress == address(0)) revert AddressZero();
+        CollectionValidationLib.validateAddress(_epochManagerAddress);
         epochManager = IEpochManager(_epochManagerAddress);
     }
 
@@ -184,13 +164,15 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
     }
 
     function grantCollectionAccess(address collectionAddress, address operator) external onlyRole(ADMIN_ROLE) {
-        if (collectionAddress == address(0) || operator == address(0)) revert AddressZero();
+        CollectionValidationLib.validateAddress(collectionAddress);
+        CollectionValidationLib.validateAddress(operator);
         collectionOperators[collectionAddress][operator] = true;
         emit CollectionAccessGranted(collectionAddress, operator);
     }
 
     function revokeCollectionAccess(address collectionAddress, address operator) external onlyRole(ADMIN_ROLE) {
-        if (collectionAddress == address(0) || operator == address(0)) revert AddressZero();
+        CollectionValidationLib.validateAddress(collectionAddress);
+        CollectionValidationLib.validateAddress(operator);
         collectionOperators[collectionAddress][operator] = false;
         emit CollectionAccessRevoked(collectionAddress, operator);
     }
@@ -200,28 +182,13 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
     }
 
     function collectionTotalAssetsDeposited(address collectionAddress) public view override returns (uint256) {
-        if (!isCollectionRegistered[collectionAddress]) {
-            ICollectionRegistry.Collection memory registryCollectionTest =
-                collectionRegistry.getCollection(collectionAddress);
-            if (registryCollectionTest.collectionAddress == address(0)) return 0;
-        }
-
-        CollectionVaultData memory vaultData = collectionVaultsData[collectionAddress];
-        ICollectionRegistry.Collection memory registryCollection = collectionRegistry.getCollection(collectionAddress);
-
-        if (
-            registryCollection.collectionAddress == address(0) || registryCollection.yieldSharePercentage == 0
-                || globalDepositIndex <= vaultData.lastGlobalDepositIndex
-        ) {
-            return vaultData.totalAssetsDeposited;
-        }
-
-        uint256 accruedRatio = globalDepositIndex - vaultData.lastGlobalDepositIndex;
-        uint256 potentialYieldAccrued = (
-            vaultData.totalAssetsDeposited * accruedRatio * registryCollection.yieldSharePercentage
-        ) / (GLOBAL_DEPOSIT_INDEX_PRECISION * 10000);
-
-        return vaultData.totalAssetsDeposited + potentialYieldAccrued;
+        return CollectionValidationLib.calculateCollectionTotalAssets(
+            collectionAddress,
+            collectionVaultsData[collectionAddress],
+            collectionRegistry,
+            globalDepositIndex,
+            isCollectionRegistered
+        );
     }
 
     function totalAssets() public view override(ERC4626, IERC4626) returns (uint256) {
@@ -232,17 +199,11 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         revert FunctionDisabledUse("depositForCollection");
     }
 
-    enum DepositOperationType {
-        DEPOSIT_FOR_COLLECTION,
-        TRANSFER_FOR_COLLECTION,
-        MINT_FOR_COLLECTION
-    }
-
     function _performCollectionDeposit(
         address collectionAddress,
         address receiver,
         uint256 assetsOrShares,
-        DepositOperationType operationType
+        CollectionOperationsLib.DepositOperationType operationType
     ) internal returns (uint256 assets, uint256 shares) {
         _updateGlobalDepositIndex();
         _ensureCollectionKnownAndRegistered(collectionAddress);
@@ -250,21 +211,23 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
 
         CollectionVaultData storage vaultData = collectionVaultsData[collectionAddress];
 
-        if (operationType == DepositOperationType.DEPOSIT_FOR_COLLECTION || operationType == DepositOperationType.TRANSFER_FOR_COLLECTION) {
-            assets = assetsOrShares;
-            shares = previewDeposit(assets);
-        } else {
-            shares = assetsOrShares;
-            assets = previewMint(shares);
-        }
+        (assets, shares) = CollectionOperationsLib.calculateDepositAmounts(
+            assetsOrShares,
+            operationType,
+            this.previewDeposit,
+            this.previewMint
+        );
 
         _deposit(msg.sender, receiver, assets, shares);
         _hookDeposit(assets);
 
-        vaultData.totalAssetsDeposited += assets;
-        totalAssetsDepositedAllCollections += assets;
-        vaultData.totalSharesMinted += shares;
-        vaultData.totalCTokensMinted += shares;
+        totalAssetsDepositedAllCollections = CollectionOperationsLib.updateCollectionDataAfterDeposit(
+            vaultData,
+            assets,
+            shares,
+            totalAssetsDepositedAllCollections
+        );
+        
         emit CollectionDeposit(collectionAddress, _msgSender(), receiver, assets, shares, shares);
     }
 
@@ -276,7 +239,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         onlyCollectionOperator(collectionAddress)
         returns (uint256 shares)
     {
-        (, shares) = _performCollectionDeposit(collectionAddress, receiver, assets, DepositOperationType.DEPOSIT_FOR_COLLECTION);
+        (, shares) = _performCollectionDeposit(collectionAddress, receiver, assets, CollectionOperationsLib.DepositOperationType.DEPOSIT_FOR_COLLECTION);
     }
 
     function transfer(address, uint256) public pure override(ERC20, IERC20) returns (bool) {
@@ -295,7 +258,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         onlyCollectionOperator(collectionAddress)
         returns (uint256 shares)
     {
-        (, shares) = _performCollectionDeposit(collectionAddress, to, assets, DepositOperationType.TRANSFER_FOR_COLLECTION);
+        (, shares) = _performCollectionDeposit(collectionAddress, to, assets, CollectionOperationsLib.DepositOperationType.TRANSFER_FOR_COLLECTION);
     }
 
     function mint(uint256, address) public virtual override(ERC4626, IERC4626) returns (uint256) {
@@ -310,7 +273,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         onlyCollectionOperator(collectionAddress)
         returns (uint256 assets)
     {
-        (assets, ) = _performCollectionDeposit(collectionAddress, receiver, shares, DepositOperationType.MINT_FOR_COLLECTION);
+        (assets, ) = _performCollectionDeposit(collectionAddress, receiver, shares, CollectionOperationsLib.DepositOperationType.MINT_FOR_COLLECTION);
     }
 
     function withdraw(uint256, address, address) public virtual override(ERC4626, IERC4626) returns (uint256) {
@@ -388,33 +351,25 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
     }
 
     function _handleFullRedemption(uint256 assets, uint256 shares) internal returns (uint256 finalAssetsToTransfer) {
-        finalAssetsToTransfer = assets;
-        uint256 _totalSupply = totalSupply();
-        bool isFullRedeem = (shares == _totalSupply && shares != 0);
-
-        if (isFullRedeem) {
-            uint256 remainingDustInLM = lendingManager.totalAssets();
-            uint256 reserve = totalYieldReserved;
-            if (remainingDustInLM > reserve) {
-                uint256 redeemable = remainingDustInLM - reserve;
-                if (redeemable > 0) {
-                    bool success = lendingManager.withdrawFromLendingProtocol(redeemable);
-                    if (!success) revert LendingManagerWithdrawFailed();
-                    finalAssetsToTransfer += redeemable;
-                }
-            }
-        }
+        return CollectionOperationsLib.handleFullRedemption(
+            assets,
+            shares,
+            totalSupply(),
+            lendingManager,
+            totalYieldReserved
+        );
     }
 
     function _performAssetTransfer(address receiver, uint256 finalAssetsToTransfer, address owner, uint256 shares)
         internal
     {
-        uint256 vaultBalance = IERC20(asset()).balanceOf(address(this));
-        if (vaultBalance < finalAssetsToTransfer) {
-            revert Vault_InsufficientBalancePostLMWithdraw();
-        }
-        SafeERC20.safeTransfer(IERC20(asset()), receiver, finalAssetsToTransfer);
-        emit Withdraw(msg.sender, receiver, owner, finalAssetsToTransfer, shares);
+        CollectionOperationsLib.performAssetTransfer(
+            IERC20(asset()),
+            receiver,
+            finalAssetsToTransfer,
+            owner,
+            shares
+        );
     }
 
     function _updateCollectionData(
@@ -423,20 +378,13 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         uint256 shares,
         uint256 currentCollectionTotalAssets
     ) internal {
-        uint256 deduction;
-        if (assets <= currentCollectionTotalAssets) {
-            vaultData.totalAssetsDeposited = currentCollectionTotalAssets - assets;
-            deduction = assets;
-        } else {
-            deduction = currentCollectionTotalAssets;
-            vaultData.totalAssetsDeposited = 0;
-        }
-        totalAssetsDepositedAllCollections -= deduction;
-        if (vaultData.totalSharesMinted < shares || vaultData.totalCTokensMinted < shares) {
-            revert ShareBalanceUnderflow();
-        }
-        vaultData.totalSharesMinted -= shares;
-        vaultData.totalCTokensMinted -= shares;
+        totalAssetsDepositedAllCollections = CollectionOperationsLib.updateCollectionDataAfterWithdraw(
+            vaultData,
+            assets,
+            shares,
+            currentCollectionTotalAssets,
+            totalAssetsDepositedAllCollections
+        );
     }
 
     function transferForCollection(address to, uint256 amount, address collectionAddress)
@@ -481,25 +429,19 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         return true;
     }
 
-    function _hookDeposit(uint256 assets) internal virtual 
-        circuitBreakerProtected(keccak256("lendingManager.deposit"))
-    {
+    function _hookDeposit(uint256 assets) internal virtual {
         if (assets > 0) {
             try lendingManager.depositToLendingProtocol(assets) returns (bool success) {
                 if (!success) {
-                    _recordCircuitFailure(keccak256("lendingManager.deposit"));
                     revert LendingManagerDepositFailed();
                 }
             } catch {
-                _recordCircuitFailure(keccak256("lendingManager.deposit"));
                 revert LendingManagerDepositFailed();
             }
         }
     }
 
-    function _hookWithdraw(uint256 assets) internal virtual 
-        circuitBreakerProtected(keccak256("lendingManager.withdraw"))
-    {
+    function _hookWithdraw(uint256 assets) internal virtual {
         if (assets == 0) return;
         IERC20 assetToken = IERC20(asset());
         uint256 directBalance = assetToken.balanceOf(address(this));
@@ -514,7 +456,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
                 if (neededFromLM > 0) {
                     try lendingManager.withdrawFromLendingProtocol(neededFromLM) returns (bool success) {
                         if (!success) {
-                            _recordCircuitFailure(keccak256("lendingManager.withdraw"));
                             revert LendingManagerWithdrawFailed();
                         }
                         uint256 balanceAfterLMWithdraw = assetToken.balanceOf(address(this));
@@ -522,7 +463,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
                             revert Vault_InsufficientBalancePostLMWithdraw();
                         }
                     } catch {
-                        _recordCircuitFailure(keccak256("lendingManager.withdraw"));
                         revert LendingManagerWithdrawFailed();
                     }
                 }
@@ -535,7 +475,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         onlyRole(OPERATOR_ROLE)
         whenNotPaused
         nonReentrant
-        circuitBreakerProtected(keccak256("lendingManager.repay"))
     {
         if (amount == 0) return;
 
@@ -547,11 +486,9 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
 
         try lendingManager.repayBorrowBehalf(borrower, amount) returns (uint256 lmError) {
             if (lmError != 0) {
-                _recordCircuitFailure(keccak256("lendingManager.repay"));
                 revert("CollectionsVault: Repay borrow behalf failed via LendingManager");
             }
         } catch {
-            _recordCircuitFailure(keccak256("lendingManager.repay"));
             revert("CollectionsVault: Repay borrow behalf failed via LendingManager");
         }
 
@@ -575,7 +512,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         onlyRole(OPERATOR_ROLE)
         whenNotPaused
         nonReentrant
-        circuitBreakerProtected(keccak256("lendingManager.repayBatch"))
     {
         uint256 numEntries = borrowers.length;
         if (numEntries != amounts.length) {
@@ -603,12 +539,10 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
             if (amt != 0) {
                 try lendingManager.repayBorrowBehalf(borrowerAddr, amt) returns (uint256 lmError) {
                     if (lmError != 0) {
-                        _recordCircuitFailure(keccak256("lendingManager.repayBatch"));
                         revert("CollectionsVault: Repay borrow behalf failed via LendingManager");
                     }
                     actualTotalRepaid += amt;
                 } catch {
-                    _recordCircuitFailure(keccak256("lendingManager.repayBatch"));
                     revert("CollectionsVault: Repay borrow behalf failed via LendingManager");
                 }
             }
@@ -633,16 +567,8 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
     }
 
     function getCurrentEpochYield(bool includeNonShared) public view override returns (uint256 availableYield) {
-        if (address(lendingManager) == address(0)) {
-            return 0;
-        }
-
-        uint256 totalLMYield = lendingManager.totalAssets() > lendingManager.totalPrincipalDeposited()
-            ? lendingManager.totalAssets() - lendingManager.totalPrincipalDeposited()
-            : 0;
-
         if (includeNonShared) {
-            return totalLMYield;
+            return CollectionYieldLib.getCurrentEpochYield(lendingManager, 0, true);
         }
 
         if (address(epochManager) == address(0)) {
@@ -655,7 +581,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         }
 
         uint256 allocated = epochYieldAllocations[currentEpochId];
-        return totalLMYield > allocated ? totalLMYield - allocated : 0;
+        return CollectionYieldLib.getCurrentEpochYield(lendingManager, allocated, false);
     }
 
     function allocateEpochYield(uint256 amount) external nonReentrant whenNotPaused onlyRole(ADMIN_ROLE) {

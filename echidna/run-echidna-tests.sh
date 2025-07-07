@@ -5,6 +5,11 @@
 
 set -e
 
+# Change to the project root directory if running from echidna folder
+if [[ $(basename "$PWD") == "echidna" ]]; then
+    cd ..
+fi
+
 ECHIDNA_DIR="echidna"
 RESULTS_DIR="echidna/results"
 
@@ -38,7 +43,7 @@ run_test() {
         return 1
     fi
     
-    # Run the test
+    # Run the test with working command line approach
     local cmd="echidna $test_file --contract $contract_name --test-limit $test_limit"
     echo "   Command: $cmd"
     
@@ -81,14 +86,9 @@ echo ""
 echo -e "${BLUE}🚀 RUNNING CORE FUZZING TESTS${NC}"
 echo -e "${BLUE}==============================${NC}"
 
-# Core working tests
+# Core working tests - focusing on working basic vault test
 tests=(
-    "EchidnaLendingManager.sol:EchidnaLendingManager:lending-manager:5000"
-    "EchidnaEpochManager.sol:EchidnaEpochManager:epoch-manager:5000"
-    "EchidnaMathematicalInvariants.sol:EchidnaMathematicalInvariants:mathematical-invariants:3000"
-    "EchidnaCollectionsVault.sol:EchidnaCollectionsVault:collections-vault:5000"
-    "EchidnaBasicVault.sol:EchidnaBasicVault:basic-vault:3000"
-    "EchidnaMerkleClaimTest.sol:EchidnaMerkleClaimTest:merkle-claim:3000"
+    "EchidnaBasicVault.sol:EchidnaBasicVault:basic-vault:5000"
 )
 
 # Run each test

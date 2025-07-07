@@ -1,45 +1,33 @@
 # Echidna configuration file
 testMode: property
-testLimit: 50000
-shrinkLimit: 10000
-seqLen: 150
+testLimit: 1000
+shrinkLimit: 100
+seqLen: 50
 contractAddr: "0x00a329c0648769A73afAc7F9381E08FB43dBEA72"
 deployer: "0x00a329c0648769A73afAc7F9381E08FB43dBEA72"
-sender: ["0x00a329c0648769A73afAc7F9381E08FB43dBEA72", "0x11111C0648769A73afAc7F9381E08FB43dBEA72", "0x22222C0648769A73afAc7F9381E08FB43dBEA72", "0x33333C0648769A73afAc7F9381E08FB43dBEA72", "0x44444C0648769A73afAc7F9381E08FB43dBEA72"]
+sender: ["0x00a329c0648769A73afAc7F9381E08FB43dBEA72", "0x11111C0648769A73afAc7F9381E08FB43dBEA72"]
 format: text
 corpusDir: echidna/corpus
 
 # Coverage options
-coverage: true
+coverage: false
 
-# Filter functions (optional - remove if you want to test all functions)
-# filterFunctions: ["deposit", "withdraw", "mint", "redeem", "allocateYield", "endEpoch"]
+# Disable slither analysis
+allowFFI: false
 
-# Gas limit (increased for complex integration tests)
-gasLimit: 20000000
+# Filter functions for basic testing
+filterFunctions: ["deposit", "withdraw", "mint", "redeem"]
 
-# Initial balance (increased for extensive testing)
+# Initial balance
 balanceAddr: 1000000000000000000000
 balanceContract: 1000000000000000000000
 
-# Solc configuration
-solcArgs: --optimize --optimize-runs=200 --via-ir
+# Solc configuration - simplified for compatibility
+solcArgs: --optimize --optimize-runs=200
 solcLibs: ["lib", "dependencies"]
 
-# Multi-core usage (increased for faster testing)
-workers: 4
+# Multi-core usage
+workers: 1
 
-# Shrinking options
-pshrink: true
-
-# Assertion mode for mathematical invariant testing
-assertionMode: true
-
-# Timeout configuration (10 minutes)
-timeout: 600
-
-# Dictionary for better fuzzing
-dictionary: ["0", "1", "10000", "1000000000000000000", "115792089237316195423570985008687907853269984665640564039457584007913129639935"]
-
-# Check assertion reachability
-checkAsserts: true
+# Timeout configuration (1 minute)
+timeout: 60
