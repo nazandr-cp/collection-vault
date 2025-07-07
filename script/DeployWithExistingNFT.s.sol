@@ -47,15 +47,19 @@ contract DeployWithExistingNFT is Script {
         console.log("DebtSubsidizer Implementation:", address(debtImpl));
         console.log("DebtSubsidizer Proxy:", address(proxy));
 
-        // Since admin is now SENDER and contracts grant roles to admin, SENDER already has all required roles
-        // Grant COLLECTION_MANAGER_ROLE to SENDER (admin already has admin role to grant this)
-        collectionRegistry.grantRole(Roles.COLLECTION_MANAGER_ROLE, admin);
+        // === ROLE CONFIGURATION USING STANDARDIZED ACCESS CONTROL ===
+        console.log("=== CONFIGURING ROLES ===");
+        
+        // Admin automatically gets OWNER_ROLE, ADMIN_ROLE, and GUARDIAN_ROLE from AccessControlBase constructor
+        console.log("Admin already has OWNER_ROLE, ADMIN_ROLE, and GUARDIAN_ROLE from AccessControlBase");
+        
+        // Grant COLLECTION_MANAGER_ROLE to admin for collection operations
+        collectionRegistry.grantRoleWithDetails(Roles.COLLECTION_MANAGER_ROLE, admin);
+        console.log("Granted COLLECTION_MANAGER_ROLE to admin using enhanced role system");
 
-        // Grant OPERATOR_ROLE to vault on LendingManager (needed for depositToLendingProtocol)
-        lendingManager.grantRole(Roles.OPERATOR_ROLE, address(vault));
-
-        console.log("Granted COLLECTION_MANAGER_ROLE to admin for collection operations");
-        console.log("Granted OPERATOR_ROLE to vault on LendingManager");
+        // Grant OPERATOR_ROLE to vault on LendingManager (needed for lending protocol interactions)
+        lendingManager.grantRoleWithDetails(Roles.OPERATOR_ROLE, address(vault));
+        console.log("Granted OPERATOR_ROLE to vault on LendingManager using enhanced role system");
 
         // Register the existing NFT collection
         collectionRegistry.registerCollection(
@@ -77,7 +81,7 @@ contract DeployWithExistingNFT is Script {
 
         // Configure vault with EpochManager and proper roles
         console.log("=== CONFIGURING VAULT ===");
-        
+
         // 1. Set EpochManager on vault
         address currentEpochManager = address(vault.epochManager());
         if (currentEpochManager == address(0)) {
@@ -94,12 +98,12 @@ contract DeployWithExistingNFT is Script {
             console.log("EpochManager already set correctly:", currentEpochManager);
         }
 
-        // 2. Grant OPERATOR_ROLE to admin (epoch server caller) on vault
+        // 2. Grant OPERATOR_ROLE to admin (epoch server caller) on vault using enhanced role system
         bool hasOperatorRole = vault.hasRole(Roles.OPERATOR_ROLE, admin);
         if (!hasOperatorRole) {
             console.log("Granting OPERATOR_ROLE to admin on vault:", admin);
-            vault.grantRole(Roles.OPERATOR_ROLE, admin);
-            console.log("OPERATOR_ROLE granted successfully");
+            vault.grantRoleWithDetails(Roles.OPERATOR_ROLE, admin);
+            console.log("OPERATOR_ROLE granted successfully using enhanced role system");
         } else {
             console.log("OPERATOR_ROLE already granted to admin:", admin);
         }
@@ -108,41 +112,73 @@ contract DeployWithExistingNFT is Script {
         bool vaultHasRoleOnEpochManager = epochManager.hasRole(Roles.OPERATOR_ROLE, address(vault));
         if (!vaultHasRoleOnEpochManager) {
             console.log("Granting OPERATOR_ROLE to vault on EpochManager:", address(vault));
-            epochManager.grantRole(Roles.OPERATOR_ROLE, address(vault));
-            console.log("OPERATOR_ROLE granted to vault on EpochManager successfully");
+            epochManager.grantRoleWithDetails(Roles.OPERATOR_ROLE, address(vault));
+            console.log("OPERATOR_ROLE granted to vault on EpochManager using enhanced role system");
         } else {
             console.log("Vault already has OPERATOR_ROLE on EpochManager");
         }
 
-        // 4. Add vault to DebtSubsidizer to enable subgraph CollectionVault template
+        // 4. Configure Cross-Contract Security Features
+        console.log("=== CONFIGURING SECURITY FEATURES ===");
+        
+        // Validate critical contract addresses for CrossContractSecurity
+        vault.validateContract(address(lendingManager));
+        epochManager.validateContract(address(vault));
+        epochManager.validateContract(address(debtSubsidizer));
+        console.log("Contract validation completed for all critical integrations");
+        
+        // 5. Add vault to DebtSubsidizer to enable subgraph CollectionVault template
         console.log("Adding vault to DebtSubsidizer for subgraph indexing...");
         debtSubsidizer.addVault(address(vault), address(lendingManager));
         console.log("Vault added to DebtSubsidizer successfully");
 
-        // 5. Make initial deposit to create CollectionParticipation for subgraph
+        // 6. Make initial deposit to create CollectionParticipation for subgraph
         console.log("Making initial deposit to create CollectionParticipation...");
         uint256 initialDepositAmount = 1000 * (10 ** MockERC20(asset).decimals()); // 1000 tokens
-        
+
         // Grant collection operator access to the deployer
         vault.grantCollectionAccess(existingNFT, admin);
-        
+
         // Approve the vault to spend tokens
         MockERC20(asset).approve(address(vault), initialDepositAmount);
-        
+
         // Deposit to the vault for the NFT collection
         vault.depositForCollection(initialDepositAmount, admin, existingNFT);
-        
+
         console.log("Initial deposit of {} tokens completed for collection {}", initialDepositAmount, existingNFT);
 
         vm.stopBroadcast();
         console.log("Successfully connected collection", existingNFT, "to vault", address(vault));
 
+        // === ROLE VERIFICATION ===
+        console.log("=== VERIFYING ROLE CONFIGURATION ===");
+        
+        // Verify admin has all required roles
+        require(vault.hasRole(vault.DEFAULT_ADMIN_ROLE(), admin), "Admin missing DEFAULT_ADMIN_ROLE on vault");
+        require(vault.hasRole(Roles.OWNER_ROLE, admin), "Admin missing OWNER_ROLE on vault");
+        require(vault.hasRole(Roles.ADMIN_ROLE, admin), "Admin missing ADMIN_ROLE on vault");
+        require(vault.hasRole(Roles.GUARDIAN_ROLE, admin), "Admin missing GUARDIAN_ROLE on vault");
+        require(vault.hasRole(Roles.OPERATOR_ROLE, admin), "Admin missing OPERATOR_ROLE on vault");
+        console.log("✓ Admin has all required roles on vault");
+        
+        // Verify cross-contract permissions
+        require(lendingManager.hasRole(Roles.OPERATOR_ROLE, address(vault)), "Vault missing OPERATOR_ROLE on LendingManager");
+        require(epochManager.hasRole(Roles.OPERATOR_ROLE, address(vault)), "Vault missing OPERATOR_ROLE on EpochManager");
+        require(collectionRegistry.hasRole(Roles.COLLECTION_MANAGER_ROLE, admin), "Admin missing COLLECTION_MANAGER_ROLE");
+        console.log("✓ All cross-contract permissions verified");
+        
+        // Verify collection operator access
+        require(vault.isCollectionOperator(existingNFT, admin), "Admin missing collection operator access");
+        console.log("✓ Collection operator access verified");
+
         // Core deployment completed successfully!
         console.log("=== DEPLOYMENT AND CONFIGURATION COMPLETE ===");
         console.log("All contracts deployed and fully configured");
+        console.log("Enhanced access control and security features enabled");
         console.log("Collection registered and connected to vault");
         console.log("EpochManager configured on vault");
-        console.log("OPERATOR_ROLE granted to admin and vault");
+        console.log("All roles properly assigned and verified");
+        console.log("Contract validation completed for security");
         console.log("Vault added to DebtSubsidizer for subgraph indexing");
         console.log("Initial deposit made to create CollectionParticipation");
         console.log("System ready for epoch operations and subgraph indexing!");

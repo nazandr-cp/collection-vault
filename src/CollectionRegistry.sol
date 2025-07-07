@@ -2,11 +2,12 @@
 pragma solidity ^0.8.20;
 
 import {AccessControlBase} from "./AccessControlBase.sol";
+import {CrossContractSecurity} from "./CrossContractSecurity.sol";
 import {ICollectionsVault} from "./interfaces/ICollectionsVault.sol";
 import {ICollectionRegistry} from "./interfaces/ICollectionRegistry.sol";
 import {Roles} from "./Roles.sol";
 
-contract CollectionRegistry is ICollectionRegistry, AccessControlBase {
+contract CollectionRegistry is ICollectionRegistry, AccessControlBase, CrossContractSecurity {
     bytes32 public constant COLLECTION_MANAGER_ROLE = Roles.COLLECTION_MANAGER_ROLE;
 
     mapping(address => ICollectionRegistry.Collection) private _collections;
@@ -40,6 +41,7 @@ contract CollectionRegistry is ICollectionRegistry, AccessControlBase {
         public
         override
         onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE)
+        rateLimited(address(this), this.registerCollection.selector)
     {
         address collectionAddress = collectionData.collectionAddress;
         require(collectionAddress != address(0), "CollectionRegistry: Zero address");
@@ -85,6 +87,8 @@ contract CollectionRegistry is ICollectionRegistry, AccessControlBase {
         external
         override
         onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE)
+        rateLimited(address(this), this.addVaultToCollection.selector)
+        contractValidated(vault)
     {
         require(_isRegistered[collection], "CollectionRegistry: Not registered");
         require(vault != address(0), "CollectionRegistry: Zero address");

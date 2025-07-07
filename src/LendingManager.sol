@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {AccessControlBase} from "./AccessControlBase.sol";
+import {CrossContractSecurity} from "./CrossContractSecurity.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Roles} from "./Roles.sol";
 
@@ -14,7 +15,7 @@ import {CErc20Interface, CTokenInterface} from "compound-protocol-2.8.1/contract
  * @title LendingManager (Compound V2 Fork Adapter)
  * @notice Manages deposits and withdrawals to a specific Compound V2 fork cToken market.
  */
-contract LendingManager is ILendingManager, AccessControlBase {
+contract LendingManager is ILendingManager, AccessControlBase, CrossContractSecurity {
     using SafeERC20 for IERC20;
 
     bytes32 public constant OPERATOR_ROLE = Roles.OPERATOR_ROLE;
@@ -108,6 +109,7 @@ contract LendingManager is ILendingManager, AccessControlBase {
         onlyVault
         nonReentrant
         whenNotPaused
+        circuitBreakerProtected(keccak256("cToken.mint"))
         returns (bool success)
     {
         if (amount == 0) {
@@ -126,11 +128,14 @@ contract LendingManager is ILendingManager, AccessControlBase {
         uint256 balanceBeforeMint = _asset.balanceOf(address(this));
         try _cToken.mint(amount) returns (uint256 mintResult) {
             if (mintResult != 0) {
+                _recordCircuitFailure(keccak256("cToken.mint"));
                 revert LendingManagerCTokenMintFailed(mintResult);
             }
         } catch Error(string memory reason) {
+            _recordCircuitFailure(keccak256("cToken.mint"));
             revert LendingManagerCTokenMintFailedReason(reason);
         } catch (bytes memory data) {
+            _recordCircuitFailure(keccak256("cToken.mint"));
             revert LendingManagerCTokenMintFailedBytes(data);
         }
 
@@ -155,6 +160,7 @@ contract LendingManager is ILendingManager, AccessControlBase {
         onlyVault
         nonReentrant
         whenNotPaused
+        circuitBreakerProtected(keccak256("cToken.redeemUnderlying"))
         returns (bool success)
     {
         if (amount == 0) return true;
@@ -170,11 +176,14 @@ contract LendingManager is ILendingManager, AccessControlBase {
         uint256 balanceBeforeRedeem = _asset.balanceOf(address(this));
         try _cToken.redeemUnderlying(amount) returns (uint256 redeemResult) {
             if (redeemResult != 0) {
+                _recordCircuitFailure(keccak256("cToken.redeemUnderlying"));
                 revert LendingManagerCTokenRedeemUnderlyingFailed(redeemResult);
             }
         } catch Error(string memory reason) {
+            _recordCircuitFailure(keccak256("cToken.redeemUnderlying"));
             revert LendingManagerCTokenRedeemUnderlyingFailedReason(reason);
         } catch (bytes memory data) {
+            _recordCircuitFailure(keccak256("cToken.redeemUnderlying"));
             revert LendingManagerCTokenRedeemUnderlyingFailedBytes(data);
         }
         uint256 balanceAfterRedeem = _asset.balanceOf(address(this));
@@ -340,6 +349,7 @@ contract LendingManager is ILendingManager, AccessControlBase {
         onlyVault
         nonReentrant
         whenNotPaused
+        circuitBreakerProtected(keccak256("cToken.repayBorrowBehalf"))
         returns (uint256)
     {
         if (borrower == address(0)) revert AddressZero();
@@ -358,12 +368,15 @@ contract LendingManager is ILendingManager, AccessControlBase {
         try _cToken.repayBorrowBehalf(borrower, repayAmount) returns (uint256 repayResult) {
             cTokenError = repayResult;
         } catch Error(string memory reason) {
+            _recordCircuitFailure(keccak256("cToken.repayBorrowBehalf"));
             revert LendingManagerCTokenRepayBorrowBehalfFailedReason(reason);
         } catch (bytes memory data) {
+            _recordCircuitFailure(keccak256("cToken.repayBorrowBehalf"));
             revert LendingManagerCTokenRepayBorrowBehalfFailedBytes(data);
         }
 
         if (cTokenError != 0) {
+            _recordCircuitFailure(keccak256("cToken.repayBorrowBehalf"));
             revert LendingManagerCTokenRepayBorrowBehalfFailed(cTokenError);
         }
 

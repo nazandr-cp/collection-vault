@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {Roles} from "./Roles.sol";
 
 /**
  * @title CrossContractSecurity
  * @dev Enhanced security utilities for cross-contract interactions
  * @dev Provides circuit breakers, rate limiting, and validation layers
+ * @dev Note: Assumes parent contract provides AccessControl and ReentrancyGuard functionality
  */
-abstract contract CrossContractSecurity is AccessControl, ReentrancyGuard {
+abstract contract CrossContractSecurity {
     // Circuit breaker states
     enum CircuitState {
         CLOSED,
@@ -231,13 +231,16 @@ abstract contract CrossContractSecurity is AccessControl, ReentrancyGuard {
 
     /**
      * @dev Admin functions for security configuration
+     * @dev Requires parent contract to implement AccessControl
      */
-    function setMaxTransferAmount(address target, uint256 maxAmount) external onlyRole(Roles.ADMIN_ROLE) {
+    function setMaxTransferAmount(address target, uint256 maxAmount) external {
+        _requireRole(Roles.ADMIN_ROLE);
         if (target == address(0)) revert CrossContractSecurity__InvalidAddress();
         maxTransferAmounts[target] = maxAmount;
     }
 
-    function validateContract(address contractAddr) external onlyRole(Roles.ADMIN_ROLE) {
+    function validateContract(address contractAddr) external {
+        _requireRole(Roles.ADMIN_ROLE);
         if (contractAddr == address(0)) revert CrossContractSecurity__InvalidAddress();
 
         bytes32 codeHash = keccak256(abi.encodePacked(contractAddr.code));
@@ -249,7 +252,8 @@ abstract contract CrossContractSecurity is AccessControl, ReentrancyGuard {
         });
     }
 
-    function resetCircuitBreaker(bytes32 circuitId) external onlyRole(Roles.GUARDIAN_ROLE) {
+    function resetCircuitBreaker(bytes32 circuitId) external {
+        _requireRole(Roles.GUARDIAN_ROLE);
         CircuitBreaker storage cb = circuitBreakers[circuitId];
         cb.state = CircuitState.CLOSED;
         cb.failureCount = 0;
@@ -259,8 +263,8 @@ abstract contract CrossContractSecurity is AccessControl, ReentrancyGuard {
 
     function updateRateLimit(address contractAddr, bytes4 selector, uint256 maxRequests, uint256 windowDuration)
         external
-        onlyRole(Roles.ADMIN_ROLE)
     {
+        _requireRole(Roles.ADMIN_ROLE);
         if (contractAddr == address(0)) revert CrossContractSecurity__InvalidAddress();
         if (maxRequests == 0 || windowDuration == 0) revert CrossContractSecurity__InvalidParameters();
 
@@ -270,12 +274,20 @@ abstract contract CrossContractSecurity is AccessControl, ReentrancyGuard {
     /**
      * @dev Emergency override for circuit breakers
      */
-    function emergencyOverride(bytes32 circuitId) external onlyRole(Roles.GUARDIAN_ROLE) {
+    function emergencyOverride(bytes32 circuitId) external {
+        _requireRole(Roles.GUARDIAN_ROLE);
         CircuitBreaker storage cb = circuitBreakers[circuitId];
         cb.state = CircuitState.CLOSED;
         cb.failureCount = 0;
         emit CircuitBreakerReset(circuitId, block.timestamp);
         emit SuspiciousActivityDetected(msg.sender, "Emergency circuit breaker override", block.timestamp);
+    }
+
+    /**
+     * @dev Internal function to check roles - must be implemented by parent contract
+     */
+    function _requireRole(bytes32 role) internal view {
+        require(IAccessControl(address(this)).hasRole(role, msg.sender), "CrossContractSecurity: missing required role");
     }
 
     /**

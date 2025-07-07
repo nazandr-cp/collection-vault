@@ -28,15 +28,4 @@ library Roles {
     /// @dev Pause/unpause, emergency actions, security responses
     /// @dev Replaces: PAUSE_ROLE, EMERGENCY_ROLE
     bytes32 internal constant GUARDIAN_ROLE = keccak256("GUARDIAN_ROLE");
-
-    // Legacy role constants for backward compatibility during migration
-    // TODO: Remove these after migration is complete
-    bytes32 internal constant VAULT_ROLE = OPERATOR_ROLE;
-    bytes32 internal constant AUTOMATION_ROLE = OPERATOR_ROLE;
-    bytes32 internal constant DEBT_SUBSIDIZER_ROLE = OPERATOR_ROLE;
-    bytes32 internal constant MANAGER_ROLE = COLLECTION_MANAGER_ROLE;
-    bytes32 internal constant COLLECTION_ADMIN_ROLE = COLLECTION_MANAGER_ROLE;
-    bytes32 internal constant COLLECTION_OPERATOR_ROLE = COLLECTION_MANAGER_ROLE;
-    bytes32 internal constant PAUSE_ROLE = GUARDIAN_ROLE;
-    bytes32 internal constant EMERGENCY_ROLE = GUARDIAN_ROLE;
 }

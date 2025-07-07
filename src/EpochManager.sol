@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {AccessControlBase} from "./AccessControlBase.sol";
+import {CrossContractSecurity} from "./CrossContractSecurity.sol";
 import {Roles} from "./Roles.sol";
 import {IEpochManager} from "./interfaces/IEpochManager.sol";
 import {IDebtSubsidizer} from "./interfaces/IDebtSubsidizer.sol";
@@ -12,7 +13,7 @@ import {IDebtSubsidizer} from "./interfaces/IDebtSubsidizer.sol";
  * @notice Manages the lifecycle of epochs for distributing rewards.
  * It handles epoch creation, state transitions, and yield allocation tracking.
  */
-contract EpochManager is IEpochManager, AccessControlBase {
+contract EpochManager is IEpochManager, AccessControlBase, CrossContractSecurity {
     bytes32 public constant OPERATOR_ROLE = Roles.OPERATOR_ROLE;
 
     uint256 public epochDuration; // Duration of each epoch in seconds (e.g., 7 days)
@@ -56,6 +57,8 @@ contract EpochManager is IEpochManager, AccessControlBase {
         external
         nonReentrant
         onlyRoleWhenNotPaused(OPERATOR_ROLE)
+        rateLimited(address(this), this.allocateVaultYield.selector)
+        contractValidated(vault)
     {
         if (currentEpochId == 0) {
             revert EpochManager__InvalidEpochId(0);
@@ -242,7 +245,8 @@ contract EpochManager is IEpochManager, AccessControlBase {
      * @dev Streamlined version that just starts the epoch and returns the ID.
      * @return epochId The ID of the newly started epoch.
      */
-    function startEpoch() external nonReentrant onlyRoleWhenNotPaused(Roles.OPERATOR_ROLE) returns (uint256) {
+    function startEpoch() external nonReentrant onlyRoleWhenNotPaused(Roles.OPERATOR_ROLE) 
+        rateLimited(address(this), this.startEpoch.selector) returns (uint256) {
         if (currentEpochId > 0) {
             Epoch storage currentEpoch = epochs[currentEpochId];
             if (currentEpoch.status != EpochStatus.Completed) {
@@ -279,7 +283,9 @@ contract EpochManager is IEpochManager, AccessControlBase {
         address vaultAddress,
         bytes32 merkleRoot,
         uint256 subsidiesDistributed
-    ) external nonReentrant onlyRoleWhenNotPaused(Roles.OPERATOR_ROLE) {
+    ) external nonReentrant onlyRoleWhenNotPaused(Roles.OPERATOR_ROLE) 
+        rateLimited(address(this), this.endEpochWithSubsidies.selector)
+        contractValidated(vaultAddress) {
         if (epochId == 0 || epochId > currentEpochId) {
             revert EpochManager__InvalidEpochId(epochId);
         }
@@ -295,7 +301,12 @@ contract EpochManager is IEpochManager, AccessControlBase {
 
         // Update Merkle root in DebtSubsidizer for subsidy claims
         if (address(debtSubsidizer) != address(0) && merkleRoot != bytes32(0)) {
-            debtSubsidizer.updateMerkleRoot(vaultAddress, merkleRoot);
+            try debtSubsidizer.updateMerkleRoot(vaultAddress, merkleRoot) {
+                // Success - continue
+            } catch {
+                _recordCircuitFailure(keccak256("debtSubsidizer.updateMerkleRoot"));
+                revert("EpochManager: Failed to update merkle root in DebtSubsidizer");
+            }
         }
 
         emit EpochFinalized(epochId, epoch.totalYieldAvailable, epoch.totalSubsidiesDistributed);

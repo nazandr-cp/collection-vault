@@ -10,9 +10,53 @@ Collection Vault is a set of Solidity contracts that coordinate NFT collection d
   - `EpochManager.sol` – Utility contract for rolling epochs used to allocate yield over time.
   - `DebtSubsidizer.sol` – Upgradeable contract used for distributing protocol incentives.
     - Includes `claimAllSubsidies` for batching subsidy claims across multiple vaults.
+  - `AccessControlBase.sol` – Base contract providing standardized access control and security features.
+  - `CrossContractSecurity.sol` – Advanced security utilities including circuit breakers and rate limiting.
+  - `Roles.sol` – Centralized role definitions for the entire system.
   - `mocks/` – Simplified token and cToken mocks used for development.
 - **script/** – (planned) deployment and management scripts.
 - **foundry.toml** – Foundry configuration file.
+
+## Access Control & Security
+
+The Collection Vault system implements a comprehensive 5-role access control hierarchy with advanced security features:
+
+### Role Hierarchy
+
+| Role | Description | Managed By | Key Responsibilities |
+|------|-------------|------------|---------------------|
+| **OWNER_ROLE** | Ultimate system control and governance | DEFAULT_ADMIN_ROLE | • Grant/revoke all other roles<br>• Critical system changes<br>• Emergency governance decisions |
+| **ADMIN_ROLE** | Day-to-day administrative operations | OWNER_ROLE | • Contract configuration<br>• Non-critical updates<br>• Standard admin functions<br>• Manage operational roles |
+| **OPERATOR_ROLE** | Cross-contract operational calls and automation | ADMIN_ROLE | • Automated system calls<br>• Cross-contract interactions<br>• Vault operations<br>• Epoch management |
+| **COLLECTION_MANAGER_ROLE** | Collection-specific operations and management | ADMIN_ROLE | • Collection registration<br>• Yield share management<br>• Vault-collection associations |
+| **GUARDIAN_ROLE** | Emergency controls and security functions | OWNER_ROLE | • Pause/unpause contracts<br>• Emergency actions<br>• Circuit breaker overrides<br>• Security responses |
+
+### Security Features
+
+- **🔒 Circuit Breakers**: Automatic protection against external contract failures
+- **⏱️ Rate Limiting**: Prevents abuse of automated system functions  
+- **🛡️ Contract Validation**: Ensures external dependencies remain secure
+- **💰 Transfer Protection**: Large amount controls with cooldowns
+- **🚨 Emergency Controls**: Guardian-level pause and override capabilities
+- **📊 Security Monitoring**: Comprehensive event logging for all role changes
+
+### Role Assignment Guidelines
+
+1. **OWNER_ROLE**: Should be a multisig wallet or DAO governance contract
+2. **ADMIN_ROLE**: Trusted administrators for daily operations
+3. **OPERATOR_ROLE**: Automated systems, trusted vaults, and operational contracts
+4. **COLLECTION_MANAGER_ROLE**: Collection managers and registry operators
+5. **GUARDIAN_ROLE**: Security team members and emergency response systems
+
+### Contract-Specific Permissions
+
+| Contract | Additional Access Controls |
+|----------|---------------------------|
+| **CollectionsVault** | Collection-specific operators for deposit/withdraw operations |
+| **LendingManager** | Vault-specific roles for lending protocol interactions |
+| **DebtSubsidizer** | Merkle root updates and subsidy pool management |
+| **EpochManager** | Epoch lifecycle management and automation |
+| **CollectionRegistry** | Collection registration and configuration |
 
 ## Getting Started
 

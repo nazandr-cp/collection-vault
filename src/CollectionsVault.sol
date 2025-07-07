@@ -5,11 +5,10 @@ import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.so
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {AccessControlBase} from "./AccessControlBase.sol";
+import {CrossContractSecurity} from "./CrossContractSecurity.sol";
 import {Roles} from "./Roles.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
@@ -22,7 +21,7 @@ interface ICToken {
     function underlying() external view returns (address);
 }
 
-contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, ReentrancyGuard, Pausable {
+contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, CrossContractSecurity {
     using SafeERC20 for IERC20;
     using Math for uint256;
 
@@ -71,7 +70,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         address initialAdmin,
         address _lendingManagerAddress,
         address _collectionRegistryAddress
-    ) ERC4626(_asset) ERC20(_name, _symbol) {
+    ) ERC4626(_asset) ERC20(_name, _symbol) AccessControlBase(initialAdmin) {
         if (address(_asset) == address(0)) revert AddressZero();
         if (initialAdmin == address(0)) revert AddressZero();
         if (_collectionRegistryAddress == address(0)) revert AddressZero();
@@ -87,9 +86,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
 
         globalDepositIndex = GLOBAL_DEPOSIT_INDEX_PRECISION;
         collectionRegistry = ICollectionRegistry(_collectionRegistryAddress);
-
-        _grantRole(DEFAULT_ADMIN_ROLE, initialAdmin);
-        _grantRole(ADMIN_ROLE, initialAdmin);
     }
 
     function _updateGlobalDepositIndex() internal {
@@ -490,14 +486,25 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         return true;
     }
 
-    function _hookDeposit(uint256 assets) internal virtual {
+    function _hookDeposit(uint256 assets) internal virtual 
+        circuitBreakerProtected(keccak256("lendingManager.deposit"))
+    {
         if (assets > 0) {
-            bool success = lendingManager.depositToLendingProtocol(assets);
-            if (!success) revert LendingManagerDepositFailed();
+            try lendingManager.depositToLendingProtocol(assets) returns (bool success) {
+                if (!success) {
+                    _recordCircuitFailure(keccak256("lendingManager.deposit"));
+                    revert LendingManagerDepositFailed();
+                }
+            } catch {
+                _recordCircuitFailure(keccak256("lendingManager.deposit"));
+                revert LendingManagerDepositFailed();
+            }
         }
     }
 
-    function _hookWithdraw(uint256 assets) internal virtual {
+    function _hookWithdraw(uint256 assets) internal virtual 
+        circuitBreakerProtected(keccak256("lendingManager.withdraw"))
+    {
         if (assets == 0) return;
         IERC20 assetToken = IERC20(asset());
         uint256 directBalance = assetToken.balanceOf(address(this));
@@ -510,11 +517,18 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
                 : (availableInLM > reserve ? availableInLM - reserve : 0);
             if (neededFromLM <= usableInLM) {
                 if (neededFromLM > 0) {
-                    bool success = lendingManager.withdrawFromLendingProtocol(neededFromLM);
-                    if (!success) revert LendingManagerWithdrawFailed();
-                    uint256 balanceAfterLMWithdraw = assetToken.balanceOf(address(this));
-                    if (balanceAfterLMWithdraw < assets) {
-                        revert Vault_InsufficientBalancePostLMWithdraw();
+                    try lendingManager.withdrawFromLendingProtocol(neededFromLM) returns (bool success) {
+                        if (!success) {
+                            _recordCircuitFailure(keccak256("lendingManager.withdraw"));
+                            revert LendingManagerWithdrawFailed();
+                        }
+                        uint256 balanceAfterLMWithdraw = assetToken.balanceOf(address(this));
+                        if (balanceAfterLMWithdraw < assets) {
+                            revert Vault_InsufficientBalancePostLMWithdraw();
+                        }
+                    } catch {
+                        _recordCircuitFailure(keccak256("lendingManager.withdraw"));
+                        revert LendingManagerWithdrawFailed();
                     }
                 }
             }
@@ -526,6 +540,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         onlyRole(OPERATOR_ROLE)
         whenNotPaused
         nonReentrant
+        circuitBreakerProtected(keccak256("lendingManager.repay"))
     {
         if (amount == 0) return;
 
@@ -535,8 +550,13 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         IERC20 assetToken = IERC20(asset());
         assetToken.forceApprove(address(lendingManager), amount);
 
-        uint256 lmError = lendingManager.repayBorrowBehalf(borrower, amount);
-        if (lmError != 0) {
+        try lendingManager.repayBorrowBehalf(borrower, amount) returns (uint256 lmError) {
+            if (lmError != 0) {
+                _recordCircuitFailure(keccak256("lendingManager.repay"));
+                revert("CollectionsVault: Repay borrow behalf failed via LendingManager");
+            }
+        } catch {
+            _recordCircuitFailure(keccak256("lendingManager.repay"));
             revert("CollectionsVault: Repay borrow behalf failed via LendingManager");
         }
 
@@ -560,6 +580,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         onlyRole(OPERATOR_ROLE)
         whenNotPaused
         nonReentrant
+        circuitBreakerProtected(keccak256("lendingManager.repayBatch"))
     {
         uint256 numEntries = borrowers.length;
         if (numEntries != amounts.length) {
@@ -582,11 +603,16 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
             address borrowerAddr = borrowers[i];
 
             if (amt != 0) {
-                uint256 lmError = lendingManager.repayBorrowBehalf(borrowerAddr, amt);
-                if (lmError != 0) {
+                try lendingManager.repayBorrowBehalf(borrowerAddr, amt) returns (uint256 lmError) {
+                    if (lmError != 0) {
+                        _recordCircuitFailure(keccak256("lendingManager.repayBatch"));
+                        revert("CollectionsVault: Repay borrow behalf failed via LendingManager");
+                    }
+                    actualTotalRepaid += amt;
+                } catch {
+                    _recordCircuitFailure(keccak256("lendingManager.repayBatch"));
                     revert("CollectionsVault: Repay borrow behalf failed via LendingManager");
                 }
-                actualTotalRepaid += amt;
             }
             unchecked {
                 ++i;
@@ -735,13 +761,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControl, Reentran
         );
     }
 
-    function pause() external onlyRole(Roles.GUARDIAN_ROLE) {
-        _pause();
-    }
-
-    function unpause() external onlyRole(Roles.GUARDIAN_ROLE) {
-        _unpause();
-    }
 
     function applyCollectionYieldForEpoch(address collectionAddress, uint256 epochId)
         external

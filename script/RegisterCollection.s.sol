@@ -11,14 +11,14 @@ contract RegisterCollection is Script {
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
         address nftAddress = vm.envAddress("NFT_ADDRESS");
         address vaultAddress = vm.envAddress("VAULT_ADDRESS");
-        
+
         // Get deployed CollectionRegistry address (from your deployment)
         address registryAddress = 0x0bFb4027C2257C354df64Ca00E526B0c3176bcd1;
-        
+
         vm.startBroadcast(deployerKey);
-        
+
         CollectionRegistry registry = CollectionRegistry(registryAddress);
-        
+
         // Register the collection
         ICollectionRegistry.Collection memory collectionData = ICollectionRegistry.Collection({
             collectionAddress: nftAddress,
@@ -31,15 +31,14 @@ contract RegisterCollection is Script {
             yieldSharePercentage: 5000, // 50%
             vaults: new address[](0)
         });
-        
+
         registry.registerCollection(collectionData);
         console.log("Collection registered:", nftAddress);
-        
+
         // Connect collection to vault
         registry.addVaultToCollection(nftAddress, vaultAddress);
         console.log("Collection connected to vault:", vaultAddress);
-        
+
         vm.stopBroadcast();
     }
 }
-EOF < /dev/null

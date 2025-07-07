@@ -10,12 +10,12 @@ contract ConfigureVault is Script {
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
         address vaultAddress = vm.envAddress("VAULT_ADDRESS");
         address epochManagerAddress = vm.envAddress("EPOCH_MANAGER_ADDRESS");
-        
+
         vm.startBroadcast(deployerKey);
 
         // Get the vault instance
         CollectionsVault vault = CollectionsVault(vaultAddress);
-        
+
         // Check if EpochManager is already set
         address currentEpochManager = address(vault.epochManager());
         if (currentEpochManager == address(0)) {
@@ -28,7 +28,7 @@ contract ConfigureVault is Script {
                 console.log("WARNING: Current EpochManager differs from expected:");
                 console.log("Current:", currentEpochManager);
                 console.log("Expected:", epochManagerAddress);
-                
+
                 // Update to the correct EpochManager
                 vault.setEpochManager(epochManagerAddress);
                 console.log("EpochManager updated to:", epochManagerAddress);
@@ -36,7 +36,7 @@ contract ConfigureVault is Script {
         }
 
         vm.stopBroadcast();
-        
+
         // Log final configuration
         console.log("=== VAULT CONFIGURATION COMPLETE ===");
         console.log("Vault Address:", vaultAddress);

@@ -25,14 +25,14 @@ contract RedeployEpochManager is Script {
         // Get existing configuration from current EpochManager
         EpochManager existingEpochManager = EpochManager(EXISTING_EPOCH_MANAGER);
         uint256 currentEpochDuration = existingEpochManager.epochDuration();
-        
+
         // Get automated system from OPERATOR_ROLE members (previously AUTOMATION_ROLE)
         address currentAutomatedSystem = address(0);
         uint256 operatorRoleMemberCount = existingEpochManager.getRoleMemberCount(Roles.OPERATOR_ROLE);
         if (operatorRoleMemberCount > 0) {
             currentAutomatedSystem = existingEpochManager.getRoleMember(Roles.OPERATOR_ROLE, 0);
         }
-        
+
         // Get current admin (equivalent to old owner)
         address currentAdmin = address(0);
         uint256 adminRoleMemberCount = existingEpochManager.getRoleMemberCount(Roles.ADMIN_ROLE);
@@ -45,12 +45,8 @@ contract RedeployEpochManager is Script {
         console.log("Current admin:", currentAdmin);
 
         // Deploy new EpochManager with same configuration
-        EpochManager newEpochManager = new EpochManager(
-            currentEpochDuration,
-            currentAutomatedSystem,
-            currentAdmin,
-            DEBT_SUBSIDIZER
-        );
+        EpochManager newEpochManager =
+            new EpochManager(currentEpochDuration, currentAutomatedSystem, currentAdmin, DEBT_SUBSIDIZER);
 
         console.log("New EpochManager deployed at:", address(newEpochManager));
 

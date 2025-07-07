@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {AccessControlBaseUpgradeable} from "./AccessControlBaseUpgradeable.sol";
+import {CrossContractSecurity} from "./CrossContractSecurity.sol";
 import {Roles} from "./Roles.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -52,6 +53,12 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
     mapping(address => bool) internal _vaultRemoved;
     mapping(address => mapping(address => bool)) internal _collectionRemoved;
     mapping(address => bool) internal _vaultHasDeposits;
+
+    // CrossContractSecurity storage (for upgradeability)
+    mapping(bytes32 => uint256) internal _circuitBreakerFailures;
+    mapping(bytes32 => uint256) internal _circuitBreakerLastFailure;
+    mapping(address => mapping(bytes4 => uint256)) internal _rateLimitCounts;
+    mapping(address => mapping(bytes4 => uint256)) internal _rateLimitWindows;
 
     event VaultDeactivated(address indexed vault);
     event CollectionDeactivated(address indexed vault, address indexed collection);
@@ -244,7 +251,18 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
 
             emit SubsidyClaimed(vaultAddress, recipient, amountToSubsidize);
 
-            ICollectionsVault(vaultAddress).repayBorrowBehalf(amountToSubsidize, recipient);
+            // Protected vault interaction with circuit breaker pattern
+            bytes32 circuitId = keccak256(abi.encodePacked("vault.repayBorrowBehalf", vaultAddress));
+            _checkCircuitBreaker(circuitId);
+            
+            try ICollectionsVault(vaultAddress).repayBorrowBehalf(amountToSubsidize, recipient) {
+                // Success - reset circuit breaker
+                _circuitBreakerFailures[circuitId] = 0;
+            } catch {
+                // Record failure and potentially trip circuit breaker
+                _recordVaultFailure(circuitId);
+                revert IDebtSubsidizer.InsufficientYield();
+            }
         }
     }
 
@@ -379,5 +397,36 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
         address oldRegistry = address(collectionRegistry);
         collectionRegistry = ICollectionRegistry(newRegistry);
         emit CollectionRegistryUpdated(oldRegistry, newRegistry);
+    }
+
+    /**
+     * @dev Circuit breaker functionality for vault interactions
+     */
+    function _checkCircuitBreaker(bytes32 circuitId) internal view {
+        uint256 failures = _circuitBreakerFailures[circuitId];
+        uint256 lastFailure = _circuitBreakerLastFailure[circuitId];
+        
+        // Trip circuit if more than 5 failures in the last 5 minutes
+        if (failures >= 5 && block.timestamp < lastFailure + 300) {
+            revert IDebtSubsidizer.InsufficientYield(); // Reuse existing error
+        }
+    }
+
+    function _recordVaultFailure(bytes32 circuitId) internal {
+        _circuitBreakerFailures[circuitId]++;
+        _circuitBreakerLastFailure[circuitId] = block.timestamp;
+        
+        // Reset failure count if enough time has passed
+        if (block.timestamp >= _circuitBreakerLastFailure[circuitId] + 300) {
+            _circuitBreakerFailures[circuitId] = 1;
+        }
+    }
+
+    /**
+     * @dev Admin function to reset circuit breaker
+     */
+    function resetCircuitBreaker(bytes32 circuitId) external onlyRole(Roles.GUARDIAN_ROLE) {
+        _circuitBreakerFailures[circuitId] = 0;
+        _circuitBreakerLastFailure[circuitId] = 0;
     }
 }
