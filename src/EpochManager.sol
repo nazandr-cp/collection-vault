@@ -231,6 +231,7 @@ contract EpochManager is IEpochManager, AccessControlBase, CrossContractSecurity
         external
         nonReentrant
         onlyRoleWhenNotPaused(Roles.OPERATOR_ROLE)
+        circuitBreakerProtected(keccak256("epoch.markFailed"))
     {
         if (epochId == 0 || epochId > currentEpochId) {
             revert EpochManager__InvalidEpochId(epochId);
@@ -244,6 +245,8 @@ contract EpochManager is IEpochManager, AccessControlBase, CrossContractSecurity
         }
 
         epoch.status = EpochStatus.Failed;
+        // Record circuit failure for excessive epoch failures
+        _recordCircuitFailure(keccak256("epoch.markFailed"));
         emit EpochFailed(epochId, reason);
         emit ProcessingFailed(epochId, reason);
     }
@@ -254,7 +257,8 @@ contract EpochManager is IEpochManager, AccessControlBase, CrossContractSecurity
      * @return epochId The ID of the newly started epoch.
      */
     function startEpoch() external nonReentrant onlyRoleWhenNotPaused(Roles.OPERATOR_ROLE) 
-        rateLimited(address(this), this.startEpoch.selector) returns (uint256) {
+        rateLimited(address(this), this.startEpoch.selector)
+        circuitBreakerProtected(keccak256("epoch.start")) returns (uint256) {
         if (currentEpochId > 0) {
             Epoch storage currentEpoch = epochs[currentEpochId];
             if (currentEpoch.status != EpochStatus.Completed) {

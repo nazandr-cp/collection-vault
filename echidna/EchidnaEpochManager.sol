@@ -364,7 +364,8 @@ contract EchidnaEpochManager {
     
     // Property 7: Consecutive failures should be limited
     function echidna_consecutive_failures_limited() external view returns (bool) {
-        return consecutiveFailures <= 10;
+        // EpochManager should have better failure handling to prevent too many consecutive failures
+        return consecutiveFailures <= 5;
     }
     
     // Property 8: Epoch duration consistency

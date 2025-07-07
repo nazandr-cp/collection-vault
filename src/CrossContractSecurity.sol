@@ -53,7 +53,7 @@ abstract contract CrossContractSecurity {
     mapping(address => uint256) internal lastLargeTransfer;
 
     // Constants
-    uint256 public constant DEFAULT_FAILURE_THRESHOLD = 5;
+    uint256 public constant DEFAULT_FAILURE_THRESHOLD = 3;
     uint256 public constant DEFAULT_TIMEOUT = 300; // 5 minutes
     uint256 public constant DEFAULT_RATE_WINDOW = 3600; // 1 hour
     uint256 public constant DEFAULT_MAX_REQUESTS = 100;

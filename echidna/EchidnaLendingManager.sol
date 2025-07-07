@@ -312,8 +312,9 @@ contract EchidnaLendingManager {
     
     // Property 6: Circuit breaker should prevent excessive consecutive failures
     function echidna_circuit_breaker_effective() external view returns (bool) {
-        // After too many consecutive failures, operations should be prevented
-        return consecutiveFailures <= 10;
+        // Circuit breaker should trip after DEFAULT_FAILURE_THRESHOLD (3) failures
+        // Allow up to 5 failures total before considering this a violation
+        return consecutiveFailures <= 5;
     }
     
     // Property 7: Role-based access control consistency
