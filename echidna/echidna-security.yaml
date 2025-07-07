@@ -1,0 +1,36 @@
+# Echidna configuration for security tests
+testMode: property
+testLimit: 40000
+shrinkLimit: 10000
+seqLen: 100
+contractAddr: "0x00a329c0648769A73afAc7F9381E08FB43dBEA72"
+deployer: "0x00a329c0648769A73afAc7F9381E08FB43dBEA72"
+sender: ["0x00a329c0648769A73afAc7F9381E08FB43dBEA72", "0x11111C0648769A73afAc7F9381E08FB43dBEA72", "0x22222C0648769A73afAc7F9381E08FB43dBEA72", "0x33333C0648769A73afAc7F9381E08FB43dBEA72", "0x44444C0648769A73afAc7F9381E08FB43dBEA72", "0x55555C0648769A73afAc7F9381E08FB43dBEA72"]
+format: text
+corpusDir: echidna/corpus-security
+
+# Coverage options
+coverage: true
+
+# Gas limit (high for security testing with multiple actors)
+gasLimit: 25000000
+
+# Initial balance
+balanceAddr: 1000000000000000000000
+balanceContract: 1000000000000000000000
+
+# Solc configuration
+solcArgs: --optimize --optimize-runs=200 --via-ir
+solcLibs: ["lib", "dependencies"]
+
+# Multi-core usage
+workers: 4
+
+# Shrinking options
+pshrink: true
+
+# Timeout configuration (12 minutes for security testing)
+timeout: 720
+
+# Dictionary optimized for security testing (role hashes, common values)
+dictionary: ["0", "1", "2", "5", "10", "100", "1000", "10000", "0xa49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c21775", "0x0000000000000000000000000000000000000000000000000000000000000000"]

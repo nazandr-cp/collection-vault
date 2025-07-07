@@ -1,0 +1,30 @@
+[2025-07-07 13:30:59.04] Compiling echidna/EchidnaCollectionsVault.sol... Done! (5.580719s)
+Analyzing contract: /Users/andrey/projects/lend.fam MVP/collection-vault/echidna/EchidnaCollectionsVault.sol:EchidnaCollectionsVault
+[2025-07-07 13:31:04.77] Running slither on echidna/EchidnaCollectionsVault.sol... Done! (6.493029s)
+[2025-07-07 13:31:11.47] [Worker 1] New coverage: 5100 instr, 4 contracts, 1 seqs in corpus
+[2025-07-07 13:31:11.47] [Worker 3] New coverage: 5100 instr, 4 contracts, 2 seqs in corpus
+[2025-07-07 13:31:11.47] [Worker 0] New coverage: 5100 instr, 4 contracts, 3 seqs in corpus
+[2025-07-07 13:31:11.48] [Worker 2] New coverage: 5100 instr, 4 contracts, 4 seqs in corpus
+[2025-07-07 13:31:11.97] [Worker 3] New coverage: 5132 instr, 4 contracts, 5 seqs in corpus
+[2025-07-07 13:31:13.11] [Worker 3] New coverage: 5136 instr, 4 contracts, 6 seqs in corpus
+[2025-07-07 13:31:13.51] [Worker 3] Test limit reached. Stopping.
+[2025-07-07 13:31:13.55] [Worker 0] Test limit reached. Stopping.
+[2025-07-07 13:31:13.62] [Worker 1] Test limit reached. Stopping.
+[2025-07-07 13:31:13.64] [Worker 2] Test limit reached. Stopping.
+[2025-07-07 13:31:13.64] [status] tests: 0/7, fuzzing: 5189/5000, values: [], cov: 5136, corpus: 6
+echidna_shares_reasonable: passing
+echidna_share_price_positive: passing
+echidna_total_supply_equals_balances: passing
+echidna_max_withdraw_reasonable: passing
+echidna_conversion_roundtrip: passing
+echidna_assets_not_exceed_balance: passing
+echidna_global_index_monotonic: passing
+
+
+Unique instructions: 5136
+Unique codehashes: 4
+Corpus size: 6
+Seed: 7263551962411915261
+Total calls: 5189
+
+WARNING: assertion at file: echidna/EchidnaCollectionsVault.sol starting at line: 234 was never reached

@@ -34,6 +34,7 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
 
     uint16 private constant MAX_YIELD_SHARE_PERCENTAGE = 10000;
     uint16 private constant MIN_YIELD_SHARE_PERCENTAGE = 100;
+    uint256 private constant MAX_BATCH_SIZE = 50;
 
     mapping(address => InternalVaultInfo) internal _vaultsData;
     mapping(address => bytes32) internal _merkleRoots; // Vault address => Merkle Root
@@ -284,6 +285,9 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
         uint256 len = vaultAddresses.length;
         if (len != claims.length) {
             revert IDebtSubsidizer.ArrayLengthMismatch();
+        }
+        if (len > MAX_BATCH_SIZE) {
+            revert("DebtSubsidizer: Batch size exceeds maximum limit");
         }
         for (uint256 i = 0; i < len;) {
             _claimSubsidy(vaultAddresses[i], claims[i]);

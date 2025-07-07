@@ -45,6 +45,9 @@ contract CollectionRegistry is ICollectionRegistry, AccessControlBase, CrossCont
     {
         address collectionAddress = collectionData.collectionAddress;
         require(collectionAddress != address(0), "CollectionRegistry: Zero address");
+        if (collectionData.yieldSharePercentage > 10000) {
+            revert("CollectionRegistry: Yield share percentage cannot exceed 10000 (100%)");
+        }
         if (!_isRegistered[collectionAddress]) {
             _isRegistered[collectionAddress] = true;
             _allCollections.push(collectionAddress);
@@ -68,6 +71,9 @@ contract CollectionRegistry is ICollectionRegistry, AccessControlBase, CrossCont
         onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE)
     {
         require(_isRegistered[collection], "CollectionRegistry: Not registered");
+        if (share > 10000) {
+            revert("CollectionRegistry: Yield share percentage cannot exceed 10000 (100%)");
+        }
         uint16 oldShare = _collections[collection].yieldSharePercentage;
         _collections[collection].yieldSharePercentage = share;
         emit YieldShareUpdated(collection, oldShare, share);

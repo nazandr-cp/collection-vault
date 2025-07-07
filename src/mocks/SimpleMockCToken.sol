@@ -65,6 +65,9 @@ contract SimpleMockCToken is CTokenInterface, CErc20Interface {
         uint8 decimals_,
         address payable admin_
     ) {
+        require(underlyingAddress_ != address(0), "Underlying cannot be zero address");
+        require(admin_ != address(0), "Admin cannot be zero address");
+        
         // Initialize CTokenStorage public state variables directly
         name = name_;
         symbol = symbol_;
@@ -157,7 +160,7 @@ contract SimpleMockCToken is CTokenInterface, CErc20Interface {
 
     function mint(uint256 mintAmount) external virtual override returns (uint256) {
         uint256 cTokensToMint = mintAmount; // Simplified: 1 underlying = 1 cToken for mock
-        EIP20Interface(underlying).transferFrom(msg.sender, address(this), mintAmount); // Mock transfer
+        require(EIP20Interface(underlying).transferFrom(msg.sender, address(this), mintAmount), "Transfer failed"); // Mock transfer
         _mintTokens(msg.sender, cTokensToMint);
         emit Mint(msg.sender, mintAmount, cTokensToMint);
         return 0; // Represents Error.NO_ERROR
@@ -166,7 +169,7 @@ contract SimpleMockCToken is CTokenInterface, CErc20Interface {
     function redeem(uint256 redeemCTokens) external virtual override returns (uint256) {
         uint256 underlyingAmountToReturn = redeemCTokens; // Simplified
         _burnTokens(msg.sender, redeemCTokens);
-        EIP20Interface(underlying).transfer(msg.sender, underlyingAmountToReturn); // Mock transfer
+        require(EIP20Interface(underlying).transfer(msg.sender, underlyingAmountToReturn), "Transfer failed"); // Mock transfer
         emit Redeem(msg.sender, underlyingAmountToReturn, redeemCTokens);
         return 0;
     }
@@ -174,7 +177,7 @@ contract SimpleMockCToken is CTokenInterface, CErc20Interface {
     function redeemUnderlying(uint256 redeemAmount) external virtual override returns (uint256) {
         uint256 cTokensToBurn = redeemAmount; // Simplified
         _burnTokens(msg.sender, cTokensToBurn);
-        EIP20Interface(underlying).transfer(msg.sender, redeemAmount); // Mock transfer
+        require(EIP20Interface(underlying).transfer(msg.sender, redeemAmount), "Transfer failed"); // Mock transfer
         emit Redeem(msg.sender, redeemAmount, cTokensToBurn);
         return 0;
     }
@@ -183,13 +186,13 @@ contract SimpleMockCToken is CTokenInterface, CErc20Interface {
         CTokenStorage.totalBorrows += borrowAmount;
         accountBorrows[msg.sender].principal += borrowAmount;
         accountBorrows[msg.sender].interestIndex = borrowIndex;
-        EIP20Interface(underlying).transfer(msg.sender, borrowAmount); // Mock transfer
+        require(EIP20Interface(underlying).transfer(msg.sender, borrowAmount), "Transfer failed"); // Mock transfer
         emit Borrow(msg.sender, borrowAmount, accountBorrows[msg.sender].principal, CTokenStorage.totalBorrows);
         return 0;
     }
 
     function repayBorrow(uint256 repayAmount) external virtual override returns (uint256) {
-        EIP20Interface(underlying).transferFrom(msg.sender, address(this), repayAmount); // Mock transfer
+        require(EIP20Interface(underlying).transferFrom(msg.sender, address(this), repayAmount), "Transfer failed"); // Mock transfer
         uint256 borrowed = accountBorrows[msg.sender].principal;
         uint256 actualRepayAmount = repayAmount > borrowed ? borrowed : repayAmount;
         CTokenStorage.totalBorrows -= actualRepayAmount;
@@ -201,7 +204,7 @@ contract SimpleMockCToken is CTokenInterface, CErc20Interface {
     }
 
     function repayBorrowBehalf(address borrower, uint256 repayAmount) external virtual override returns (uint256) {
-        EIP20Interface(underlying).transferFrom(msg.sender, address(this), repayAmount); // Mock transfer
+        require(EIP20Interface(underlying).transferFrom(msg.sender, address(this), repayAmount), "Transfer failed"); // Mock transfer
         uint256 borrowed = accountBorrows[borrower].principal;
         uint256 actualRepayAmount = repayAmount > borrowed ? borrowed : repayAmount;
         CTokenStorage.totalBorrows -= actualRepayAmount;
@@ -337,6 +340,7 @@ contract SimpleMockCToken is CTokenInterface, CErc20Interface {
     // --- Admin Functions (from CTokenInterface) ---
     function _setPendingAdmin(address payable newPendingAdmin) external virtual override returns (uint256) {
         require(msg.sender == admin, "CToken: sender must be admin");
+        require(newPendingAdmin != address(0), "New pending admin cannot be zero address");
         address oldPendingAdmin = pendingAdmin;
         pendingAdmin = newPendingAdmin;
         emit NewPendingAdmin(oldPendingAdmin, newPendingAdmin);

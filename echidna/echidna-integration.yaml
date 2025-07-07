@@ -1,0 +1,36 @@
+# Echidna configuration for integration tests
+testMode: property
+testLimit: 30000
+shrinkLimit: 8000
+seqLen: 200
+contractAddr: "0x00a329c0648769A73afAc7F9381E08FB43dBEA72"
+deployer: "0x00a329c0648769A73afAc7F9381E08FB43dBEA72"
+sender: ["0x00a329c0648769A73afAc7F9381E08FB43dBEA72", "0x11111C0648769A73afAc7F9381E08FB43dBEA72", "0x22222C0648769A73afAc7F9381E08FB43dBEA72", "0x33333C0648769A73afAc7F9381E08FB43dBEA72"]
+format: text
+corpusDir: echidna/corpus-integration
+
+# Coverage options
+coverage: true
+
+# Gas limit (high for complex integration flows)
+gasLimit: 30000000
+
+# Initial balance (very high for integration testing)
+balanceAddr: 10000000000000000000000
+balanceContract: 10000000000000000000000
+
+# Solc configuration
+solcArgs: --optimize --optimize-runs=200 --via-ir
+solcLibs: ["lib", "dependencies"]
+
+# Multi-core usage
+workers: 4
+
+# Shrinking options
+pshrink: true
+
+# Timeout configuration (15 minutes for complex integration tests)
+timeout: 900
+
+# Dictionary optimized for integration testing
+dictionary: ["0", "1", "1000", "10000", "1000000", "1000000000000000000", "604800", "86400", "7"]

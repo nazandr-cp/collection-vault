@@ -159,17 +159,17 @@ contract DeployWithExistingNFT is Script {
         require(vault.hasRole(Roles.ADMIN_ROLE, admin), "Admin missing ADMIN_ROLE on vault");
         require(vault.hasRole(Roles.GUARDIAN_ROLE, admin), "Admin missing GUARDIAN_ROLE on vault");
         require(vault.hasRole(Roles.OPERATOR_ROLE, admin), "Admin missing OPERATOR_ROLE on vault");
-        console.log("✓ Admin has all required roles on vault");
+        console.log("Admin has all required roles on vault");
         
         // Verify cross-contract permissions
         require(lendingManager.hasRole(Roles.OPERATOR_ROLE, address(vault)), "Vault missing OPERATOR_ROLE on LendingManager");
         require(epochManager.hasRole(Roles.OPERATOR_ROLE, address(vault)), "Vault missing OPERATOR_ROLE on EpochManager");
         require(collectionRegistry.hasRole(Roles.COLLECTION_MANAGER_ROLE, admin), "Admin missing COLLECTION_MANAGER_ROLE");
-        console.log("✓ All cross-contract permissions verified");
+        console.log("All cross-contract permissions verified");
         
         // Verify collection operator access
         require(vault.isCollectionOperator(existingNFT, admin), "Admin missing collection operator access");
-        console.log("✓ Collection operator access verified");
+        console.log("Collection operator access verified");
 
         // Core deployment completed successfully!
         console.log("=== DEPLOYMENT AND CONFIGURATION COMPLETE ===");

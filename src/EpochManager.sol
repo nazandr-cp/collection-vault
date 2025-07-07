@@ -38,11 +38,16 @@ contract EpochManager is IEpochManager, AccessControlBase, CrossContractSecurity
         if (_initialEpochDuration == 0) {
             revert EpochManager__InvalidEpochDuration();
         }
+        if (_initialAdmin == address(0)) {
+            revert("EpochManager: Initial admin cannot be zero address");
+        }
         epochDuration = _initialEpochDuration;
         if (_initialAutomatedSystem != address(0)) {
             _grantRole(Roles.OPERATOR_ROLE, _initialAutomatedSystem);
         }
-        debtSubsidizer = IDebtSubsidizer(_debtSubsidizer);
+        if (_debtSubsidizer != address(0)) {
+            debtSubsidizer = IDebtSubsidizer(_debtSubsidizer);
+        }
         // currentEpochId is 0 initially, startEpoch will create epoch 1.
     }
 
@@ -100,6 +105,9 @@ contract EpochManager is IEpochManager, AccessControlBase, CrossContractSecurity
      * @param newDebtSubsidizer The new address for the DebtSubsidizer contract.
      */
     function setDebtSubsidizer(address newDebtSubsidizer) external onlyRole(Roles.ADMIN_ROLE) {
+        if (newDebtSubsidizer == address(0)) {
+            revert("EpochManager: DebtSubsidizer address cannot be zero");
+        }
         debtSubsidizer = IDebtSubsidizer(newDebtSubsidizer);
         emit DebtSubsidizerUpdated(newDebtSubsidizer);
     }
@@ -313,11 +321,17 @@ contract EpochManager is IEpochManager, AccessControlBase, CrossContractSecurity
     }
 
     function grantVaultRole(address vault) external onlyRoleWhenNotPaused(Roles.ADMIN_ROLE) {
+        if (vault == address(0)) {
+            revert("EpochManager: Vault address cannot be zero");
+        }
         _grantRole(OPERATOR_ROLE, vault);
         emit EpochManagerRoleGranted(OPERATOR_ROLE, vault, msg.sender, block.timestamp);
     }
 
     function revokeVaultRole(address vault) external onlyRoleWhenNotPaused(Roles.ADMIN_ROLE) {
+        if (vault == address(0)) {
+            revert("EpochManager: Vault address cannot be zero");
+        }
         _revokeRole(OPERATOR_ROLE, vault);
         emit EpochManagerRoleRevoked(OPERATOR_ROLE, vault, msg.sender, block.timestamp);
     }

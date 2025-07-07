@@ -49,7 +49,7 @@ contract CollectionRegistryTest is Test {
         nftCollection2 = new MockERC721("Collection 2", "COL2");
 
         // Grant MANAGER role to test account
-        registry.grantRole(Roles.MANAGER_ROLE, MANAGER);
+        registry.grantRole(Roles.COLLECTION_MANAGER_ROLE, MANAGER);
 
         vm.stopPrank();
     }
@@ -532,9 +532,9 @@ contract CollectionRegistryTest is Test {
         vm.startPrank(ADMIN);
 
         address newManager = address(0x9999);
-        registry.grantRole(Roles.MANAGER_ROLE, newManager);
+        registry.grantRole(Roles.COLLECTION_MANAGER_ROLE, newManager);
 
-        assertTrue(registry.hasRole(Roles.MANAGER_ROLE, newManager));
+        assertTrue(registry.hasRole(Roles.COLLECTION_MANAGER_ROLE, newManager));
 
         vm.stopPrank();
 
@@ -548,8 +548,8 @@ contract CollectionRegistryTest is Test {
     function testRevokeManagerRole() public {
         vm.startPrank(ADMIN);
 
-        registry.revokeRole(Roles.MANAGER_ROLE, MANAGER);
-        assertFalse(registry.hasRole(Roles.MANAGER_ROLE, MANAGER));
+        registry.revokeRole(Roles.COLLECTION_MANAGER_ROLE, MANAGER);
+        assertFalse(registry.hasRole(Roles.COLLECTION_MANAGER_ROLE, MANAGER));
 
         vm.stopPrank();
 

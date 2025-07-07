@@ -42,6 +42,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
     uint256 public totalYieldReserved;
     uint256 public globalDepositIndex;
     uint256 public constant GLOBAL_DEPOSIT_INDEX_PRECISION = 1e18;
+    uint256 public constant MAX_BATCH_SIZE = 50;
 
     address[] private allCollectionAddresses;
     mapping(address => bool) private isCollectionRegistered;
@@ -231,21 +232,32 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         revert FunctionDisabledUse("depositForCollection");
     }
 
-    function depositForCollection(uint256 assets, address receiver, address collectionAddress)
-        public
-        override(ICollectionsVault)
-        nonReentrant
-        whenNotPaused
-        onlyCollectionOperator(collectionAddress)
-        returns (uint256 shares)
-    {
+    enum DepositOperationType {
+        DEPOSIT_FOR_COLLECTION,
+        TRANSFER_FOR_COLLECTION,
+        MINT_FOR_COLLECTION
+    }
+
+    function _performCollectionDeposit(
+        address collectionAddress,
+        address receiver,
+        uint256 assetsOrShares,
+        DepositOperationType operationType
+    ) internal returns (uint256 assets, uint256 shares) {
         _updateGlobalDepositIndex();
         _ensureCollectionKnownAndRegistered(collectionAddress);
         _accrueCollectionYield(collectionAddress);
 
         CollectionVaultData storage vaultData = collectionVaultsData[collectionAddress];
 
-        shares = previewDeposit(assets);
+        if (operationType == DepositOperationType.DEPOSIT_FOR_COLLECTION || operationType == DepositOperationType.TRANSFER_FOR_COLLECTION) {
+            assets = assetsOrShares;
+            shares = previewDeposit(assets);
+        } else {
+            shares = assetsOrShares;
+            assets = previewMint(shares);
+        }
+
         _deposit(msg.sender, receiver, assets, shares);
         _hookDeposit(assets);
 
@@ -254,6 +266,17 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         vaultData.totalSharesMinted += shares;
         vaultData.totalCTokensMinted += shares;
         emit CollectionDeposit(collectionAddress, _msgSender(), receiver, assets, shares, shares);
+    }
+
+    function depositForCollection(uint256 assets, address receiver, address collectionAddress)
+        public
+        override(ICollectionsVault)
+        nonReentrant
+        whenNotPaused
+        onlyCollectionOperator(collectionAddress)
+        returns (uint256 shares)
+    {
+        (, shares) = _performCollectionDeposit(collectionAddress, receiver, assets, DepositOperationType.DEPOSIT_FOR_COLLECTION);
     }
 
     function transfer(address, uint256) public pure override(ERC20, IERC20) returns (bool) {
@@ -272,21 +295,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         onlyCollectionOperator(collectionAddress)
         returns (uint256 shares)
     {
-        _updateGlobalDepositIndex();
-        _ensureCollectionKnownAndRegistered(collectionAddress);
-        _accrueCollectionYield(collectionAddress);
-
-        CollectionVaultData storage vaultData = collectionVaultsData[collectionAddress];
-
-        shares = previewDeposit(assets);
-        _deposit(msg.sender, to, assets, shares);
-        _hookDeposit(assets);
-
-        vaultData.totalAssetsDeposited += assets;
-        totalAssetsDepositedAllCollections += assets;
-        vaultData.totalSharesMinted += shares;
-        vaultData.totalCTokensMinted += shares;
-        emit CollectionDeposit(collectionAddress, _msgSender(), to, assets, shares, shares);
+        (, shares) = _performCollectionDeposit(collectionAddress, to, assets, DepositOperationType.TRANSFER_FOR_COLLECTION);
     }
 
     function mint(uint256, address) public virtual override(ERC4626, IERC4626) returns (uint256) {
@@ -301,21 +310,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         onlyCollectionOperator(collectionAddress)
         returns (uint256 assets)
     {
-        _updateGlobalDepositIndex();
-        _ensureCollectionKnownAndRegistered(collectionAddress);
-        _accrueCollectionYield(collectionAddress);
-
-        CollectionVaultData storage vaultData = collectionVaultsData[collectionAddress];
-
-        assets = previewMint(shares);
-        _deposit(msg.sender, receiver, assets, shares);
-        _hookDeposit(assets);
-
-        vaultData.totalAssetsDeposited += assets;
-        totalAssetsDepositedAllCollections += assets;
-        vaultData.totalSharesMinted += shares;
-        vaultData.totalCTokensMinted += shares;
-        emit CollectionDeposit(collectionAddress, _msgSender(), receiver, assets, shares, shares);
+        (assets, ) = _performCollectionDeposit(collectionAddress, receiver, shares, DepositOperationType.MINT_FOR_COLLECTION);
     }
 
     function withdraw(uint256, address, address) public virtual override(ERC4626, IERC4626) returns (uint256) {
@@ -586,6 +581,9 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         if (numEntries != amounts.length) {
             revert("CollectionsVault: Array lengths mismatch");
         }
+        if (numEntries > MAX_BATCH_SIZE) {
+            revert("CollectionsVault: Batch size exceeds maximum limit");
+        }
 
         if (totalAmount == 0) {
             return;
@@ -745,6 +743,9 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         whenNotPaused
     {
         if (collectionAddress == address(0)) revert AddressZero();
+        if (score > 10000) {
+            revert("CollectionsVault: Performance score cannot exceed 10000 (100%)");
+        }
         collectionPerformanceScore[collectionAddress] = score;
         emit CollectionPerformanceUpdated(collectionAddress, score, block.timestamp);
     }
@@ -839,6 +840,9 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         onlyRole(ADMIN_ROLE)
     {
         uint256 length = collectionsToReset.length;
+        if (length > MAX_BATCH_SIZE) {
+            revert("CollectionsVault: Batch size exceeds maximum limit");
+        }
         for (uint256 i = 0; i < length;) {
             delete epochCollectionYieldApplied[epochId][collectionsToReset[i]];
             unchecked {

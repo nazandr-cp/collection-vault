@@ -1,0 +1,42 @@
+# Echidna configuration for mathematical invariant tests
+testMode: property
+testLimit: 100000
+shrinkLimit: 15000
+seqLen: 50
+contractAddr: "0x00a329c0648769A73afAc7F9381E08FB43dBEA72"
+deployer: "0x00a329c0648769A73afAc7F9381E08FB43dBEA72"
+sender: ["0x00a329c0648769A73afAc7F9381E08FB43dBEA72", "0x11111C0648769A73afAc7F9381E08FB43dBEA72"]
+format: text
+corpusDir: echidna/corpus-math
+
+# Coverage options
+coverage: true
+
+# Gas limit (moderate for math operations)
+gasLimit: 15000000
+
+# Initial balance
+balanceAddr: 1000000000000000000000
+balanceContract: 1000000000000000000000
+
+# Solc configuration
+solcArgs: --optimize --optimize-runs=200 --via-ir
+solcLibs: ["lib", "dependencies"]
+
+# Multi-core usage
+workers: 4
+
+# Shrinking options
+pshrink: true
+
+# Assertion mode for mathematical testing
+assertionMode: true
+
+# Timeout configuration (20 minutes for extensive math testing)
+timeout: 1200
+
+# Dictionary optimized for mathematical edge cases
+dictionary: ["0", "1", "2", "10000", "1000000000000000000", "115792089237316195423570985008687907853269984665640564039457584007913129639935", "57896044618658097711785492504343953926634992332820282019728792003956564819967", "340282366920938463463374607431768211455"]
+
+# Check assertion reachability
+checkAsserts: true

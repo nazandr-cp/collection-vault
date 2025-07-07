@@ -18,12 +18,13 @@ contract MockFeeOnTransferERC20 is ERC20 {
         uint16 _feeBpsReceive,
         address _feeCollector
     ) ERC20(name, symbol) {
+        require(_feeCollector != address(0), "Fee collector cannot be zero address");
+        require(_feeBpsSend <= 10000 && _feeBpsReceive <= 10000, "Fee too high");
+        
         _mockDecimals = decimals_; // Store decimals
         feeBpsSend = _feeBpsSend;
         feeBpsReceive = _feeBpsReceive;
         feeCollector = _feeCollector;
-        require(_feeCollector != address(0), "Fee collector cannot be zero address");
-        require(feeBpsSend <= 10000 && feeBpsReceive <= 10000, "Fee too high");
     }
 
     function decimals() public view virtual override returns (uint8) {
