@@ -122,6 +122,11 @@ interface IEpochManager {
 
     function getCurrentEpochId() external view returns (uint256);
     function allocateVaultYield(address vault, uint256 amount) external;
+    function getVaultYieldForEpoch(uint256 epochId, address vault) external view returns (uint256);
+    function setAutomatedSystem(address newAutomatedSystem) external;
+    function setDebtSubsidizer(address newDebtSubsidizer) external;
+    function grantVaultRole(address vault) external;
+    function revokeVaultRole(address vault) external;
 
     // Simplified workflow functions - only 2 calls needed per epoch
     function startEpoch() external returns (uint256 epochId);

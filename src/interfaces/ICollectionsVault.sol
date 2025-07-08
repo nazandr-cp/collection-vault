@@ -121,7 +121,15 @@ interface ICollectionsVault is IERC4626 {
     function collectionTotalAssetsDeposited(address collectionAddress) external view returns (uint256);
     function totalAssetsDepositedAllCollections() external view returns (uint256);
     function totalYieldReserved() external view returns (uint256);
+    function totalYieldAllocatedCumulative() external view returns (uint256);
+    function getTotalAvailableYield() external view returns (uint256);
+    function getRemainingCumulativeYield() external view returns (uint256);
+    function validateCumulativeClaims(uint256 totalClaimedAmount) external view returns (bool);
+    function totalCollectionYieldShareBps() external view returns (uint16);
+    function underlying() external view returns (address);
     function setLendingManager(address _lendingManagerAddress) external;
+    function setEpochManager(address _epochManagerAddress) external;
+    function setCollectionRegistry(address _collectionRegistryAddress) external;
     function setDebtSubsidizer(address _debtSubsidizerAddress) external;
 
     function depositForCollection(uint256 assets, address receiver, address collectionAddress)
@@ -151,9 +159,11 @@ interface ICollectionsVault is IERC4626 {
     function getCurrentEpochYield(bool includeNonShared) external view returns (uint256 availableYield);
     function allocateEpochYield(uint256 amount) external;
     function allocateYieldToEpoch(uint256 epochId) external;
+    function allocateCumulativeYieldToEpoch(uint256 epochId, uint256 amount) external;
     function applyCollectionYieldForEpoch(address collection, uint256 epochId) external;
     function resetEpochCollectionYieldFlags(uint256 epochId, address[] calldata collections) external;
     function getEpochYieldAllocated(uint256 epochId) external view returns (uint256 amount);
+    function indexCollectionsDeposits() external;
 
     // Collection statistics getters
     function getCollectionTotalBorrowVolume(address collectionAddress) external view returns (uint256);

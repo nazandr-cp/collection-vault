@@ -12,8 +12,8 @@ interface IDebtSubsidizer {
     }
 
     struct VaultInfo {
-        address lendingManager; // lending manager address
-        address cToken; // cToken address
+        address lendingManager;
+        address cToken;
     }
 
     event NewCollectionWhitelisted(address indexed vaultAddress, address indexed collectionAddress);
@@ -25,12 +25,10 @@ interface IDebtSubsidizer {
     );
     event VaultRemoved(address indexed vaultAddress);
 
-    // Subsidy pool management events
     event SubsidyPoolInitialized(uint256 indexed poolAmount, uint256 indexed timestamp);
     event SubsidyPoolUpdated(uint256 indexed oldAmount, uint256 indexed newAmount, uint256 timestamp);
     event EligibleUserCountUpdated(uint256 indexed totalCount, bool indexed added, address user, uint256 timestamp);
 
-    // Role management events with context
     event DebtSubsidizerRoleGranted(bytes32 indexed role, address indexed account, address sender, uint256 timestamp);
     event DebtSubsidizerRoleRevoked(bytes32 indexed role, address indexed account, address sender, uint256 timestamp);
 
@@ -69,6 +67,7 @@ interface IDebtSubsidizer {
     function claimSubsidy(address vaultAddress, ClaimData calldata claim) external;
     function claimAllSubsidies(address[] calldata vaultAddresses, ClaimData[] calldata claims) external;
     function updateMerkleRoot(address vaultAddress, bytes32 merkleRoot) external;
+    function getMerkleRoot(address vaultAddress) external view returns (bytes32);
 
     function paused() external view returns (bool);
 
@@ -80,4 +79,11 @@ interface IDebtSubsidizer {
     function getTotalSubsidiesRemaining() external view returns (uint256);
     function getTotalEligibleUsers() external view returns (uint256);
     function isUserEligible(address user) external view returns (bool);
+    function getTotalClaimedForVault(address vaultAddress) external view returns (uint256);
+    function getUserClaimedTotal(address vaultAddress, address user) external view returns (uint256);
+    function isVaultRemoved(address vaultAddress) external view returns (bool);
+    function isCollectionRemoved(address vaultAddress, address collection) external view returns (bool);
+    function userSecondsClaimed(address user) external view returns (uint256);
+    function emergencyValidateAndPause(address vaultAddress) external;
+    function validateVaultClaimsIntegrity(address vaultAddress) external view returns (bool, uint256, uint256);
 }

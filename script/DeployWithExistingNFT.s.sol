@@ -106,7 +106,7 @@ contract DeployWithExistingNFT is Script {
         debtSubsidizer.addVault(address(vault), address(lendingManager));
 
         // 6. Make initial deposit to create CollectionParticipation for subgraph
-        uint256 initialDepositAmount = 1000 * (10 ** MockERC20(asset).decimals()); // 1000 tokens
+        uint256 initialDepositAmount = 100000 * (10 ** MockERC20(asset).decimals()); // 100000s tokens
 
         // Grant collection operator access to the deployer
         vault.grantCollectionAccess(existingNFT, admin);

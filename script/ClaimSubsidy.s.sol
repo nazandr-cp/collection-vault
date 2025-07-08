@@ -3,21 +3,23 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Script.sol";
 import {IDebtSubsidizer} from "../src/interfaces/IDebtSubsidizer.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract ClaimSubsidy is Script {
     function run() external {
-        // Load addresses from .env
         address vaultAddress = vm.envAddress("VAULT_ADDRESS");
         address debtSubsidizerAddress = vm.envAddress("DEBT_SUBSIDIZER_ADDRESS");
+        address cTokenAddress = vm.envAddress("CTOKEN_ADDRESS");
 
-        // Load user details from .env
-        address user2 = vm.envAddress("USER2"); // 0x8F37c5C4fA708E06a656d858003EF7dc5F60A29B
+        address user2 = vm.envAddress("USER2");
         uint256 user2Key = vm.envUint("USER2_PRIVATE_KEY");
-        address user3 = vm.envAddress("USER3"); // 0x3575B992C5337226AEcf4e7f93Dfbe80c576CE15
+        uint256 user2TotalEarned = vm.envUint("USER2_TOTAL_EARNED");
+        address user3 = vm.envAddress("USER3");
         uint256 user3Key = vm.envUint("USER3_PRIVATE_KEY");
+        uint256 user3TotalEarned = vm.envUint("USER3_TOTAL_EARNED");
 
-        // Create contract instance
         IDebtSubsidizer debtSubsidizer = IDebtSubsidizer(debtSubsidizerAddress);
+        IERC20 cToken = IERC20(cTokenAddress);
 
         console.log("=== Claiming Subsidies ===");
         console.log("Vault Address:", vaultAddress);
@@ -25,19 +27,16 @@ contract ClaimSubsidy is Script {
         console.log("USER2:", user2);
         console.log("USER3:", user3);
 
-        // Based on the latest epoch server data:
-        // Merkle Root: 0x453af7ba13ef28bd50dc1ae0de59e0cbd4dfed58c2f1226f63a93d3e78b97e8c
-        // USER2 (0x8F37...): totalEarned = 2093968
-        // USER3 (0x3575...): totalEarned = 4187936
-
-        // --- USER2 Claim ---
         console.log("\n== USER2 Claiming Subsidy ==");
+        
+        uint256 user2BorrowBefore = cToken.balanceOf(user2);
+        console.log("USER2 borrow balance before claim:", user2BorrowBefore);
+        console.log("USER2 total earned to claim:", user2TotalEarned);
+        
         vm.startBroadcast(user2Key);
 
-        // For USER2: 0x8F37c5C4fA708E06a656d858003EF7dc5F60A29B
-        // Total earned: 2093968 (from epoch server logs)
         IDebtSubsidizer.ClaimData memory user2Claim =
-            IDebtSubsidizer.ClaimData({recipient: user2, totalEarned: 2093968, merkleProof: _getMerkleProofForUser2()});
+            IDebtSubsidizer.ClaimData({recipient: user2, totalEarned: user2TotalEarned, merkleProof: _getMerkleProofForUser2()});
 
         try debtSubsidizer.claimSubsidy(vaultAddress, user2Claim) {
             console.log("USER2 subsidy claimed successfully!");
@@ -48,15 +47,21 @@ contract ClaimSubsidy is Script {
         }
 
         vm.stopBroadcast();
+        
+        uint256 user2BorrowAfter = cToken.balanceOf(user2);
+        console.log("USER2 borrow balance after claim:", user2BorrowAfter);
+        console.log("USER2 borrow reduction:", user2BorrowBefore > user2BorrowAfter ? user2BorrowBefore - user2BorrowAfter : 0);
 
-        // --- USER3 Claim ---
         console.log("\n== USER3 Claiming Subsidy ==");
+        
+        uint256 user3BorrowBefore = cToken.balanceOf(user3);
+        console.log("USER3 borrow balance before claim:", user3BorrowBefore);
+        console.log("USER3 total earned to claim:", user3TotalEarned);
+        
         vm.startBroadcast(user3Key);
 
-        // For USER3: 0x3575B992C5337226AEcf4e7f93Dfbe80c576CE15
-        // Total earned: 4187936 (from epoch server logs)
         IDebtSubsidizer.ClaimData memory user3Claim =
-            IDebtSubsidizer.ClaimData({recipient: user3, totalEarned: 4187936, merkleProof: _getMerkleProofForUser3()});
+            IDebtSubsidizer.ClaimData({recipient: user3, totalEarned: user3TotalEarned, merkleProof: _getMerkleProofForUser3()});
 
         try debtSubsidizer.claimSubsidy(vaultAddress, user3Claim) {
             console.log("USER3 subsidy claimed successfully!");
@@ -67,47 +72,44 @@ contract ClaimSubsidy is Script {
         }
 
         vm.stopBroadcast();
+        
+        uint256 user3BorrowAfter = cToken.balanceOf(user3);
+        console.log("USER3 borrow balance after claim:", user3BorrowAfter);
+        console.log("USER3 borrow reduction:", user3BorrowBefore > user3BorrowAfter ? user3BorrowBefore - user3BorrowAfter : 0);
 
         console.log("\n=== Claim Process Complete ===");
     }
 
-    // Generate merkle proof for USER2 (0x8F37c5C4fA708E06a656d858003EF7dc5F60A29B)
-    // This is calculated based on the merkle tree structure from epoch server
-    function _getMerkleProofForUser2() internal pure returns (bytes32[] memory) {
+    function _getMerkleProofForUser2() internal view returns (bytes32[] memory) {
         bytes32[] memory proof = new bytes32[](1);
-
-        // For a 2-leaf tree, each leaf's proof is the sibling leaf hash
-        // USER3 leaf hash (which comes first in sorted order)
-        proof[0] = keccak256(abi.encodePacked(address(0x3575B992C5337226AEcf4e7f93Dfbe80c576CE15), uint256(4187936)));
+        
+        // Get the actual merkle proof from environment variable (populated from API)
+        proof[0] = vm.envBytes32("USER2_MERKLE_PROOF");
 
         return proof;
     }
 
-    // Generate merkle proof for USER3 (0x3575B992C5337226AEcf4e7f93Dfbe80c576CE15)
-    function _getMerkleProofForUser3() internal pure returns (bytes32[] memory) {
+    function _getMerkleProofForUser3() internal view returns (bytes32[] memory) {
         bytes32[] memory proof = new bytes32[](1);
-
-        // For a 2-leaf tree, each leaf's proof is the sibling leaf hash
-        // USER2 leaf hash (which comes second in sorted order)
-        proof[0] = keccak256(abi.encodePacked(address(0x8F37c5C4fA708E06a656d858003EF7dc5F60A29B), uint256(2093968)));
+        
+        // Get the actual merkle proof from environment variable (populated from API)
+        proof[0] = vm.envBytes32("USER3_MERKLE_PROOF");
 
         return proof;
     }
 
-    // Helper function to verify merkle root calculation
-    function verifyMerkleRoot() external pure returns (bytes32) {
-        // Calculate leaf hashes
-        bytes32 user2Leaf =
-            keccak256(abi.encodePacked(address(0x8F37c5C4fA708E06a656d858003EF7dc5F60A29B), uint256(2093968)));
+    function verifyMerkleRoot() external view returns (bytes32) {
+        address user2 = vm.envAddress("USER2");
+        uint256 user2TotalEarned = vm.envUint("USER2_TOTAL_EARNED");
+        address user3 = vm.envAddress("USER3");
+        uint256 user3TotalEarned = vm.envUint("USER3_TOTAL_EARNED");
 
-        bytes32 user3Leaf =
-            keccak256(abi.encodePacked(address(0x3575B992C5337226AEcf4e7f93Dfbe80c576CE15), uint256(4187936)));
+        bytes32 user2Leaf = keccak256(abi.encodePacked(user2, user2TotalEarned));
+        bytes32 user3Leaf = keccak256(abi.encodePacked(user3, user3TotalEarned));
 
-        // Sort leaves for OpenZeppelin compatibility
         bytes32 left = user2Leaf < user3Leaf ? user2Leaf : user3Leaf;
         bytes32 right = user2Leaf < user3Leaf ? user3Leaf : user2Leaf;
 
-        // Calculate root
         return keccak256(abi.encodePacked(left, right));
     }
 }

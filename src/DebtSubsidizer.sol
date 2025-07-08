@@ -39,6 +39,7 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
     mapping(address => InternalVaultInfo) internal _vaultsData;
     mapping(address => bytes32) internal _merkleRoots; // Vault address => Merkle Root
     mapping(address => mapping(address => uint256)) internal _claimedTotals; // vault => user => total claimed
+    mapping(address => uint256) internal _totalClaimedByVault; // vault => total claimed across all users
 
     mapping(address => mapping(address => bool)) internal _isCollectionWhitelisted;
     mapping(address => address[]) internal _vaultWhitelistedCollections; // vault => array of whitelisted collections
@@ -55,7 +56,6 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
     mapping(address => mapping(address => bool)) internal _collectionRemoved;
     mapping(address => bool) internal _vaultHasDeposits;
 
-    // CrossContractSecurity storage (for upgradeability)
     mapping(bytes32 => uint256) internal _circuitBreakerFailures;
     mapping(bytes32 => uint256) internal _circuitBreakerLastFailure;
     mapping(address => mapping(bytes4 => uint256)) internal _rateLimitCounts;
@@ -180,7 +180,6 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
 
         delete _isCollectionWhitelisted[vaultAddress][collectionAddress];
 
-        // Remove from the whitelisted collections array
         address[] storage collections = _vaultWhitelistedCollections[vaultAddress];
         for (uint256 i = 0; i < collections.length; i++) {
             if (collections[i] == collectionAddress) {
@@ -223,27 +222,26 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
 
         uint256 amountToSubsidize = newTotal - prevClaimed;
         _claimedTotals[vaultAddress][recipient] = newTotal;
+        _totalClaimedByVault[vaultAddress] += amountToSubsidize;
 
         if (amountToSubsidize > 0) {
             _vaultHasDeposits[vaultAddress] = true;
-            IEpochManager em = ICollectionsVault(vaultAddress).epochManager();
-            uint256 epochId = em.getCurrentEpochId();
-            uint256 remainingYield = ICollectionsVault(vaultAddress).getEpochYieldAllocated(epochId);
-            if (amountToSubsidize > remainingYield) {
+            
+            uint256 totalAllocatedYield = ICollectionsVault(vaultAddress).totalYieldAllocatedCumulative();
+            uint256 totalClaimedForVault = _totalClaimedByVault[vaultAddress];
+            
+            if (totalClaimedForVault > totalAllocatedYield) {
                 revert IDebtSubsidizer.InsufficientYield();
             }
 
-            // Check subsidy pool availability
             if (totalSubsidiesRemaining < amountToSubsidize) {
                 revert IDebtSubsidizer.InsufficientYield();
             }
 
             _userTotalSecondsClaimed[recipient] += amountToSubsidize;
 
-            // Update subsidy pool tracking
             totalSubsidiesRemaining -= amountToSubsidize;
 
-            // Add user to eligible users if not already
             if (!eligibleUsers[recipient]) {
                 eligibleUsers[recipient] = true;
                 totalEligibleUsers++;
@@ -252,15 +250,12 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
 
             emit SubsidyClaimed(vaultAddress, recipient, amountToSubsidize);
 
-            // Protected vault interaction with circuit breaker pattern
             bytes32 circuitId = keccak256(abi.encodePacked("vault.repayBorrowBehalf", vaultAddress));
             _checkCircuitBreaker(circuitId);
             
             try ICollectionsVault(vaultAddress).repayBorrowBehalf(amountToSubsidize, recipient) {
-                // Success - reset circuit breaker
                 _circuitBreakerFailures[circuitId] = 0;
             } catch {
-                // Record failure and potentially trip circuit breaker
                 _recordVaultFailure(circuitId);
                 revert IDebtSubsidizer.InsufficientYield();
             }
@@ -310,6 +305,47 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
         }
         _merkleRoots[vaultAddress] = merkleRoot_;
         emit MerkleRootUpdated(vaultAddress, merkleRoot_, msg.sender);
+    }
+
+    function getMerkleRoot(address vaultAddress) external view returns (bytes32) {
+        return _merkleRoots[vaultAddress];
+    }
+
+    function getTotalClaimedForVault(address vaultAddress) external view returns (uint256) {
+        return _totalClaimedByVault[vaultAddress];
+    }
+
+    function getUserClaimedTotal(address vaultAddress, address user) external view returns (uint256) {
+        return _claimedTotals[vaultAddress][user];
+    }
+
+    function validateVaultClaimsIntegrity(address vaultAddress) 
+        external 
+        view 
+        returns (bool isValid, uint256 totalClaimed, uint256 totalAllocated) 
+    {
+        totalClaimed = _totalClaimedByVault[vaultAddress];
+        
+        try ICollectionsVault(vaultAddress).totalYieldAllocatedCumulative() returns (uint256 allocated) {
+            totalAllocated = allocated;
+            isValid = totalClaimed <= totalAllocated;
+        } catch {
+            totalAllocated = 0;
+            isValid = false;
+        }
+    }
+
+    function emergencyValidateAndPause(address vaultAddress) external onlyRole(Roles.ADMIN_ROLE) {
+        (bool isValid, uint256 totalClaimed, uint256 totalAllocated) = this.validateVaultClaimsIntegrity(vaultAddress);
+        
+        if (!isValid) {
+            _pause();
+            emit MerkleRootUpdated(
+                vaultAddress, 
+                bytes32(0), // Clear merkle root to prevent further claims
+                msg.sender
+            );
+        }
     }
 
     function isCollectionWhitelisted(address vaultAddress, address collectionAddress)
@@ -403,16 +439,12 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
         emit CollectionRegistryUpdated(oldRegistry, newRegistry);
     }
 
-    /**
-     * @dev Circuit breaker functionality for vault interactions
-     */
     function _checkCircuitBreaker(bytes32 circuitId) internal view {
         uint256 failures = _circuitBreakerFailures[circuitId];
         uint256 lastFailure = _circuitBreakerLastFailure[circuitId];
         
-        // Trip circuit if more than 5 failures in the last 5 minutes
         if (failures >= 5 && block.timestamp < lastFailure + 300) {
-            revert IDebtSubsidizer.InsufficientYield(); // Reuse existing error
+            revert IDebtSubsidizer.InsufficientYield();
         }
     }
 
@@ -420,15 +452,11 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
         _circuitBreakerFailures[circuitId]++;
         _circuitBreakerLastFailure[circuitId] = block.timestamp;
         
-        // Reset failure count if enough time has passed
         if (block.timestamp >= _circuitBreakerLastFailure[circuitId] + 300) {
             _circuitBreakerFailures[circuitId] = 1;
         }
     }
 
-    /**
-     * @dev Admin function to reset circuit breaker
-     */
     function resetCircuitBreaker(bytes32 circuitId) external onlyRole(Roles.GUARDIAN_ROLE) {
         _circuitBreakerFailures[circuitId] = 0;
         _circuitBreakerLastFailure[circuitId] = 0;

@@ -16,10 +16,10 @@ import {ICollectionsVault} from "./interfaces/ICollectionsVault.sol";
 import {IEpochManager} from "./interfaces/IEpochManager.sol";
 import {ICollectionRegistry} from "./interfaces/ICollectionRegistry.sol";
 
-// Import libraries for size optimization
 import {CollectionYieldLib} from "./libraries/CollectionYieldLib.sol";
 import {CollectionOperationsLib} from "./libraries/CollectionOperationsLib.sol";
 import {CollectionValidationLib} from "./libraries/CollectionValidationLib.sol";
+import {BatchOperationsLib} from "./libraries/BatchOperationsLib.sol";
 
 interface ICToken {
     function repayBorrowBehalf(address borrower, uint256 repayAmount) external returns (uint256);
@@ -34,7 +34,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
     bytes32 public constant ADMIN_ROLE = Roles.ADMIN_ROLE;
     bytes32 public constant OPERATOR_ROLE = Roles.OPERATOR_ROLE;
 
-    // For interface compatibility - returns OPERATOR_ROLE
     function DEBT_SUBSIDIZER_ROLE() external pure returns (bytes32) {
         return OPERATOR_ROLE;
     }
@@ -57,8 +56,9 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
 
     mapping(uint256 => uint256) public epochYieldAllocations;
     mapping(uint256 => mapping(address => bool)) public epochCollectionYieldApplied;
+    
+    uint256 public totalYieldAllocatedCumulative;
 
-    // Collection-specific statistics
     mapping(address => uint256) public collectionTotalBorrowVolume;
     mapping(address => uint256) public collectionTotalYieldGenerated;
     mapping(address => uint256) public collectionPerformanceScore;
@@ -189,6 +189,14 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
             globalDepositIndex,
             isCollectionRegistered
         );
+    }
+
+    /**
+     * @notice Returns the underlying asset address (same as asset() from ERC4626)
+     * @return The address of the underlying asset
+     */
+    function underlying() external view override returns (address) {
+        return asset();
     }
 
     function totalAssets() public view override(ERC4626, IERC4626) returns (uint256) {
@@ -513,14 +521,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         whenNotPaused
         nonReentrant
     {
-        uint256 numEntries = borrowers.length;
-        if (numEntries != amounts.length) {
-            revert("CollectionsVault: Array lengths mismatch");
-        }
-        if (numEntries > MAX_BATCH_SIZE) {
-            revert("CollectionsVault: Batch size exceeds maximum limit");
-        }
-
         if (totalAmount == 0) {
             return;
         }
@@ -528,41 +528,18 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         _updateGlobalDepositIndex();
         _hookWithdraw(totalAmount);
 
-        IERC20 assetToken = IERC20(asset());
-        assetToken.forceApprove(address(lendingManager), totalAmount);
+        (uint256 actualTotalRepaid, uint256 newTotalYieldReserved) = BatchOperationsLib.processBatchRepayment(
+            amounts,
+            borrowers,
+            totalAmount,
+            IERC20(asset()),
+            lendingManager,
+            epochManager,
+            epochYieldAllocations,
+            totalYieldReserved
+        );
 
-        uint256 actualTotalRepaid = 0;
-        for (uint256 i = 0; i < numEntries;) {
-            uint256 amt = amounts[i];
-            address borrowerAddr = borrowers[i];
-
-            if (amt != 0) {
-                try lendingManager.repayBorrowBehalf(borrowerAddr, amt) returns (uint256 lmError) {
-                    if (lmError != 0) {
-                        revert("CollectionsVault: Repay borrow behalf failed via LendingManager");
-                    }
-                    actualTotalRepaid += amt;
-                } catch {
-                    revert("CollectionsVault: Repay borrow behalf failed via LendingManager");
-                }
-            }
-            unchecked {
-                ++i;
-            }
-        }
-
-        assetToken.forceApprove(address(lendingManager), 0);
-        if (address(epochManager) != address(0)) {
-            uint256 epochId = epochManager.getCurrentEpochId();
-            if (epochId != 0 && epochYieldAllocations[epochId] >= actualTotalRepaid) {
-                epochYieldAllocations[epochId] -= actualTotalRepaid;
-            }
-        }
-        if (totalYieldReserved >= actualTotalRepaid) {
-            totalYieldReserved -= actualTotalRepaid;
-        } else {
-            totalYieldReserved = 0;
-        }
+        totalYieldReserved = newTotalYieldReserved;
         emit YieldBatchRepaid(actualTotalRepaid, msg.sender);
     }
 
@@ -582,6 +559,37 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
 
         uint256 allocated = epochYieldAllocations[currentEpochId];
         return CollectionYieldLib.getCurrentEpochYield(lendingManager, allocated, false);
+    }
+
+    function getTotalAvailableYield() public view returns (uint256 totalAvailableYield) {
+        return CollectionYieldLib.getCurrentEpochYield(lendingManager, 0, true);
+    }
+
+    function getRemainingCumulativeYield() public view returns (uint256 remainingYield) {
+        uint256 totalYield = getTotalAvailableYield();
+        return totalYield > totalYieldAllocatedCumulative ? totalYield - totalYieldAllocatedCumulative : 0;
+    }
+
+    function validateCumulativeClaims(uint256 totalClaimedAmount) external view returns (bool isValid) {
+        return totalClaimedAmount <= totalYieldAllocatedCumulative;
+    }
+
+    function validateMerkleTreeAllocation(uint256 merkleTreeTotal) 
+        external 
+        view 
+        returns (
+            bool canAllocate, 
+            uint256 totalAvailable, 
+            uint256 currentlyAllocated, 
+            uint256 remainingYield
+        ) 
+    {
+        totalAvailable = getTotalAvailableYield();
+        currentlyAllocated = totalYieldAllocatedCumulative;
+        remainingYield = getRemainingCumulativeYield();
+        
+        canAllocate = merkleTreeTotal <= remainingYield && 
+                     (currentlyAllocated + merkleTreeTotal) <= totalAvailable;
     }
 
     function allocateEpochYield(uint256 amount) external nonReentrant whenNotPaused onlyRole(ADMIN_ROLE) {
@@ -615,13 +623,47 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         if (epochId != currentEpochId || epochId == 0) {
             revert("CollectionsVault: Invalid epochId");
         }
-        uint256 amount = getCurrentEpochYield(false);
+        
+        // Get remaining cumulative yield available for allocation
+        uint256 amount = getRemainingCumulativeYield();
         if (amount == 0) {
-            revert("CollectionsVault: No yield available for allocation");
+            revert("CollectionsVault: No cumulative yield available for allocation");
         }
+        
         epochManager.allocateVaultYield(address(this), amount);
         epochYieldAllocations[epochId] += amount;
+        totalYieldAllocatedCumulative += amount; // Track cumulative allocation
         totalYieldReserved += amount;
+        emit VaultYieldAllocatedToEpoch(epochId, amount);
+    }
+
+    function allocateCumulativeYieldToEpoch(uint256 epochId, uint256 amount) external nonReentrant whenNotPaused onlyRole(ADMIN_ROLE) {
+        if (address(epochManager) == address(0)) revert("CollectionsVault: EpochManager not set");
+        uint256 currentEpochId = epochManager.getCurrentEpochId();
+        if (epochId != currentEpochId || epochId == 0) {
+            revert("CollectionsVault: Invalid epochId");
+        }
+        if (amount == 0) {
+            revert("CollectionsVault: Allocation amount cannot be zero");
+        }
+        
+        uint256 remainingYield = getRemainingCumulativeYield();
+        uint256 totalAvailable = getTotalAvailableYield();
+        uint256 newCumulativeTotal = totalYieldAllocatedCumulative + amount;
+        
+        if (amount > remainingYield) {
+            revert("CollectionsVault: Requested amount exceeds available cumulative yield");
+        }
+        
+        if (newCumulativeTotal > totalAvailable) {
+            revert("CollectionsVault: Total allocation would exceed total available yield");
+        }
+        
+        epochManager.allocateVaultYield(address(this), amount);
+        epochYieldAllocations[epochId] += amount;
+        totalYieldAllocatedCumulative += amount; // Track cumulative allocation
+        totalYieldReserved += amount;
+        
         emit VaultYieldAllocatedToEpoch(epochId, amount);
     }
 
