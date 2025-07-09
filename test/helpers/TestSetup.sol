@@ -167,9 +167,8 @@ contract TestSetup is Test {
         collectionsVault.setEpochManager(address(epochManager));
         collectionsVault.setDebtSubsidizer(address(debtSubsidizer));
 
-        // Grant collection access
-        collectionsVault.grantCollectionAccess(address(nftCollection1), COLLECTION_OPERATOR);
-        collectionsVault.grantCollectionAccess(address(nftCollection2), COLLECTION_OPERATOR);
+        // Grant collection manager role
+        collectionsVault.grantRole(collectionsVault.COLLECTION_MANAGER_ROLE(), COLLECTION_OPERATOR);
 
         // Configure Epoch Manager
         epochManager.grantVaultRole(address(collectionsVault));

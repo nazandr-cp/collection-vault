@@ -33,8 +33,8 @@ contract DepositToVault is Script {
         // Grant OPERATOR_ROLE to vault on LendingManager (needed for depositToLendingProtocol)
         lendingManager.grantRole(Roles.OPERATOR_ROLE, vaultAddress);
 
-        // Grant collection operator access to the deployer
-        vault.grantCollectionAccess(nftAddress, sender);
+        // Grant collection manager role to the deployer
+        vault.grantRole(vault.COLLECTION_MANAGER_ROLE(), sender);
 
         // Approve the vault to spend MDAI tokens
         asset.approve(vaultAddress, depositAmount);

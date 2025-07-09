@@ -116,8 +116,8 @@ contract DeployWithExistingNFT is Script {
         // 7. Make initial deposit to create CollectionParticipation for subgraph
         uint256 initialDepositAmount = 100000 * (10 ** MockERC20(asset).decimals()); // 100000s tokens
 
-        // Grant collection operator access to the deployer
-        vault.grantCollectionAccess(existingNFT, admin);
+        // Grant collection manager role to the deployer
+        vault.grantRole(vault.COLLECTION_MANAGER_ROLE(), admin);
 
         // Approve the vault to spend tokens
         MockERC20(asset).approve(address(vault), initialDepositAmount);

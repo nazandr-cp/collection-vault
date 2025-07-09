@@ -45,7 +45,7 @@ contract DistributeAssets is Script {
 
         // Whitelist collection and deposit to vault
         CollectionsVault vault = CollectionsVault(vaultAddr);
-        vault.grantCollectionAccess(nftAddr, msg.sender);
+        vault.grantRole(vault.COLLECTION_MANAGER_ROLE(), msg.sender);
         uint256 depositAmount = 100000 * 10 ** decimals;
         // Approve vault to transfer tokens on behalf of deployer
         asset.approve(vaultAddr, depositAmount);
