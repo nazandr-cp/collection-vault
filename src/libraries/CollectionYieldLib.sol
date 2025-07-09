@@ -22,9 +22,7 @@ library CollectionYieldLib {
     );
 
     event CollectionYieldGenerated(
-        address indexed collectionAddress, 
-        uint256 indexed yieldAmount, 
-        uint256 indexed timestamp
+        address indexed collectionAddress, uint256 indexed yieldAmount, uint256 indexed timestamp
     );
 
     /**
@@ -40,16 +38,16 @@ library CollectionYieldLib {
         uint256 currentGlobalDepositIndex
     ) external view returns (uint256 newGlobalDepositIndex) {
         if (address(lendingManager) == address(0)) return currentGlobalDepositIndex;
-        
+
         uint256 totalPrincipal = lendingManager.totalPrincipalDeposited();
         if (totalPrincipal == 0) {
             return currentGlobalDepositIndex;
         }
-        
+
         uint256 lmAssets = lendingManager.totalAssets();
         uint256 currentTotalAssets = lmAssets > totalYieldReserved ? lmAssets - totalYieldReserved : 0;
         uint256 newIndex = (currentTotalAssets * GLOBAL_DEPOSIT_INDEX_PRECISION) / totalPrincipal;
-        
+
         return newIndex > currentGlobalDepositIndex ? newIndex : currentGlobalDepositIndex;
     }
 
@@ -72,7 +70,7 @@ library CollectionYieldLib {
         mapping(address => uint256) storage collectionTotalYieldGenerated
     ) external returns (uint256 yieldAccrued, uint256 newTotalAssetsDepositedAllCollections) {
         ICollectionRegistry.Collection memory registryCollection = collectionRegistry.getCollection(collectionAddress);
-        
+
         if (registryCollection.yieldSharePercentage == 0) {
             vaultData.lastGlobalDepositIndex = globalDepositIndex;
             return (0, totalAssetsDepositedAllCollections);
@@ -80,12 +78,11 @@ library CollectionYieldLib {
 
         uint256 lastIndex = vaultData.lastGlobalDepositIndex;
         newTotalAssetsDepositedAllCollections = totalAssetsDepositedAllCollections;
-        
+
         if (globalDepositIndex > lastIndex) {
             uint256 accruedRatio = globalDepositIndex - lastIndex;
-            yieldAccrued = (
-                vaultData.totalAssetsDeposited * accruedRatio * registryCollection.yieldSharePercentage
-            ) / (GLOBAL_DEPOSIT_INDEX_PRECISION * 10000);
+            yieldAccrued = (vaultData.totalAssetsDeposited * accruedRatio * registryCollection.yieldSharePercentage)
+                / (GLOBAL_DEPOSIT_INDEX_PRECISION * 10000);
 
             if (yieldAccrued > 0) {
                 vaultData.totalAssetsDeposited += yieldAccrued;
@@ -93,7 +90,7 @@ library CollectionYieldLib {
 
                 // Track collection-specific yield generation
                 collectionTotalYieldGenerated[collectionAddress] += yieldAccrued;
-                
+
                 emit CollectionYieldGenerated(collectionAddress, yieldAccrued, block.timestamp);
                 emit CollectionYieldAccrued(
                     collectionAddress, yieldAccrued, vaultData.totalAssetsDeposited, globalDepositIndex, lastIndex
@@ -118,11 +115,10 @@ library CollectionYieldLib {
         uint256 globalDepositIndex
     ) external view returns (uint256 potentialYieldAccrued) {
         ICollectionRegistry.Collection memory registryCollection = collectionRegistry.getCollection(collectionAddress);
-        
+
         if (
-            registryCollection.collectionAddress == address(0) || 
-            registryCollection.yieldSharePercentage == 0 ||
-            globalDepositIndex <= vaultData.lastGlobalDepositIndex
+            registryCollection.collectionAddress == address(0) || registryCollection.yieldSharePercentage == 0
+                || globalDepositIndex <= vaultData.lastGlobalDepositIndex
         ) {
             return 0;
         }
@@ -140,11 +136,11 @@ library CollectionYieldLib {
      * @param includeNonShared Whether to include non-shared yield
      * @return availableYield The available yield amount
      */
-    function getCurrentEpochYield(
-        ILendingManager lendingManager,
-        uint256 epochYieldAllocated,
-        bool includeNonShared
-    ) external view returns (uint256 availableYield) {
+    function getCurrentEpochYield(ILendingManager lendingManager, uint256 epochYieldAllocated, bool includeNonShared)
+        external
+        view
+        returns (uint256 availableYield)
+    {
         if (address(lendingManager) == address(0)) {
             return 0;
         }

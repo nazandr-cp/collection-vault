@@ -185,7 +185,7 @@ contract TestSetup is Test {
         debtSubsidizer.addVault(address(collectionsVault), address(lendingManager));
         debtSubsidizer.whitelistCollection(address(collectionsVault), address(nftCollection1));
         debtSubsidizer.whitelistCollection(address(collectionsVault), address(nftCollection2));
-        debtSubsidizer.initializeSubsidyPool(500_000e6); // 500k USDC subsidy pool
+        // Subsidy pool mechanism removed - subsidies are now tracked per vault automatically
 
         vm.stopPrank();
     }

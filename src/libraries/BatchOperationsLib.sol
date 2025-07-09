@@ -72,7 +72,7 @@ library BatchOperationsLib {
         }
 
         asset.forceApprove(address(lendingManager), 0);
-        
+
         // Update epoch allocations if epoch manager exists
         if (address(epochManager) != address(0)) {
             uint256 epochId = epochManager.getCurrentEpochId();
@@ -80,7 +80,7 @@ library BatchOperationsLib {
                 epochYieldAllocations[epochId] -= actualTotalRepaid;
             }
         }
-        
+
         // Update total yield reserved
         if (totalYieldReserved >= actualTotalRepaid) {
             newTotalYieldReserved = totalYieldReserved - actualTotalRepaid;

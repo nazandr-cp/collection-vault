@@ -37,7 +37,7 @@ library CollectionValidationLib {
         if (!collectionRegistry.isRegistered(collectionAddress)) {
             revert CollectionNotRegistered(collectionAddress);
         }
-        
+
         if (!isCollectionRegistered[collectionAddress]) {
             isCollectionRegistered[collectionAddress] = true;
             allCollectionAddresses.push(collectionAddress);
@@ -67,11 +67,10 @@ library CollectionValidationLib {
      * @param requestedAmount The amount requested
      * @param availableAmount The amount available
      */
-    function validateCollectionBalance(
-        address collectionAddress,
-        uint256 requestedAmount,
-        uint256 availableAmount
-    ) external pure {
+    function validateCollectionBalance(address collectionAddress, uint256 requestedAmount, uint256 availableAmount)
+        external
+        pure
+    {
         if (requestedAmount > availableAmount) {
             revert CollectionInsufficientBalance(collectionAddress, requestedAmount, availableAmount);
         }
@@ -92,10 +91,10 @@ library CollectionValidationLib {
      * @param collectionAddress The collection address
      * @param collectionRegistry The collection registry contract
      */
-    function validateCollectionExists(
-        address collectionAddress,
-        ICollectionRegistry collectionRegistry
-    ) external view {
+    function validateCollectionExists(address collectionAddress, ICollectionRegistry collectionRegistry)
+        external
+        view
+    {
         if (!collectionRegistry.isRegistered(collectionAddress)) {
             revert CollectionNotRegistered(collectionAddress);
         }
@@ -126,9 +125,8 @@ library CollectionValidationLib {
         ICollectionRegistry.Collection memory registryCollection = collectionRegistry.getCollection(collectionAddress);
 
         if (
-            registryCollection.collectionAddress == address(0) || 
-            registryCollection.yieldSharePercentage == 0 ||
-            globalDepositIndex <= vaultData.lastGlobalDepositIndex
+            registryCollection.collectionAddress == address(0) || registryCollection.yieldSharePercentage == 0
+                || globalDepositIndex <= vaultData.lastGlobalDepositIndex
         ) {
             return vaultData.totalAssetsDeposited;
         }
@@ -147,11 +145,7 @@ library CollectionValidationLib {
      * @param arraysLength2 Length of second array
      * @param maxBatchSize Maximum allowed batch size
      */
-    function validateBatchOperation(
-        uint256 arraysLength1,
-        uint256 arraysLength2,
-        uint256 maxBatchSize
-    ) external pure {
+    function validateBatchOperation(uint256 arraysLength1, uint256 arraysLength2, uint256 maxBatchSize) external pure {
         require(arraysLength1 == arraysLength2, "Array lengths mismatch");
         require(arraysLength1 <= maxBatchSize, "Batch size exceeds maximum limit");
     }
@@ -183,6 +177,9 @@ library CollectionValidationLib {
         if (!isCollectionRegistered[collectionAddress]) {
             revert CollectionNotRegistered(collectionAddress);
         }
-        require(!epochCollectionYieldApplied[epochId][collectionAddress], "Yield already applied for this collection and epoch");
+        require(
+            !epochCollectionYieldApplied[epochId][collectionAddress],
+            "Yield already applied for this collection and epoch"
+        );
     }
 }

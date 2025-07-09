@@ -56,7 +56,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
 
     mapping(uint256 => uint256) public epochYieldAllocations;
     mapping(uint256 => mapping(address => bool)) public epochCollectionYieldApplied;
-    
+
     uint256 public totalYieldAllocatedCumulative;
 
     mapping(address => uint256) public collectionTotalBorrowVolume;
@@ -94,18 +94,15 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
     }
 
     function _updateGlobalDepositIndex() internal {
-        globalDepositIndex = CollectionYieldLib.updateGlobalDepositIndex(
-            lendingManager,
-            totalYieldReserved,
-            globalDepositIndex
-        );
+        globalDepositIndex =
+            CollectionYieldLib.updateGlobalDepositIndex(lendingManager, totalYieldReserved, globalDepositIndex);
     }
 
     function _accrueCollectionYield(address collectionAddress) internal {
         if (!isCollectionRegistered[collectionAddress]) {
             return;
         }
-        
+
         CollectionVaultData storage vaultData = collectionVaultsData[collectionAddress];
         (, uint256 newTotal) = CollectionYieldLib.accrueCollectionYield(
             collectionAddress,
@@ -220,22 +217,16 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         CollectionVaultData storage vaultData = collectionVaultsData[collectionAddress];
 
         (assets, shares) = CollectionOperationsLib.calculateDepositAmounts(
-            assetsOrShares,
-            operationType,
-            this.previewDeposit,
-            this.previewMint
+            assetsOrShares, operationType, this.previewDeposit, this.previewMint
         );
 
         _deposit(msg.sender, receiver, assets, shares);
         _hookDeposit(assets);
 
         totalAssetsDepositedAllCollections = CollectionOperationsLib.updateCollectionDataAfterDeposit(
-            vaultData,
-            assets,
-            shares,
-            totalAssetsDepositedAllCollections
+            vaultData, assets, shares, totalAssetsDepositedAllCollections
         );
-        
+
         emit CollectionDeposit(collectionAddress, _msgSender(), receiver, assets, shares, shares);
     }
 
@@ -247,7 +238,9 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         onlyCollectionOperator(collectionAddress)
         returns (uint256 shares)
     {
-        (, shares) = _performCollectionDeposit(collectionAddress, receiver, assets, CollectionOperationsLib.DepositOperationType.DEPOSIT_FOR_COLLECTION);
+        (, shares) = _performCollectionDeposit(
+            collectionAddress, receiver, assets, CollectionOperationsLib.DepositOperationType.DEPOSIT_FOR_COLLECTION
+        );
     }
 
     function transfer(address, uint256) public pure override(ERC20, IERC20) returns (bool) {
@@ -266,7 +259,9 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         onlyCollectionOperator(collectionAddress)
         returns (uint256 shares)
     {
-        (, shares) = _performCollectionDeposit(collectionAddress, to, assets, CollectionOperationsLib.DepositOperationType.TRANSFER_FOR_COLLECTION);
+        (, shares) = _performCollectionDeposit(
+            collectionAddress, to, assets, CollectionOperationsLib.DepositOperationType.TRANSFER_FOR_COLLECTION
+        );
     }
 
     function mint(uint256, address) public virtual override(ERC4626, IERC4626) returns (uint256) {
@@ -281,7 +276,9 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         onlyCollectionOperator(collectionAddress)
         returns (uint256 assets)
     {
-        (assets, ) = _performCollectionDeposit(collectionAddress, receiver, shares, CollectionOperationsLib.DepositOperationType.MINT_FOR_COLLECTION);
+        (assets,) = _performCollectionDeposit(
+            collectionAddress, receiver, shares, CollectionOperationsLib.DepositOperationType.MINT_FOR_COLLECTION
+        );
     }
 
     function withdraw(uint256, address, address) public virtual override(ERC4626, IERC4626) returns (uint256) {
@@ -360,24 +357,14 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
 
     function _handleFullRedemption(uint256 assets, uint256 shares) internal returns (uint256 finalAssetsToTransfer) {
         return CollectionOperationsLib.handleFullRedemption(
-            assets,
-            shares,
-            totalSupply(),
-            lendingManager,
-            totalYieldReserved
+            assets, shares, totalSupply(), lendingManager, totalYieldReserved
         );
     }
 
     function _performAssetTransfer(address receiver, uint256 finalAssetsToTransfer, address owner, uint256 shares)
         internal
     {
-        CollectionOperationsLib.performAssetTransfer(
-            IERC20(asset()),
-            receiver,
-            finalAssetsToTransfer,
-            owner,
-            shares
-        );
+        CollectionOperationsLib.performAssetTransfer(IERC20(asset()), receiver, finalAssetsToTransfer, owner, shares);
     }
 
     function _updateCollectionData(
@@ -387,11 +374,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         uint256 currentCollectionTotalAssets
     ) internal {
         totalAssetsDepositedAllCollections = CollectionOperationsLib.updateCollectionDataAfterWithdraw(
-            vaultData,
-            assets,
-            shares,
-            currentCollectionTotalAssets,
-            totalAssetsDepositedAllCollections
+            vaultData, assets, shares, currentCollectionTotalAssets, totalAssetsDepositedAllCollections
         );
     }
 
@@ -574,22 +557,16 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         return totalClaimedAmount <= totalYieldAllocatedCumulative;
     }
 
-    function validateMerkleTreeAllocation(uint256 merkleTreeTotal) 
-        external 
-        view 
-        returns (
-            bool canAllocate, 
-            uint256 totalAvailable, 
-            uint256 currentlyAllocated, 
-            uint256 remainingYield
-        ) 
+    function validateMerkleTreeAllocation(uint256 merkleTreeTotal)
+        external
+        view
+        returns (bool canAllocate, uint256 totalAvailable, uint256 currentlyAllocated, uint256 remainingYield)
     {
         totalAvailable = getTotalAvailableYield();
         currentlyAllocated = totalYieldAllocatedCumulative;
         remainingYield = getRemainingCumulativeYield();
-        
-        canAllocate = merkleTreeTotal <= remainingYield && 
-                     (currentlyAllocated + merkleTreeTotal) <= totalAvailable;
+
+        canAllocate = merkleTreeTotal <= remainingYield && (currentlyAllocated + merkleTreeTotal) <= totalAvailable;
     }
 
     function allocateEpochYield(uint256 amount) external nonReentrant whenNotPaused onlyRole(ADMIN_ROLE) {
@@ -623,13 +600,13 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         if (epochId != currentEpochId || epochId == 0) {
             revert("CollectionsVault: Invalid epochId");
         }
-        
+
         // Get remaining cumulative yield available for allocation
         uint256 amount = getRemainingCumulativeYield();
         if (amount == 0) {
             revert("CollectionsVault: No cumulative yield available for allocation");
         }
-        
+
         epochManager.allocateVaultYield(address(this), amount);
         epochYieldAllocations[epochId] += amount;
         totalYieldAllocatedCumulative += amount; // Track cumulative allocation
@@ -637,7 +614,12 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         emit VaultYieldAllocatedToEpoch(epochId, amount);
     }
 
-    function allocateCumulativeYieldToEpoch(uint256 epochId, uint256 amount) external nonReentrant whenNotPaused onlyRole(ADMIN_ROLE) {
+    function allocateCumulativeYieldToEpoch(uint256 epochId, uint256 amount)
+        external
+        nonReentrant
+        whenNotPaused
+        onlyRole(ADMIN_ROLE)
+    {
         if (address(epochManager) == address(0)) revert("CollectionsVault: EpochManager not set");
         uint256 currentEpochId = epochManager.getCurrentEpochId();
         if (epochId != currentEpochId || epochId == 0) {
@@ -646,24 +628,24 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         if (amount == 0) {
             revert("CollectionsVault: Allocation amount cannot be zero");
         }
-        
+
         uint256 remainingYield = getRemainingCumulativeYield();
         uint256 totalAvailable = getTotalAvailableYield();
         uint256 newCumulativeTotal = totalYieldAllocatedCumulative + amount;
-        
+
         if (amount > remainingYield) {
             revert("CollectionsVault: Requested amount exceeds available cumulative yield");
         }
-        
+
         if (newCumulativeTotal > totalAvailable) {
             revert("CollectionsVault: Total allocation would exceed total available yield");
         }
-        
+
         epochManager.allocateVaultYield(address(this), amount);
         epochYieldAllocations[epochId] += amount;
         totalYieldAllocatedCumulative += amount; // Track cumulative allocation
         totalYieldReserved += amount;
-        
+
         emit VaultYieldAllocatedToEpoch(epochId, amount);
     }
 
@@ -729,7 +711,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
             collectionAddress, collectionTotalBorrowVolume[collectionAddress], borrowAmount, block.timestamp
         );
     }
-
 
     function applyCollectionYieldForEpoch(address collectionAddress, uint256 epochId)
         external

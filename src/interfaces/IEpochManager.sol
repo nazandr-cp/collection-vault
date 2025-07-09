@@ -136,4 +136,6 @@ interface IEpochManager {
         bytes32 merkleRoot,
         uint256 subsidiesDistributed
     ) external;
+
+    function forceEndEpochWithZeroYield(uint256 epochId, address vaultAddress) external;
 }

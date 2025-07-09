@@ -19,15 +19,13 @@ interface IDebtSubsidizer {
     event NewCollectionWhitelisted(address indexed vaultAddress, address indexed collectionAddress);
     event WhitelistCollectionRemoved(address indexed vaultAddress, address indexed collectionAddress);
     event SubsidyClaimed(address indexed vaultAddress, address indexed recipient, uint256 amount);
-    event MerkleRootUpdated(address indexed vaultAddress, bytes32 merkleRoot, address indexed updatedBy);
+    event MerkleRootUpdated(
+        address indexed vaultAddress, bytes32 merkleRoot, address indexed updatedBy, uint256 totalSubsidiesForEpoch
+    );
     event VaultAdded(
         address indexed vaultAddress, address indexed cTokenAddress, address indexed lendingManagerAddress
     );
     event VaultRemoved(address indexed vaultAddress);
-
-    event SubsidyPoolInitialized(uint256 indexed poolAmount, uint256 indexed timestamp);
-    event SubsidyPoolUpdated(uint256 indexed oldAmount, uint256 indexed newAmount, uint256 timestamp);
-    event EligibleUserCountUpdated(uint256 indexed totalCount, bool indexed added, address user, uint256 timestamp);
 
     event DebtSubsidizerRoleGranted(bytes32 indexed role, address indexed account, address sender, uint256 timestamp);
     event DebtSubsidizerRoleRevoked(bytes32 indexed role, address indexed account, address sender, uint256 timestamp);
@@ -66,19 +64,14 @@ interface IDebtSubsidizer {
 
     function claimSubsidy(address vaultAddress, ClaimData calldata claim) external;
     function claimAllSubsidies(address[] calldata vaultAddresses, ClaimData[] calldata claims) external;
-    function updateMerkleRoot(address vaultAddress, bytes32 merkleRoot) external;
+    function updateMerkleRoot(address vaultAddress, bytes32 merkleRoot, uint256 totalSubsidiesForEpoch) external;
     function getMerkleRoot(address vaultAddress) external view returns (bytes32);
 
     function paused() external view returns (bool);
 
-    function initializeSubsidyPool(uint256 poolAmount) external;
-    function updateSubsidyPool(uint256 newPoolAmount) external;
-    function addEligibleUser(address user) external;
-    function removeEligibleUser(address user) external;
-    function getTotalSubsidyPool() external view returns (uint256);
-    function getTotalSubsidiesRemaining() external view returns (uint256);
-    function getTotalEligibleUsers() external view returns (uint256);
-    function isUserEligible(address user) external view returns (bool);
+    function getTotalSubsidies(address vaultAddress) external view returns (uint256);
+    function getTotalSubsidiesClaimed(address vaultAddress) external view returns (uint256);
+    function getRemainingSubsidies(address vaultAddress) external view returns (uint256);
     function getTotalClaimedForVault(address vaultAddress) external view returns (uint256);
     function getUserClaimedTotal(address vaultAddress, address user) external view returns (uint256);
     function isVaultRemoved(address vaultAddress) external view returns (bool);

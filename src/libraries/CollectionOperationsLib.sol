@@ -59,8 +59,10 @@ library CollectionOperationsLib {
         function(uint256) external view returns (uint256) previewDeposit,
         function(uint256) external view returns (uint256) previewMint
     ) external view returns (uint256 assets, uint256 shares) {
-        if (operationType == DepositOperationType.DEPOSIT_FOR_COLLECTION || 
-            operationType == DepositOperationType.TRANSFER_FOR_COLLECTION) {
+        if (
+            operationType == DepositOperationType.DEPOSIT_FOR_COLLECTION
+                || operationType == DepositOperationType.TRANSFER_FOR_COLLECTION
+        ) {
             assets = assetsOrShares;
             shares = previewDeposit(assets);
         } else {
@@ -111,7 +113,7 @@ library CollectionOperationsLib {
         if (isFullRedeem) {
             uint256 remainingDustInLM = lendingManager.totalAssets();
             uint256 reserve = totalYieldReserved;
-            
+
             if (remainingDustInLM > reserve) {
                 uint256 redeemable = remainingDustInLM - reserve;
                 if (redeemable > 0) {
@@ -132,13 +134,9 @@ library CollectionOperationsLib {
      * @param owner The owner address for event
      * @param shares The shares amount for event
      */
-    function performAssetTransfer(
-        IERC20 asset,
-        address receiver,
-        uint256 amount,
-        address owner,
-        uint256 shares
-    ) external {
+    function performAssetTransfer(IERC20 asset, address receiver, uint256 amount, address owner, uint256 shares)
+        external
+    {
         uint256 vaultBalance = asset.balanceOf(address(this));
         if (vaultBalance < amount) {
             revert Vault_InsufficientBalancePostLMWithdraw();
@@ -171,14 +169,14 @@ library CollectionOperationsLib {
             deduction = currentCollectionTotalAssets;
             vaultData.totalAssetsDeposited = 0;
         }
-        
+
         if (vaultData.totalSharesMinted < shares || vaultData.totalCTokensMinted < shares) {
             revert ShareBalanceUnderflow();
         }
-        
+
         vaultData.totalSharesMinted -= shares;
         vaultData.totalCTokensMinted -= shares;
-        
+
         return totalAssetsDepositedAllCollections - deduction;
     }
 
@@ -197,11 +195,11 @@ library CollectionOperationsLib {
         if (vaultData.totalSharesMinted < amount || vaultData.totalCTokensMinted < amount) {
             revert ShareBalanceUnderflow();
         }
-        
+
         vaultData.totalAssetsDeposited -= amount;
         vaultData.totalSharesMinted -= amount;
         vaultData.totalCTokensMinted -= amount;
-        
+
         return totalAssetsDepositedAllCollections - amount;
     }
 }

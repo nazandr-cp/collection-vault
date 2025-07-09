@@ -47,10 +47,8 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
     mapping(address => uint256) internal _userTotalSecondsClaimed;
     ICollectionRegistry public collectionRegistry;
 
-    uint256 public totalSubsidyPool;
-    uint256 public totalSubsidiesRemaining;
-    uint256 public totalEligibleUsers;
-    mapping(address => bool) public eligibleUsers;
+    mapping(address => uint256) public totalSubsidies; // vault => total allocated subsidies
+    mapping(address => uint256) public totalSubsidiesClaimed; // vault => total claimed subsidies
 
     mapping(address => bool) internal _vaultRemoved;
     mapping(address => mapping(address => bool)) internal _collectionRemoved;
@@ -226,33 +224,21 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
 
         if (amountToSubsidize > 0) {
             _vaultHasDeposits[vaultAddress] = true;
-            
-            uint256 totalAllocatedYield = ICollectionsVault(vaultAddress).totalYieldAllocatedCumulative();
-            uint256 totalClaimedForVault = _totalClaimedByVault[vaultAddress];
-            
-            if (totalClaimedForVault > totalAllocatedYield) {
+
+            // Check if there are sufficient allocated subsidies for this vault
+            if (totalSubsidiesClaimed[vaultAddress] + amountToSubsidize > totalSubsidies[vaultAddress]) {
                 revert IDebtSubsidizer.InsufficientYield();
             }
 
-            if (totalSubsidiesRemaining < amountToSubsidize) {
-                revert IDebtSubsidizer.InsufficientYield();
-            }
-
+            // Update claimed amounts
+            totalSubsidiesClaimed[vaultAddress] += amountToSubsidize;
             _userTotalSecondsClaimed[recipient] += amountToSubsidize;
-
-            totalSubsidiesRemaining -= amountToSubsidize;
-
-            if (!eligibleUsers[recipient]) {
-                eligibleUsers[recipient] = true;
-                totalEligibleUsers++;
-                emit EligibleUserCountUpdated(totalEligibleUsers, true, recipient, block.timestamp);
-            }
 
             emit SubsidyClaimed(vaultAddress, recipient, amountToSubsidize);
 
             bytes32 circuitId = keccak256(abi.encodePacked("vault.repayBorrowBehalf", vaultAddress));
             _checkCircuitBreaker(circuitId);
-            
+
             try ICollectionsVault(vaultAddress).repayBorrowBehalf(amountToSubsidize, recipient) {
                 _circuitBreakerFailures[circuitId] = 0;
             } catch {
@@ -292,7 +278,7 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
         }
     }
 
-    function updateMerkleRoot(address vaultAddress, bytes32 merkleRoot_)
+    function updateMerkleRoot(address vaultAddress, bytes32 merkleRoot_, uint256 totalSubsidiesForEpoch)
         external
         override(IDebtSubsidizer)
         onlyRole(Roles.ADMIN_ROLE)
@@ -304,7 +290,8 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
             revert IDebtSubsidizer.VaultNotRegistered(vaultAddress);
         }
         _merkleRoots[vaultAddress] = merkleRoot_;
-        emit MerkleRootUpdated(vaultAddress, merkleRoot_, msg.sender);
+        totalSubsidies[vaultAddress] += totalSubsidiesForEpoch;
+        emit MerkleRootUpdated(vaultAddress, merkleRoot_, msg.sender, totalSubsidiesForEpoch);
     }
 
     function getMerkleRoot(address vaultAddress) external view returns (bytes32) {
@@ -319,13 +306,13 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
         return _claimedTotals[vaultAddress][user];
     }
 
-    function validateVaultClaimsIntegrity(address vaultAddress) 
-        external 
-        view 
-        returns (bool isValid, uint256 totalClaimed, uint256 totalAllocated) 
+    function validateVaultClaimsIntegrity(address vaultAddress)
+        external
+        view
+        returns (bool isValid, uint256 totalClaimed, uint256 totalAllocated)
     {
         totalClaimed = _totalClaimedByVault[vaultAddress];
-        
+
         try ICollectionsVault(vaultAddress).totalYieldAllocatedCumulative() returns (uint256 allocated) {
             totalAllocated = allocated;
             isValid = totalClaimed <= totalAllocated;
@@ -337,13 +324,14 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
 
     function emergencyValidateAndPause(address vaultAddress) external onlyRole(Roles.ADMIN_ROLE) {
         (bool isValid, uint256 totalClaimed, uint256 totalAllocated) = this.validateVaultClaimsIntegrity(vaultAddress);
-        
+
         if (!isValid) {
             _pause();
             emit MerkleRootUpdated(
-                vaultAddress, 
+                vaultAddress,
                 bytes32(0), // Clear merkle root to prevent further claims
-                msg.sender
+                msg.sender,
+                0 // No subsidies for emergency clear
             );
         }
     }
@@ -362,57 +350,16 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
         return super.paused();
     }
 
-    function initializeSubsidyPool(uint256 poolAmount) external onlyRole(Roles.ADMIN_ROLE) {
-        require(poolAmount > 0, "Pool amount must be greater than zero");
-        totalSubsidyPool = poolAmount;
-        totalSubsidiesRemaining = poolAmount;
-        emit SubsidyPoolInitialized(poolAmount, block.timestamp);
+    function getTotalSubsidies(address vaultAddress) external view returns (uint256) {
+        return totalSubsidies[vaultAddress];
     }
 
-    function updateSubsidyPool(uint256 newPoolAmount) external onlyRole(Roles.ADMIN_ROLE) {
-        require(newPoolAmount >= 0, "Pool amount cannot be negative");
-        uint256 oldAmount = totalSubsidyPool;
-        totalSubsidyPool = newPoolAmount;
-        totalSubsidiesRemaining = newPoolAmount;
-        emit SubsidyPoolUpdated(oldAmount, newPoolAmount, block.timestamp);
+    function getTotalSubsidiesClaimed(address vaultAddress) external view returns (uint256) {
+        return totalSubsidiesClaimed[vaultAddress];
     }
 
-    function addEligibleUser(address user) external onlyRole(Roles.ADMIN_ROLE) {
-        if (user == address(0)) {
-            revert IDebtSubsidizer.AddressZero();
-        }
-        if (!eligibleUsers[user]) {
-            eligibleUsers[user] = true;
-            totalEligibleUsers++;
-            emit EligibleUserCountUpdated(totalEligibleUsers, true, user, block.timestamp);
-        }
-    }
-
-    function removeEligibleUser(address user) external onlyRole(Roles.ADMIN_ROLE) {
-        if (user == address(0)) {
-            revert IDebtSubsidizer.AddressZero();
-        }
-        if (eligibleUsers[user]) {
-            eligibleUsers[user] = false;
-            totalEligibleUsers--;
-            emit EligibleUserCountUpdated(totalEligibleUsers, false, user, block.timestamp);
-        }
-    }
-
-    function getTotalSubsidyPool() external view returns (uint256) {
-        return totalSubsidyPool;
-    }
-
-    function getTotalSubsidiesRemaining() external view returns (uint256) {
-        return totalSubsidiesRemaining;
-    }
-
-    function getTotalEligibleUsers() external view returns (uint256) {
-        return totalEligibleUsers;
-    }
-
-    function isUserEligible(address user) external view returns (bool) {
-        return eligibleUsers[user];
+    function getRemainingSubsidies(address vaultAddress) external view returns (uint256) {
+        return totalSubsidies[vaultAddress] - totalSubsidiesClaimed[vaultAddress];
     }
 
     function isVaultRemoved(address vaultAddress) external view returns (bool) {
@@ -442,7 +389,7 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
     function _checkCircuitBreaker(bytes32 circuitId) internal view {
         uint256 failures = _circuitBreakerFailures[circuitId];
         uint256 lastFailure = _circuitBreakerLastFailure[circuitId];
-        
+
         if (failures >= 5 && block.timestamp < lastFailure + 300) {
             revert IDebtSubsidizer.InsufficientYield();
         }
@@ -451,7 +398,7 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
     function _recordVaultFailure(bytes32 circuitId) internal {
         _circuitBreakerFailures[circuitId]++;
         _circuitBreakerLastFailure[circuitId] = block.timestamp;
-        
+
         if (block.timestamp >= _circuitBreakerLastFailure[circuitId] + 300) {
             _circuitBreakerFailures[circuitId] = 1;
         }

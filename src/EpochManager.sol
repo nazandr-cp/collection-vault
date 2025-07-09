@@ -256,9 +256,14 @@ contract EpochManager is IEpochManager, AccessControlBase, CrossContractSecurity
      * @dev Streamlined version that just starts the epoch and returns the ID.
      * @return epochId The ID of the newly started epoch.
      */
-    function startEpoch() external nonReentrant onlyRoleWhenNotPaused(Roles.OPERATOR_ROLE) 
+    function startEpoch()
+        external
+        nonReentrant
+        onlyRoleWhenNotPaused(Roles.OPERATOR_ROLE)
         rateLimited(address(this), this.startEpoch.selector)
-        circuitBreakerProtected(keccak256("epoch.start")) returns (uint256) {
+        circuitBreakerProtected(keccak256("epoch.start"))
+        returns (uint256)
+    {
         if (currentEpochId > 0) {
             Epoch storage currentEpoch = epochs[currentEpochId];
             if (currentEpoch.status != EpochStatus.Completed) {
@@ -295,9 +300,13 @@ contract EpochManager is IEpochManager, AccessControlBase, CrossContractSecurity
         address vaultAddress,
         bytes32 merkleRoot,
         uint256 subsidiesDistributed
-    ) external nonReentrant onlyRoleWhenNotPaused(Roles.OPERATOR_ROLE) 
+    )
+        external
+        nonReentrant
+        onlyRoleWhenNotPaused(Roles.OPERATOR_ROLE)
         rateLimited(address(this), this.endEpochWithSubsidies.selector)
-        contractValidated(vaultAddress) {
+        contractValidated(vaultAddress)
+    {
         if (epochId == 0 || epochId > currentEpochId) {
             revert EpochManager__InvalidEpochId(epochId);
         }
@@ -313,7 +322,7 @@ contract EpochManager is IEpochManager, AccessControlBase, CrossContractSecurity
 
         // Update Merkle root in DebtSubsidizer for subsidy claims
         if (address(debtSubsidizer) != address(0) && merkleRoot != bytes32(0)) {
-            try debtSubsidizer.updateMerkleRoot(vaultAddress, merkleRoot) {
+            try debtSubsidizer.updateMerkleRoot(vaultAddress, merkleRoot, subsidiesDistributed) {
                 // Success - continue
             } catch {
                 _recordCircuitFailure(keccak256("debtSubsidizer.updateMerkleRoot"));
@@ -322,6 +331,43 @@ contract EpochManager is IEpochManager, AccessControlBase, CrossContractSecurity
         }
 
         emit EpochFinalized(epochId, epoch.totalYieldAvailable, epoch.totalSubsidiesDistributed);
+    }
+
+    /**
+     * @dev Force end an epoch with zero yield and no subsidies.
+     * @param epochId The epoch ID to end.
+     * @param vaultAddress The vault address (for validation).
+     */
+    function forceEndEpochWithZeroYield(uint256 epochId, address vaultAddress)
+        external
+        nonReentrant
+        onlyRoleWhenNotPaused(Roles.ADMIN_ROLE)
+        contractValidated(vaultAddress)
+    {
+        if (epochId == 0 || epochId > currentEpochId) {
+            revert EpochManager__InvalidEpochId(epochId);
+        }
+        Epoch storage epoch = epochs[epochId];
+
+        if (epoch.status != EpochStatus.Active) {
+            revert EpochManager__InvalidEpochStatus(epochId, epoch.status, EpochStatus.Active);
+        }
+
+        // Force end epoch with zero subsidies
+        epoch.totalSubsidiesDistributed = 0;
+        epoch.status = EpochStatus.Completed;
+
+        // Update Merkle root in DebtSubsidizer with zero subsidies (empty merkle root)
+        if (address(debtSubsidizer) != address(0)) {
+            try debtSubsidizer.updateMerkleRoot(vaultAddress, bytes32(0), 0) {
+                // Success - continue
+            } catch {
+                _recordCircuitFailure(keccak256("debtSubsidizer.updateMerkleRoot"));
+                revert("EpochManager: Failed to update merkle root in DebtSubsidizer");
+            }
+        }
+
+        emit EpochFinalized(epochId, epoch.totalYieldAvailable, 0);
     }
 
     function grantVaultRole(address vault) external onlyRoleWhenNotPaused(Roles.ADMIN_ROLE) {

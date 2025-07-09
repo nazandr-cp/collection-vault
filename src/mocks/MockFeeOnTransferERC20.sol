@@ -20,7 +20,7 @@ contract MockFeeOnTransferERC20 is ERC20 {
     ) ERC20(name, symbol) {
         require(_feeCollector != address(0), "Fee collector cannot be zero address");
         require(_feeBpsSend <= 10000 && _feeBpsReceive <= 10000, "Fee too high");
-        
+
         _mockDecimals = decimals_; // Store decimals
         feeBpsSend = _feeBpsSend;
         feeBpsReceive = _feeBpsReceive;

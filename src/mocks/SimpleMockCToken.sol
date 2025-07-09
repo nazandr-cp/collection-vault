@@ -67,7 +67,7 @@ contract SimpleMockCToken is CTokenInterface, CErc20Interface {
     ) {
         require(underlyingAddress_ != address(0), "Underlying cannot be zero address");
         require(admin_ != address(0), "Admin cannot be zero address");
-        
+
         // Initialize CTokenStorage public state variables directly
         name = name_;
         symbol = symbol_;
