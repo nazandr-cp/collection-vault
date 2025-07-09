@@ -281,10 +281,7 @@ abstract contract RolesBaseUpgradeable is
 
         // Prevent granting owner role without proper authorization
         if (role == Roles.OWNER_ROLE) {
-            require(
-                hasRole(DEFAULT_ADMIN_ROLE, msg.sender),
-                "RolesBase: Only DEFAULT_ADMIN can grant OWNER_ROLE"
-            );
+            require(hasRole(DEFAULT_ADMIN_ROLE, msg.sender), "RolesBase: Only DEFAULT_ADMIN can grant OWNER_ROLE");
         }
 
         // Prevent last admin removal

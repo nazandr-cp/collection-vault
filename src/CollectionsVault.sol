@@ -35,6 +35,9 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
     bytes32 public constant OPERATOR_ROLE = Roles.OPERATOR_ROLE;
     bytes32 public constant COLLECTION_MANAGER_ROLE = Roles.COLLECTION_MANAGER_ROLE;
 
+    // Custom errors
+    error RedeemRoundsToZero(uint256 shares);
+
     function DEBT_SUBSIDIZER_ROLE() external pure returns (bytes32) {
         return OPERATOR_ROLE;
     }
@@ -52,7 +55,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
 
     address[] private allCollectionAddresses;
     mapping(address => bool) private isCollectionRegistered;
-
 
     mapping(uint256 => uint256) public epochYieldAllocations;
     mapping(uint256 => mapping(address => bool)) public epochCollectionYieldApplied;
@@ -159,7 +161,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
         if (_debtSubsidizerAddress == address(0)) revert AddressZero();
         _grantRole(OPERATOR_ROLE, _debtSubsidizerAddress);
     }
-
 
     function isCollectionOperator(address collectionAddress, address operator) public view returns (bool) {
         return hasRole(Roles.COLLECTION_MANAGER_ROLE, operator) || hasRole(Roles.GUARDIAN_ROLE, operator);
@@ -325,7 +326,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
 
         assets = previewRedeem(shares);
         if (assets == 0) {
-            require(shares == 0, "ERC4626: redeem rounds down to zero assets");
+            if (shares != 0) revert RedeemRoundsToZero(shares);
         }
 
         _hookWithdraw(assets);

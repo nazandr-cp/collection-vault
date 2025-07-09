@@ -21,6 +21,11 @@ contract LendingManager is ILendingManager, RolesBase, CrossContractSecurity {
     bytes32 public constant OPERATOR_ROLE = Roles.OPERATOR_ROLE;
     bytes32 public constant ADMIN_ROLE = Roles.ADMIN_ROLE;
 
+    // Custom errors
+    error AccrueInterestFailed(uint256 errorCode);
+    error CollateralFactorExceedsLimit(uint256 factor, uint256 maxFactor);
+    error LiquidationIncentiveExceedsLimit(uint256 incentive, uint256 maxIncentive);
+
     uint256 public constant R0_BASIS_POINTS = 5;
     uint256 public constant BASIS_POINTS_DENOMINATOR = 10_000;
     uint256 private constant PRECISION = 1e18;
@@ -166,7 +171,7 @@ contract LendingManager is ILendingManager, RolesBase, CrossContractSecurity {
         if (amount == 0) return true;
 
         uint256 accrualResult = CTokenInterface(address(_cToken)).accrueInterest();
-        require(accrualResult == 0, "Accrue interest failed");
+        if (accrualResult != 0) revert AccrueInterestFailed(accrualResult);
 
         uint256 availableBalance = totalAssets();
         if (availableBalance < amount) {
@@ -404,13 +409,17 @@ contract LendingManager is ILendingManager, RolesBase, CrossContractSecurity {
     }
 
     function setGlobalCollateralFactor(uint256 _globalCollateralFactor) external onlyRoleWhenNotPaused(ADMIN_ROLE) {
-        require(_globalCollateralFactor <= BASIS_POINTS_DENOMINATOR, "Collateral factor cannot exceed 100%");
+        if (_globalCollateralFactor > BASIS_POINTS_DENOMINATOR) {
+            revert CollateralFactorExceedsLimit(_globalCollateralFactor, BASIS_POINTS_DENOMINATOR);
+        }
         globalCollateralFactor = _globalCollateralFactor;
         emit GlobalCollateralFactorUpdated(_globalCollateralFactor, block.timestamp);
     }
 
     function setLiquidationIncentive(uint256 _liquidationIncentive) external onlyRoleWhenNotPaused(ADMIN_ROLE) {
-        require(_liquidationIncentive <= BASIS_POINTS_DENOMINATOR, "Liquidation incentive cannot exceed 100%");
+        if (_liquidationIncentive > BASIS_POINTS_DENOMINATOR) {
+            revert LiquidationIncentiveExceedsLimit(_liquidationIncentive, BASIS_POINTS_DENOMINATOR);
+        }
         liquidationIncentive = _liquidationIncentive;
         emit LiquidationIncentiveUpdated(_liquidationIncentive, block.timestamp);
     }

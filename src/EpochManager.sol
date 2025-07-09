@@ -16,6 +16,9 @@ import {IDebtSubsidizer} from "./interfaces/IDebtSubsidizer.sol";
 contract EpochManager is IEpochManager, RolesBase, CrossContractSecurity {
     bytes32 public constant OPERATOR_ROLE = Roles.OPERATOR_ROLE;
 
+    // Custom errors
+    error MerkleRootUpdateFailed(string reason);
+
     uint256 public epochDuration; // Duration of each epoch in seconds (e.g., 7 days)
     uint256 public currentEpochId;
     mapping(uint256 => Epoch) public epochs;
@@ -39,7 +42,7 @@ contract EpochManager is IEpochManager, RolesBase, CrossContractSecurity {
             revert EpochManager__InvalidEpochDuration();
         }
         if (_initialAdmin == address(0)) {
-            revert("EpochManager: Initial admin cannot be zero address");
+            revert RolesBase__InvalidAddress();
         }
         epochDuration = _initialEpochDuration;
         if (_initialAutomatedSystem != address(0)) {
@@ -85,7 +88,7 @@ contract EpochManager is IEpochManager, RolesBase, CrossContractSecurity {
      */
     function setAutomatedSystem(address newAutomatedSystem) external onlyRole(Roles.ADMIN_ROLE) {
         if (newAutomatedSystem == address(0)) {
-            revert("EpochManager: Automated system address cannot be zero.");
+            revert RolesBase__InvalidAddress();
         }
         // Revoke old automation system role if any
         uint256 memberCount = getRoleMemberCount(Roles.OPERATOR_ROLE);
@@ -106,7 +109,7 @@ contract EpochManager is IEpochManager, RolesBase, CrossContractSecurity {
      */
     function setDebtSubsidizer(address newDebtSubsidizer) external onlyRole(Roles.ADMIN_ROLE) {
         if (newDebtSubsidizer == address(0)) {
-            revert("EpochManager: DebtSubsidizer address cannot be zero");
+            revert RolesBase__InvalidAddress();
         }
         debtSubsidizer = IDebtSubsidizer(newDebtSubsidizer);
         emit DebtSubsidizerUpdated(newDebtSubsidizer);
@@ -326,7 +329,7 @@ contract EpochManager is IEpochManager, RolesBase, CrossContractSecurity {
                 // Success - continue
             } catch {
                 _recordCircuitFailure(keccak256("debtSubsidizer.updateMerkleRoot"));
-                revert("EpochManager: Failed to update merkle root in DebtSubsidizer");
+                revert MerkleRootUpdateFailed("Failed to update merkle root in DebtSubsidizer");
             }
         }
 
@@ -363,7 +366,7 @@ contract EpochManager is IEpochManager, RolesBase, CrossContractSecurity {
                 // Success - continue
             } catch {
                 _recordCircuitFailure(keccak256("debtSubsidizer.updateMerkleRoot"));
-                revert("EpochManager: Failed to update merkle root in DebtSubsidizer");
+                revert MerkleRootUpdateFailed("Failed to update merkle root in DebtSubsidizer");
             }
         }
 
@@ -372,7 +375,7 @@ contract EpochManager is IEpochManager, RolesBase, CrossContractSecurity {
 
     function grantVaultRole(address vault) external onlyRoleWhenNotPaused(Roles.ADMIN_ROLE) {
         if (vault == address(0)) {
-            revert("EpochManager: Vault address cannot be zero");
+            revert RolesBase__InvalidAddress();
         }
         _grantRole(OPERATOR_ROLE, vault);
         emit EpochManagerRoleGranted(OPERATOR_ROLE, vault, msg.sender, block.timestamp);
@@ -380,7 +383,7 @@ contract EpochManager is IEpochManager, RolesBase, CrossContractSecurity {
 
     function revokeVaultRole(address vault) external onlyRoleWhenNotPaused(Roles.ADMIN_ROLE) {
         if (vault == address(0)) {
-            revert("EpochManager: Vault address cannot be zero");
+            revert RolesBase__InvalidAddress();
         }
         _revokeRole(OPERATOR_ROLE, vault);
         emit EpochManagerRoleRevoked(OPERATOR_ROLE, vault, msg.sender, block.timestamp);

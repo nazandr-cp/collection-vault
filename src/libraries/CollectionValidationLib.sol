@@ -5,6 +5,7 @@ import {ICollectionRegistry} from "../interfaces/ICollectionRegistry.sol";
 import {ICollectionsVault} from "../interfaces/ICollectionsVault.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {Roles} from "../Roles.sol";
+import {BatchOperationsLib} from "./BatchOperationsLib.sol";
 
 /**
  * @title CollectionValidationLib
@@ -18,6 +19,8 @@ library CollectionValidationLib {
     error CollectionInsufficientBalance(address collectionAddress, uint256 requested, uint256 available);
     error UnauthorizedCollectionAccess(address collectionAddress, address operator);
     error AddressZero();
+    error BatchSizeExceedsLimit(uint256 batchSize, uint256 maxBatchSize);
+    error PerformanceScoreExceedsLimit(uint256 score, uint256 maxScore);
 
     /**
      * @dev Ensures a collection is known and registered in the vault
@@ -53,13 +56,14 @@ library CollectionValidationLib {
      * @param operator The operator address to check
      * @param accessControl The access control contract instance
      */
-    function validateCollectionOperator(
-        address collectionAddress,
-        address operator,
-        IAccessControl accessControl
-    ) external view {
-        if (!accessControl.hasRole(Roles.COLLECTION_MANAGER_ROLE, operator) && 
-            !accessControl.hasRole(Roles.GUARDIAN_ROLE, operator)) {
+    function validateCollectionOperator(address collectionAddress, address operator, IAccessControl accessControl)
+        external
+        view
+    {
+        if (
+            !accessControl.hasRole(Roles.COLLECTION_MANAGER_ROLE, operator)
+                && !accessControl.hasRole(Roles.GUARDIAN_ROLE, operator)
+        ) {
             revert UnauthorizedCollectionAccess(collectionAddress, operator);
         }
     }
@@ -149,8 +153,8 @@ library CollectionValidationLib {
      * @param maxBatchSize Maximum allowed batch size
      */
     function validateBatchOperation(uint256 arraysLength1, uint256 arraysLength2, uint256 maxBatchSize) external pure {
-        require(arraysLength1 == arraysLength2, "Array lengths mismatch");
-        require(arraysLength1 <= maxBatchSize, "Batch size exceeds maximum limit");
+        if (arraysLength1 != arraysLength2) revert BatchOperationsLib.ArrayLengthMismatch();
+        if (arraysLength1 > maxBatchSize) revert BatchSizeExceedsLimit(arraysLength1, maxBatchSize);
     }
 
     /**
@@ -158,7 +162,7 @@ library CollectionValidationLib {
      * @param score The performance score to validate
      */
     function validatePerformanceScore(uint256 score) external pure {
-        require(score <= 10000, "Performance score cannot exceed 10000 (100%)");
+        if (score > 10000) revert PerformanceScoreExceedsLimit(score, 10000);
     }
 
     /**

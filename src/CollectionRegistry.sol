@@ -10,6 +10,13 @@ import {Roles} from "./Roles.sol";
 contract CollectionRegistry is ICollectionRegistry, RolesBase, CrossContractSecurity {
     bytes32 public constant COLLECTION_MANAGER_ROLE = Roles.COLLECTION_MANAGER_ROLE;
 
+    // Custom errors
+    error CollectionNotRegistered(address collection);
+    error VaultAlreadyAdded(address collection, address vault);
+    error VaultNotFound(address collection, address vault);
+    error YieldShareExceedsLimit(uint256 share, uint256 maxShare);
+    error ZeroAddress();
+
     mapping(address => ICollectionRegistry.Collection) private _collections;
     address[] private _allCollections;
     mapping(address => bool) private _isRegistered;
@@ -22,7 +29,7 @@ contract CollectionRegistry is ICollectionRegistry, RolesBase, CrossContractSecu
     }
 
     function removeCollection(address collection) external onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE) {
-        require(_isRegistered[collection], "CollectionRegistry: Not registered");
+        if (!_isRegistered[collection]) revert CollectionNotRegistered(collection);
         if (!_isRemoved[collection]) {
             _isRemoved[collection] = true;
             emit CollectionRemoved(collection);
@@ -30,7 +37,7 @@ contract CollectionRegistry is ICollectionRegistry, RolesBase, CrossContractSecu
     }
 
     function reactivateCollection(address collection) external onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE) {
-        require(_isRegistered[collection], "CollectionRegistry: Not registered");
+        if (!_isRegistered[collection]) revert CollectionNotRegistered(collection);
         if (_isRemoved[collection]) {
             _isRemoved[collection] = false;
             emit CollectionReactivated(collection);
@@ -44,9 +51,9 @@ contract CollectionRegistry is ICollectionRegistry, RolesBase, CrossContractSecu
         rateLimited(address(this), this.registerCollection.selector)
     {
         address collectionAddress = collectionData.collectionAddress;
-        require(collectionAddress != address(0), "CollectionRegistry: Zero address");
+        if (collectionAddress == address(0)) revert ZeroAddress();
         if (collectionData.yieldSharePercentage > 10000) {
-            revert("CollectionRegistry: Yield share percentage cannot exceed 10000 (100%)");
+            revert YieldShareExceedsLimit(collectionData.yieldSharePercentage, 10000);
         }
         if (!_isRegistered[collectionAddress]) {
             _isRegistered[collectionAddress] = true;
@@ -70,9 +77,9 @@ contract CollectionRegistry is ICollectionRegistry, RolesBase, CrossContractSecu
         override
         onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE)
     {
-        require(_isRegistered[collection], "CollectionRegistry: Not registered");
+        if (!_isRegistered[collection]) revert CollectionNotRegistered(collection);
         if (share > 10000) {
-            revert("CollectionRegistry: Yield share percentage cannot exceed 10000 (100%)");
+            revert YieldShareExceedsLimit(share, 10000);
         }
         uint16 oldShare = _collections[collection].yieldSharePercentage;
         _collections[collection].yieldSharePercentage = share;
@@ -84,7 +91,7 @@ contract CollectionRegistry is ICollectionRegistry, RolesBase, CrossContractSecu
         override
         onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE)
     {
-        require(_isRegistered[collection], "CollectionRegistry: Not registered");
+        if (!_isRegistered[collection]) revert CollectionNotRegistered(collection);
         _collections[collection].weightFunction = weightFunction;
         emit WeightFunctionUpdated(collection, weightFunction.fnType, weightFunction.p1, weightFunction.p2);
     }
@@ -96,9 +103,9 @@ contract CollectionRegistry is ICollectionRegistry, RolesBase, CrossContractSecu
         rateLimited(address(this), this.addVaultToCollection.selector)
         contractValidated(vault)
     {
-        require(_isRegistered[collection], "CollectionRegistry: Not registered");
-        require(vault != address(0), "CollectionRegistry: Zero address");
-        require(!_collectionHasVault[collection][vault], "CollectionRegistry: Vault already added");
+        if (!_isRegistered[collection]) revert CollectionNotRegistered(collection);
+        if (vault == address(0)) revert ZeroAddress();
+        if (_collectionHasVault[collection][vault]) revert VaultAlreadyAdded(collection, vault);
 
         _collections[collection].vaults.push(vault);
         _collectionHasVault[collection][vault] = true;
@@ -111,8 +118,8 @@ contract CollectionRegistry is ICollectionRegistry, RolesBase, CrossContractSecu
         override
         onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE)
     {
-        require(_isRegistered[collection], "CollectionRegistry: Not registered");
-        require(_collectionHasVault[collection][vault], "CollectionRegistry: Vault not found");
+        if (!_isRegistered[collection]) revert CollectionNotRegistered(collection);
+        if (!_collectionHasVault[collection][vault]) revert VaultNotFound(collection, vault);
 
         uint256 vaultIndex = _vaultIndexInCollection[vault];
         address lastVault = _collections[collection].vaults[_collections[collection].vaults.length - 1];
@@ -129,7 +136,7 @@ contract CollectionRegistry is ICollectionRegistry, RolesBase, CrossContractSecu
     // --- View Functions ---
 
     function getCollection(address collection) external view override returns (ICollectionRegistry.Collection memory) {
-        require(_isRegistered[collection] && !_isRemoved[collection], "CollectionRegistry: Not registered");
+        if (!_isRegistered[collection] || _isRemoved[collection]) revert CollectionNotRegistered(collection);
         return _collections[collection];
     }
 
