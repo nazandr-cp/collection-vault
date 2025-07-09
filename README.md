@@ -10,7 +10,7 @@ Collection Vault is a set of Solidity contracts that coordinate NFT collection d
   - `EpochManager.sol` – Utility contract for rolling epochs used to allocate yield over time.
   - `DebtSubsidizer.sol` – Upgradeable contract used for distributing protocol incentives.
     - Includes `claimAllSubsidies` for batching subsidy claims across multiple vaults.
-  - `AccessControlBase.sol` – Base contract providing standardized access control and security features.
+  - `RolesBase.sol` – Unified base contract providing standardized access control and security features with onlyRoleOrGuardian pattern.
   - `CrossContractSecurity.sol` – Advanced security utilities including circuit breakers and rate limiting.
   - `Roles.sol` – Centralized role definitions for the entire system.
   - `mocks/` – Simplified token and cToken mocks used for development.

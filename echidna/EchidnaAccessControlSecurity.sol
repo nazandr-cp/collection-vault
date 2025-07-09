@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "../src/AccessControlBase.sol";
+import "../src/RolesBase.sol";
 import "../src/CrossContractSecurity.sol";
 import "../src/CollectionsVault.sol";
 import "../src/LendingManager.sol";
