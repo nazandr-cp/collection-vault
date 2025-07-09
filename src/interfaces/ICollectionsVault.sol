@@ -148,8 +148,6 @@ interface ICollectionsVault is IERC4626 {
         external
         returns (uint256 shares);
 
-    function grantCollectionAccess(address collectionAddress, address operator) external;
-    function revokeCollectionAccess(address collectionAddress, address operator) external;
     function isCollectionOperator(address collectionAddress, address operator) external view returns (bool);
 
     function repayBorrowBehalf(uint256 amount, address borrower) external;

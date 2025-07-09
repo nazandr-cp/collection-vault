@@ -3,6 +3,8 @@ pragma solidity ^0.8.20;
 
 import {ICollectionRegistry} from "../interfaces/ICollectionRegistry.sol";
 import {ICollectionsVault} from "../interfaces/ICollectionsVault.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {Roles} from "../Roles.sol";
 
 /**
  * @title CollectionValidationLib
@@ -46,17 +48,18 @@ library CollectionValidationLib {
     }
 
     /**
-     * @dev Validates collection operator access
+     * @dev Validates collection operator access using role-based access control
      * @param collectionAddress The collection address
      * @param operator The operator address to check
-     * @param collectionOperators Mapping of collection operators
+     * @param accessControl The access control contract instance
      */
     function validateCollectionOperator(
         address collectionAddress,
         address operator,
-        mapping(address => mapping(address => bool)) storage collectionOperators
+        IAccessControl accessControl
     ) external view {
-        if (!collectionOperators[collectionAddress][operator]) {
+        if (!accessControl.hasRole(Roles.COLLECTION_MANAGER_ROLE, operator) && 
+            !accessControl.hasRole(Roles.GUARDIAN_ROLE, operator)) {
             revert UnauthorizedCollectionAccess(collectionAddress, operator);
         }
     }
