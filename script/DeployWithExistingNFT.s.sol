@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.24;
 
 import "forge-std/Script.sol";
+import {console} from "forge-std/console.sol";
 import {MockERC20} from "../src/mocks/MockERC20.sol";
 import {LendingManager} from "../src/LendingManager.sol";
 import {CollectionsVault} from "../src/CollectionsVault.sol";
@@ -105,7 +106,14 @@ contract DeployWithExistingNFT is Script {
         // 5. Add vault to DebtSubsidizer to enable subgraph CollectionVault template
         debtSubsidizer.addVault(address(vault), address(lendingManager));
 
-        // 6. Make initial deposit to create CollectionParticipation for subgraph
+        // 6. Set DebtSubsidizer on vault (grants OPERATOR_ROLE to DebtSubsidizer)
+        console.log("=== Granting DebtSubsidizer Role ===");
+        console.log("Vault Address:", address(vault));
+        console.log("DebtSubsidizer Address:", address(debtSubsidizer));
+        vault.setDebtSubsidizer(address(debtSubsidizer));
+        console.log("Successfully granted OPERATOR_ROLE to DebtSubsidizer");
+
+        // 7. Make initial deposit to create CollectionParticipation for subgraph
         uint256 initialDepositAmount = 100000 * (10 ** MockERC20(asset).decimals()); // 100000s tokens
 
         // Grant collection operator access to the deployer
@@ -138,6 +146,9 @@ contract DeployWithExistingNFT is Script {
         );
         require(
             collectionRegistry.hasRole(Roles.COLLECTION_MANAGER_ROLE, admin), "Admin missing COLLECTION_MANAGER_ROLE"
+        );
+        require(
+            vault.hasRole(Roles.OPERATOR_ROLE, address(debtSubsidizer)), "DebtSubsidizer missing OPERATOR_ROLE on vault"
         );
         console.log("All cross-contract permissions verified");
 

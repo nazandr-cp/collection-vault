@@ -5,6 +5,10 @@ import "forge-std/Script.sol";
 import {IDebtSubsidizer} from "../src/interfaces/IDebtSubsidizer.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
+interface ICToken {
+    function borrowBalanceCurrent(address account) external returns (uint256);
+}
+
 contract ClaimSubsidy is Script {
     function run() external {
         address vaultAddress = vm.envAddress("VAULT_ADDRESS");
@@ -19,7 +23,7 @@ contract ClaimSubsidy is Script {
         uint256 user3TotalEarned = vm.envUint("USER3_TOTAL_EARNED");
 
         IDebtSubsidizer debtSubsidizer = IDebtSubsidizer(debtSubsidizerAddress);
-        IERC20 cToken = IERC20(cTokenAddress);
+        ICToken cToken = ICToken(cTokenAddress);
 
         console.log("=== Claiming Subsidies ===");
         console.log("Vault Address:", vaultAddress);
@@ -29,7 +33,7 @@ contract ClaimSubsidy is Script {
 
         console.log("\n== USER2 Claiming Subsidy ==");
 
-        uint256 user2BorrowBefore = cToken.balanceOf(user2);
+        uint256 user2BorrowBefore = cToken.borrowBalanceCurrent(user2);
         console.log("USER2 borrow balance before claim:", user2BorrowBefore);
         console.log("USER2 total earned to claim:", user2TotalEarned);
 
@@ -55,7 +59,7 @@ contract ClaimSubsidy is Script {
 
         vm.stopBroadcast();
 
-        uint256 user2BorrowAfter = cToken.balanceOf(user2);
+        uint256 user2BorrowAfter = cToken.borrowBalanceCurrent(user2);
         console.log("USER2 borrow balance after claim:", user2BorrowAfter);
         console.log(
             "USER2 borrow reduction:", user2BorrowBefore > user2BorrowAfter ? user2BorrowBefore - user2BorrowAfter : 0
@@ -63,7 +67,7 @@ contract ClaimSubsidy is Script {
 
         console.log("\n== USER3 Claiming Subsidy ==");
 
-        uint256 user3BorrowBefore = cToken.balanceOf(user3);
+        uint256 user3BorrowBefore = cToken.borrowBalanceCurrent(user3);
         console.log("USER3 borrow balance before claim:", user3BorrowBefore);
         console.log("USER3 total earned to claim:", user3TotalEarned);
 
@@ -85,7 +89,7 @@ contract ClaimSubsidy is Script {
 
         vm.stopBroadcast();
 
-        uint256 user3BorrowAfter = cToken.balanceOf(user3);
+        uint256 user3BorrowAfter = cToken.borrowBalanceCurrent(user3);
         console.log("USER3 borrow balance after claim:", user3BorrowAfter);
         console.log(
             "USER3 borrow reduction:", user3BorrowBefore > user3BorrowAfter ? user3BorrowBefore - user3BorrowAfter : 0
