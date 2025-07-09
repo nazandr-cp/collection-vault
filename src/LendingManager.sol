@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-import {AccessControlBase} from "./AccessControlBase.sol";
+import {RolesBase} from "./RolesBase.sol";
 import {CrossContractSecurity} from "./CrossContractSecurity.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Roles} from "./Roles.sol";
@@ -15,7 +15,7 @@ import {CErc20Interface, CTokenInterface} from "compound-protocol-2.8.1/contract
  * @title LendingManager (Compound V2 Fork Adapter)
  * @notice Manages deposits and withdrawals to a specific Compound V2 fork cToken market.
  */
-contract LendingManager is ILendingManager, AccessControlBase, CrossContractSecurity {
+contract LendingManager is ILendingManager, RolesBase, CrossContractSecurity {
     using SafeERC20 for IERC20;
 
     bytes32 public constant OPERATOR_ROLE = Roles.OPERATOR_ROLE;
@@ -47,7 +47,7 @@ contract LendingManager is ILendingManager, AccessControlBase, CrossContractSecu
     uint256 public liquidationIncentive;
 
     constructor(address initialAdmin, address vaultAddress, address _assetAddress, address _cTokenAddress)
-        AccessControlBase(initialAdmin)
+        RolesBase(initialAdmin)
     {
         if (
             initialAdmin == address(0) || vaultAddress == address(0) || _assetAddress == address(0)

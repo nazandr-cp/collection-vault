@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import {AccessControlBaseUpgradeable} from "./AccessControlBaseUpgradeable.sol";
+import {RolesBaseUpgradeable} from "./RolesBaseUpgradeable.sol";
 import {CrossContractSecurity} from "./CrossContractSecurity.sol";
 import {Roles} from "./Roles.sol";
 
@@ -24,7 +24,7 @@ import {ILendingManager} from "./interfaces/ILendingManager.sol";
 import {IEpochManager} from "./interfaces/IEpochManager.sol";
 import {ICollectionRegistry} from "./interfaces/ICollectionRegistry.sol";
 
-contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgradeable {
+contract DebtSubsidizer is Initializable, IDebtSubsidizer, RolesBaseUpgradeable {
     using SafeERC20 for IERC20;
     using ERC165Checker for address;
 
@@ -73,7 +73,7 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, AccessControlBaseUpgr
         if (registry == address(0)) {
             revert IDebtSubsidizer.AddressZero();
         }
-        __AccessControlBase_init(initialAdmin);
+        __RolesBase_init(initialAdmin);
         collectionRegistry = ICollectionRegistry(registry);
     }
 

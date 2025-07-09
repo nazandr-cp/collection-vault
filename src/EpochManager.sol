@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {AccessControlBase} from "./AccessControlBase.sol";
+import {RolesBase} from "./RolesBase.sol";
 import {CrossContractSecurity} from "./CrossContractSecurity.sol";
 import {Roles} from "./Roles.sol";
 import {IEpochManager} from "./interfaces/IEpochManager.sol";
@@ -13,7 +13,7 @@ import {IDebtSubsidizer} from "./interfaces/IDebtSubsidizer.sol";
  * @notice Manages the lifecycle of epochs for distributing rewards.
  * It handles epoch creation, state transitions, and yield allocation tracking.
  */
-contract EpochManager is IEpochManager, AccessControlBase, CrossContractSecurity {
+contract EpochManager is IEpochManager, RolesBase, CrossContractSecurity {
     bytes32 public constant OPERATOR_ROLE = Roles.OPERATOR_ROLE;
 
     uint256 public epochDuration; // Duration of each epoch in seconds (e.g., 7 days)
@@ -34,7 +34,7 @@ contract EpochManager is IEpochManager, AccessControlBase, CrossContractSecurity
         address _initialAutomatedSystem,
         address _initialAdmin,
         address _debtSubsidizer
-    ) AccessControlBase(_initialAdmin) {
+    ) RolesBase(_initialAdmin) {
         if (_initialEpochDuration == 0) {
             revert EpochManager__InvalidEpochDuration();
         }

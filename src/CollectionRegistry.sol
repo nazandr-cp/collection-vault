@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {AccessControlBase} from "./AccessControlBase.sol";
+import {RolesBase} from "./RolesBase.sol";
 import {CrossContractSecurity} from "./CrossContractSecurity.sol";
 import {ICollectionsVault} from "./interfaces/ICollectionsVault.sol";
 import {ICollectionRegistry} from "./interfaces/ICollectionRegistry.sol";
 import {Roles} from "./Roles.sol";
 
-contract CollectionRegistry is ICollectionRegistry, AccessControlBase, CrossContractSecurity {
+contract CollectionRegistry is ICollectionRegistry, RolesBase, CrossContractSecurity {
     bytes32 public constant COLLECTION_MANAGER_ROLE = Roles.COLLECTION_MANAGER_ROLE;
 
     mapping(address => ICollectionRegistry.Collection) private _collections;
@@ -17,7 +17,7 @@ contract CollectionRegistry is ICollectionRegistry, AccessControlBase, CrossCont
     mapping(address => mapping(address => bool)) private _collectionHasVault;
     mapping(address => uint256) private _vaultIndexInCollection;
 
-    constructor(address admin) AccessControlBase(admin) {
+    constructor(address admin) RolesBase(admin) {
         _grantRole(COLLECTION_MANAGER_ROLE, admin);
     }
 

@@ -5,7 +5,7 @@ import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.so
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
-import {AccessControlBase} from "./AccessControlBase.sol";
+import {RolesBase} from "./RolesBase.sol";
 import {CrossContractSecurity} from "./CrossContractSecurity.sol";
 import {Roles} from "./Roles.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -26,13 +26,14 @@ interface ICToken {
     function underlying() external view returns (address);
 }
 
-contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, CrossContractSecurity {
+contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContractSecurity {
     using SafeERC20 for IERC20;
     using Math for uint256;
     using CollectionOperationsLib for *;
 
     bytes32 public constant ADMIN_ROLE = Roles.ADMIN_ROLE;
     bytes32 public constant OPERATOR_ROLE = Roles.OPERATOR_ROLE;
+    bytes32 public constant COLLECTION_MANAGER_ROLE = Roles.COLLECTION_MANAGER_ROLE;
 
     function DEBT_SUBSIDIZER_ROLE() external pure returns (bytes32) {
         return OPERATOR_ROLE;
@@ -52,7 +53,6 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
     address[] private allCollectionAddresses;
     mapping(address => bool) private isCollectionRegistered;
 
-    mapping(address => mapping(address => bool)) private collectionOperators;
 
     mapping(uint256 => uint256) public epochYieldAllocations;
     mapping(uint256 => mapping(address => bool)) public epochCollectionYieldApplied;
@@ -64,7 +64,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
     mapping(address => uint256) public collectionPerformanceScore;
 
     modifier onlyCollectionOperator(address collection) {
-        CollectionValidationLib.validateCollectionOperator(collection, _msgSender(), collectionOperators);
+        _requireRoleOrGuardian(Roles.COLLECTION_MANAGER_ROLE, _msgSender());
         _;
     }
 
@@ -75,7 +75,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         address initialAdmin,
         address _lendingManagerAddress,
         address _collectionRegistryAddress
-    ) ERC4626(_asset) ERC20(_name, _symbol) AccessControlBase(initialAdmin) {
+    ) ERC4626(_asset) ERC20(_name, _symbol) RolesBase(initialAdmin) {
         if (address(_asset) == address(0)) revert AddressZero();
         if (initialAdmin == address(0)) revert AddressZero();
         if (_collectionRegistryAddress == address(0)) revert AddressZero();
@@ -160,22 +160,9 @@ contract CollectionsVault is ERC4626, ICollectionsVault, AccessControlBase, Cros
         _grantRole(OPERATOR_ROLE, _debtSubsidizerAddress);
     }
 
-    function grantCollectionAccess(address collectionAddress, address operator) external onlyRole(ADMIN_ROLE) {
-        CollectionValidationLib.validateAddress(collectionAddress);
-        CollectionValidationLib.validateAddress(operator);
-        collectionOperators[collectionAddress][operator] = true;
-        emit CollectionAccessGranted(collectionAddress, operator);
-    }
-
-    function revokeCollectionAccess(address collectionAddress, address operator) external onlyRole(ADMIN_ROLE) {
-        CollectionValidationLib.validateAddress(collectionAddress);
-        CollectionValidationLib.validateAddress(operator);
-        collectionOperators[collectionAddress][operator] = false;
-        emit CollectionAccessRevoked(collectionAddress, operator);
-    }
 
     function isCollectionOperator(address collectionAddress, address operator) public view returns (bool) {
-        return collectionOperators[collectionAddress][operator];
+        return hasRole(Roles.COLLECTION_MANAGER_ROLE, operator) || hasRole(Roles.GUARDIAN_ROLE, operator);
     }
 
     function collectionTotalAssetsDeposited(address collectionAddress) public view override returns (uint256) {
