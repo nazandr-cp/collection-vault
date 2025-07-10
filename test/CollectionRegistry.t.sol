@@ -209,7 +209,9 @@ contract CollectionRegistryTest is Test {
             p2: 0
         });
 
-        vm.expectRevert(abi.encodeWithSelector(CollectionRegistry.CollectionNotRegistered.selector, address(nftCollection1)));
+        vm.expectRevert(
+            abi.encodeWithSelector(CollectionRegistry.CollectionNotRegistered.selector, address(nftCollection1))
+        );
         registry.setWeightFunction(address(nftCollection1), weightFunction);
 
         vm.stopPrank();
@@ -257,7 +259,9 @@ contract CollectionRegistryTest is Test {
     function testSetYieldShareNotRegistered() public {
         vm.startPrank(MANAGER);
 
-        vm.expectRevert(abi.encodeWithSelector(CollectionRegistry.CollectionNotRegistered.selector, address(nftCollection1)));
+        vm.expectRevert(
+            abi.encodeWithSelector(CollectionRegistry.CollectionNotRegistered.selector, address(nftCollection1))
+        );
         registry.setYieldShare(address(nftCollection1), 7500);
 
         vm.stopPrank();
@@ -325,7 +329,9 @@ contract CollectionRegistryTest is Test {
     function testAddVaultToCollectionNotRegistered() public {
         vm.startPrank(MANAGER);
 
-        vm.expectRevert(abi.encodeWithSelector(CollectionRegistry.CollectionNotRegistered.selector, address(nftCollection1)));
+        vm.expectRevert(
+            abi.encodeWithSelector(CollectionRegistry.CollectionNotRegistered.selector, address(nftCollection1))
+        );
         registry.addVaultToCollection(address(nftCollection1), VAULT_1);
 
         vm.stopPrank();
@@ -337,7 +343,9 @@ contract CollectionRegistryTest is Test {
         _registerDefaultCollection(address(nftCollection1));
         registry.addVaultToCollection(address(nftCollection1), VAULT_1);
 
-        vm.expectRevert(abi.encodeWithSelector(CollectionRegistry.VaultAlreadyAdded.selector, address(nftCollection1), VAULT_1));
+        vm.expectRevert(
+            abi.encodeWithSelector(CollectionRegistry.VaultAlreadyAdded.selector, address(nftCollection1), VAULT_1)
+        );
         registry.addVaultToCollection(address(nftCollection1), VAULT_1);
 
         vm.stopPrank();
@@ -365,7 +373,9 @@ contract CollectionRegistryTest is Test {
     function testRemoveVaultFromCollectionNotRegistered() public {
         vm.startPrank(MANAGER);
 
-        vm.expectRevert(abi.encodeWithSelector(CollectionRegistry.CollectionNotRegistered.selector, address(nftCollection1)));
+        vm.expectRevert(
+            abi.encodeWithSelector(CollectionRegistry.CollectionNotRegistered.selector, address(nftCollection1))
+        );
         registry.removeVaultFromCollection(address(nftCollection1), VAULT_1);
 
         vm.stopPrank();
@@ -376,7 +386,9 @@ contract CollectionRegistryTest is Test {
 
         _registerDefaultCollection(address(nftCollection1));
 
-        vm.expectRevert(abi.encodeWithSelector(CollectionRegistry.VaultNotFound.selector, address(nftCollection1), VAULT_1));
+        vm.expectRevert(
+            abi.encodeWithSelector(CollectionRegistry.VaultNotFound.selector, address(nftCollection1), VAULT_1)
+        );
         registry.removeVaultFromCollection(address(nftCollection1), VAULT_1);
 
         vm.stopPrank();
@@ -408,7 +420,9 @@ contract CollectionRegistryTest is Test {
     function testRemoveCollectionNotRegistered() public {
         vm.startPrank(MANAGER);
 
-        vm.expectRevert(abi.encodeWithSelector(CollectionRegistry.CollectionNotRegistered.selector, address(nftCollection1)));
+        vm.expectRevert(
+            abi.encodeWithSelector(CollectionRegistry.CollectionNotRegistered.selector, address(nftCollection1))
+        );
         registry.removeCollection(address(nftCollection1));
 
         vm.stopPrank();
@@ -455,7 +469,9 @@ contract CollectionRegistryTest is Test {
     function testReactivateCollectionNotRegistered() public {
         vm.startPrank(MANAGER);
 
-        vm.expectRevert(abi.encodeWithSelector(CollectionRegistry.CollectionNotRegistered.selector, address(nftCollection1)));
+        vm.expectRevert(
+            abi.encodeWithSelector(CollectionRegistry.CollectionNotRegistered.selector, address(nftCollection1))
+        );
         registry.reactivateCollection(address(nftCollection1));
 
         vm.stopPrank();
@@ -500,7 +516,9 @@ contract CollectionRegistryTest is Test {
     }
 
     function testGetCollectionNotRegistered() public {
-        vm.expectRevert(abi.encodeWithSelector(CollectionRegistry.CollectionNotRegistered.selector, address(nftCollection1)));
+        vm.expectRevert(
+            abi.encodeWithSelector(CollectionRegistry.CollectionNotRegistered.selector, address(nftCollection1))
+        );
         registry.getCollection(address(nftCollection1));
     }
 
