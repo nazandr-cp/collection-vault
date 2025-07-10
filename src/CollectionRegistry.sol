@@ -6,16 +6,25 @@ import {CrossContractSecurity} from "./CrossContractSecurity.sol";
 import {ICollectionsVault} from "./interfaces/ICollectionsVault.sol";
 import {ICollectionRegistry} from "./interfaces/ICollectionRegistry.sol";
 import {Roles} from "./Roles.sol";
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 contract CollectionRegistry is ICollectionRegistry, AccessControlBase, CrossContractSecurity {
+    using EnumerableSet for EnumerableSet.AddressSet;
+
     bytes32 public constant COLLECTION_MANAGER_ROLE = Roles.COLLECTION_MANAGER_ROLE;
 
-    mapping(address => ICollectionRegistry.Collection) private _collections;
+    struct CollectionInfo {
+        address collectionAddress;
+        ICollectionRegistry.CollectionType collectionType;
+        ICollectionRegistry.WeightFunction weightFunction;
+        uint16 yieldSharePercentage;
+    }
+
+    mapping(address => CollectionInfo) private _collections;
+    mapping(address => EnumerableSet.AddressSet) private _collectionVaults;
     address[] private _allCollections;
     mapping(address => bool) private _isRegistered;
     mapping(address => bool) private _isRemoved;
-    mapping(address => mapping(address => bool)) private _collectionHasVault;
-    mapping(address => uint256) private _vaultIndexInCollection;
 
     constructor(address admin) AccessControlBase(admin) {
         _grantRole(COLLECTION_MANAGER_ROLE, admin);
@@ -51,7 +60,12 @@ contract CollectionRegistry is ICollectionRegistry, AccessControlBase, CrossCont
         if (!_isRegistered[collectionAddress]) {
             _isRegistered[collectionAddress] = true;
             _allCollections.push(collectionAddress);
-            _collections[collectionAddress] = collectionData;
+            _collections[collectionAddress] = CollectionInfo({
+                collectionAddress: collectionAddress,
+                collectionType: collectionData.collectionType,
+                weightFunction: collectionData.weightFunction,
+                yieldSharePercentage: collectionData.yieldSharePercentage
+            });
             _isRemoved[collectionAddress] = false;
 
             emit CollectionRegistered(
@@ -98,11 +112,8 @@ contract CollectionRegistry is ICollectionRegistry, AccessControlBase, CrossCont
     {
         require(_isRegistered[collection], "CollectionRegistry: Not registered");
         require(vault != address(0), "CollectionRegistry: Zero address");
-        require(!_collectionHasVault[collection][vault], "CollectionRegistry: Vault already added");
-
-        _collections[collection].vaults.push(vault);
-        _collectionHasVault[collection][vault] = true;
-        _vaultIndexInCollection[vault] = _collections[collection].vaults.length - 1;
+        bool added = _collectionVaults[collection].add(vault);
+        require(added, "CollectionRegistry: Vault already added");
         emit VaultAddedToCollection(collection, vault);
     }
 
@@ -112,17 +123,8 @@ contract CollectionRegistry is ICollectionRegistry, AccessControlBase, CrossCont
         onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE)
     {
         require(_isRegistered[collection], "CollectionRegistry: Not registered");
-        require(_collectionHasVault[collection][vault], "CollectionRegistry: Vault not found");
-
-        uint256 vaultIndex = _vaultIndexInCollection[vault];
-        address lastVault = _collections[collection].vaults[_collections[collection].vaults.length - 1];
-
-        _collections[collection].vaults[vaultIndex] = lastVault;
-        _vaultIndexInCollection[lastVault] = vaultIndex;
-        _collections[collection].vaults.pop();
-
-        delete _collectionHasVault[collection][vault];
-        delete _vaultIndexInCollection[vault];
+        bool removed = _collectionVaults[collection].remove(vault);
+        require(removed, "CollectionRegistry: Vault not found");
         emit VaultRemovedFromCollection(collection, vault);
     }
 
@@ -130,7 +132,15 @@ contract CollectionRegistry is ICollectionRegistry, AccessControlBase, CrossCont
 
     function getCollection(address collection) external view override returns (ICollectionRegistry.Collection memory) {
         require(_isRegistered[collection] && !_isRemoved[collection], "CollectionRegistry: Not registered");
-        return _collections[collection];
+        CollectionInfo storage info = _collections[collection];
+        address[] memory vaults = _collectionVaults[collection].values();
+        return ICollectionRegistry.Collection({
+            collectionAddress: info.collectionAddress,
+            collectionType: info.collectionType,
+            weightFunction: info.weightFunction,
+            yieldSharePercentage: info.yieldSharePercentage,
+            vaults: vaults
+        });
     }
 
     function isRegistered(address collection) external view override returns (bool) {
