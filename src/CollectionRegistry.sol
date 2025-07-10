@@ -16,6 +16,7 @@ contract CollectionRegistry is ICollectionRegistry, AccessControlBase, CrossCont
     mapping(address => bool) private _isRemoved;
     mapping(address => mapping(address => bool)) private _collectionHasVault;
     mapping(address => uint256) private _vaultIndexInCollection;
+    uint16 public totalYieldBps;
 
     constructor(address admin) AccessControlBase(admin) {
         _grantRole(COLLECTION_MANAGER_ROLE, admin);
@@ -25,6 +26,7 @@ contract CollectionRegistry is ICollectionRegistry, AccessControlBase, CrossCont
         require(_isRegistered[collection], "CollectionRegistry: Not registered");
         if (!_isRemoved[collection]) {
             _isRemoved[collection] = true;
+            totalYieldBps -= _collections[collection].yieldSharePercentage;
             emit CollectionRemoved(collection);
         }
     }
@@ -32,7 +34,10 @@ contract CollectionRegistry is ICollectionRegistry, AccessControlBase, CrossCont
     function reactivateCollection(address collection) external onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE) {
         require(_isRegistered[collection], "CollectionRegistry: Not registered");
         if (_isRemoved[collection]) {
+            uint16 newTotal = totalYieldBps + _collections[collection].yieldSharePercentage;
+            require(newTotal <= 10000, "CollectionRegistry: Total yield share exceeds 10000 bps");
             _isRemoved[collection] = false;
+            totalYieldBps = newTotal;
             emit CollectionReactivated(collection);
         }
     }
@@ -49,10 +54,13 @@ contract CollectionRegistry is ICollectionRegistry, AccessControlBase, CrossCont
             revert("CollectionRegistry: Yield share percentage cannot exceed 10000 (100%)");
         }
         if (!_isRegistered[collectionAddress]) {
+            uint16 newTotal = totalYieldBps + collectionData.yieldSharePercentage;
+            require(newTotal <= 10000, "CollectionRegistry: Total yield share exceeds 10000 bps");
             _isRegistered[collectionAddress] = true;
             _allCollections.push(collectionAddress);
             _collections[collectionAddress] = collectionData;
             _isRemoved[collectionAddress] = false;
+            totalYieldBps = newTotal;
 
             emit CollectionRegistered(
                 collectionAddress,
@@ -75,6 +83,11 @@ contract CollectionRegistry is ICollectionRegistry, AccessControlBase, CrossCont
             revert("CollectionRegistry: Yield share percentage cannot exceed 10000 (100%)");
         }
         uint16 oldShare = _collections[collection].yieldSharePercentage;
+        if (!_isRemoved[collection]) {
+            uint16 newTotal = totalYieldBps - oldShare + share;
+            require(newTotal <= 10000, "CollectionRegistry: Total yield share exceeds 10000 bps");
+            totalYieldBps = newTotal;
+        }
         _collections[collection].yieldSharePercentage = share;
         emit YieldShareUpdated(collection, oldShare, share);
     }
