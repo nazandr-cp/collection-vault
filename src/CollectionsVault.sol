@@ -412,9 +412,14 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
         if (assets > 0) {
             try lendingManager.depositToLendingProtocol(assets) returns (bool success) {
                 if (!success) {
+                    emit LendingManagerCallFailed(address(this), "deposit", assets, "Deposit returned false");
                     revert LendingManagerDepositFailed();
                 }
+            } catch Error(string memory reason) {
+                emit LendingManagerCallFailed(address(this), "deposit", assets, reason);
+                revert LendingManagerDepositFailed();
             } catch {
+                emit LendingManagerCallFailed(address(this), "deposit", assets, "Unknown error");
                 revert LendingManagerDepositFailed();
             }
         }
@@ -435,13 +440,20 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
                 if (neededFromLM > 0) {
                     try lendingManager.withdrawFromLendingProtocol(neededFromLM) returns (bool success) {
                         if (!success) {
+                            emit LendingManagerCallFailed(
+                                address(this), "withdraw", neededFromLM, "Withdraw returned false"
+                            );
                             revert LendingManagerWithdrawFailed();
                         }
                         uint256 balanceAfterLMWithdraw = assetToken.balanceOf(address(this));
                         if (balanceAfterLMWithdraw < assets) {
                             revert Vault_InsufficientBalancePostLMWithdraw();
                         }
+                    } catch Error(string memory reason) {
+                        emit LendingManagerCallFailed(address(this), "withdraw", neededFromLM, reason);
+                        revert LendingManagerWithdrawFailed();
                     } catch {
+                        emit LendingManagerCallFailed(address(this), "withdraw", neededFromLM, "Unknown error");
                         revert LendingManagerWithdrawFailed();
                     }
                 }
@@ -472,9 +484,12 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
         }
 
         if (address(epochManager) != address(0)) {
-            uint256 epochId = epochManager.getCurrentEpochId();
-            if (epochId != 0 && epochYieldAllocations[epochId] >= amount) {
-                epochYieldAllocations[epochId] -= amount;
+            try epochManager.getCurrentEpochId() returns (uint256 epochId) {
+                if (epochId != 0 && epochYieldAllocations[epochId] >= amount) {
+                    epochYieldAllocations[epochId] -= amount;
+                }
+            } catch {
+                // Continue execution - epoch ID retrieval failure doesn't prevent repayment
             }
         }
         if (totalYieldReserved >= amount) {
@@ -523,13 +538,16 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
             return 0;
         }
 
-        uint256 currentEpochId = epochManager.getCurrentEpochId();
-        if (currentEpochId == 0) {
+        try epochManager.getCurrentEpochId() returns (uint256 currentEpochId) {
+            if (currentEpochId == 0) {
+                return 0;
+            }
+
+            uint256 allocated = epochYieldAllocations[currentEpochId];
+            return CollectionYieldLib.getCurrentEpochYield(lendingManager, allocated, false);
+        } catch {
             return 0;
         }
-
-        uint256 allocated = epochYieldAllocations[currentEpochId];
-        return CollectionYieldLib.getCurrentEpochYield(lendingManager, allocated, false);
     }
 
     function getTotalAvailableYield() public view returns (uint256 totalAvailableYield) {
@@ -570,23 +588,48 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
             revert("CollectionsVault: Allocation amount exceeds available yield");
         }
 
-        uint256 currentEpochId = epochManager.getCurrentEpochId();
-        if (currentEpochId == 0) {
-            revert("CollectionsVault: No active epoch in EpochManager");
+        uint256 currentEpochId;
+        try epochManager.getCurrentEpochId() returns (uint256 epochId) {
+            currentEpochId = epochId;
+            if (currentEpochId == 0) {
+                revert("CollectionsVault: No active epoch in EpochManager");
+            }
+        } catch Error(string memory reason) {
+            emit EpochManagerCallUnavailable(address(this), "allocateEpochYield", reason);
+            revert EpochManagerUnavailable();
+        } catch {
+            emit EpochManagerCallUnavailable(address(this), "allocateEpochYield", "Unknown error");
+            revert EpochManagerUnavailable();
         }
 
-        epochManager.allocateVaultYield(address(this), amount);
-        epochYieldAllocations[currentEpochId] += amount;
-        totalYieldReserved += amount;
+        try epochManager.allocateVaultYield(address(this), amount) {
+            epochYieldAllocations[currentEpochId] += amount;
+            totalYieldReserved += amount;
+        } catch Error(string memory reason) {
+            emit EpochManagerCallFailed(address(this), currentEpochId, amount, reason);
+            revert EpochManagerAllocationFailed();
+        } catch {
+            emit EpochManagerCallFailed(address(this), currentEpochId, amount, "Unknown error");
+            revert EpochManagerAllocationFailed();
+        }
 
         emit VaultYieldAllocatedToEpoch(currentEpochId, amount);
     }
 
     function allocateYieldToEpoch(uint256 epochId) external nonReentrant whenNotPaused onlyRole(ADMIN_ROLE) {
         if (address(epochManager) == address(0)) revert("CollectionsVault: EpochManager not set");
-        uint256 currentEpochId = epochManager.getCurrentEpochId();
-        if (epochId != currentEpochId || epochId == 0) {
-            revert("CollectionsVault: Invalid epochId");
+        uint256 currentEpochId;
+        try epochManager.getCurrentEpochId() returns (uint256 epochIdFromManager) {
+            currentEpochId = epochIdFromManager;
+            if (epochId != currentEpochId || epochId == 0) {
+                revert("CollectionsVault: Invalid epochId");
+            }
+        } catch Error(string memory reason) {
+            emit EpochManagerCallUnavailable(address(this), "allocateYieldToEpoch", reason);
+            revert EpochManagerUnavailable();
+        } catch {
+            emit EpochManagerCallUnavailable(address(this), "allocateYieldToEpoch", "Unknown error");
+            revert EpochManagerUnavailable();
         }
 
         // Get remaining cumulative yield available for allocation
@@ -595,10 +638,17 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
             revert("CollectionsVault: No cumulative yield available for allocation");
         }
 
-        epochManager.allocateVaultYield(address(this), amount);
-        epochYieldAllocations[epochId] += amount;
-        totalYieldAllocatedCumulative += amount; // Track cumulative allocation
-        totalYieldReserved += amount;
+        try epochManager.allocateVaultYield(address(this), amount) {
+            epochYieldAllocations[epochId] += amount;
+            totalYieldAllocatedCumulative += amount; // Track cumulative allocation
+            totalYieldReserved += amount;
+        } catch Error(string memory reason) {
+            emit EpochManagerCallFailed(address(this), epochId, amount, reason);
+            revert EpochManagerAllocationFailed();
+        } catch {
+            emit EpochManagerCallFailed(address(this), epochId, amount, "Unknown error");
+            revert EpochManagerAllocationFailed();
+        }
         emit VaultYieldAllocatedToEpoch(epochId, amount);
     }
 
@@ -609,9 +659,18 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
         onlyRole(ADMIN_ROLE)
     {
         if (address(epochManager) == address(0)) revert("CollectionsVault: EpochManager not set");
-        uint256 currentEpochId = epochManager.getCurrentEpochId();
-        if (epochId != currentEpochId || epochId == 0) {
-            revert("CollectionsVault: Invalid epochId");
+        uint256 currentEpochId;
+        try epochManager.getCurrentEpochId() returns (uint256 epochIdFromManager) {
+            currentEpochId = epochIdFromManager;
+            if (epochId != currentEpochId || epochId == 0) {
+                revert("CollectionsVault: Invalid epochId");
+            }
+        } catch Error(string memory reason) {
+            emit EpochManagerCallUnavailable(address(this), "allocateCumulativeYieldToEpoch", reason);
+            revert EpochManagerUnavailable();
+        } catch {
+            emit EpochManagerCallUnavailable(address(this), "allocateCumulativeYieldToEpoch", "Unknown error");
+            revert EpochManagerUnavailable();
         }
         if (amount == 0) {
             revert("CollectionsVault: Allocation amount cannot be zero");
@@ -629,10 +688,17 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
             revert("CollectionsVault: Total allocation would exceed total available yield");
         }
 
-        epochManager.allocateVaultYield(address(this), amount);
-        epochYieldAllocations[epochId] += amount;
-        totalYieldAllocatedCumulative += amount; // Track cumulative allocation
-        totalYieldReserved += amount;
+        try epochManager.allocateVaultYield(address(this), amount) {
+            epochYieldAllocations[epochId] += amount;
+            totalYieldAllocatedCumulative += amount; // Track cumulative allocation
+            totalYieldReserved += amount;
+        } catch Error(string memory reason) {
+            emit EpochManagerCallFailed(address(this), epochId, amount, reason);
+            revert EpochManagerAllocationFailed();
+        } catch {
+            emit EpochManagerCallFailed(address(this), epochId, amount, "Unknown error");
+            revert EpochManagerAllocationFailed();
+        }
 
         emit VaultYieldAllocatedToEpoch(epochId, amount);
     }

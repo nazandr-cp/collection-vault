@@ -98,9 +98,18 @@ interface ICollectionsVault is IERC4626 {
         address indexed collectionAddress, uint256 indexed performanceScore, uint256 timestamp
     );
 
+    // External manager failure events
+    event EpochManagerCallFailed(
+        address indexed vaultAddress, uint256 indexed epochId, uint256 indexed amount, string reason
+    );
+    event EpochManagerCallUnavailable(address indexed vaultAddress, string functionName, string reason);
+    event LendingManagerCallFailed(address indexed vaultAddress, string operation, uint256 amount, string reason);
+
     error LendingManagerDepositFailed();
     error LendingManagerWithdrawFailed();
     error LendingManagerMismatch();
+    error EpochManagerAllocationFailed();
+    error EpochManagerUnavailable();
     error AddressZero();
     error Vault_InsufficientBalancePostLMWithdraw();
     error CollectionInsufficientBalance(address collectionAddress, uint256 requested, uint256 available);

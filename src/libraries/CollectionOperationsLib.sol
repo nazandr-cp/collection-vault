@@ -117,10 +117,11 @@ library CollectionOperationsLib {
             if (remainingDustInLM > reserve) {
                 uint256 redeemable = remainingDustInLM - reserve;
                 if (redeemable > 0) {
-                    bool success = lendingManager.withdrawFromLendingProtocol(redeemable);
-                    if (success) {
-                        finalAssetsToTransfer += redeemable;
-                    }
+                    try lendingManager.withdrawFromLendingProtocol(redeemable) returns (bool success) {
+                        if (success) {
+                            finalAssetsToTransfer += redeemable;
+                        }
+                    } catch {}
                 }
             }
         }
