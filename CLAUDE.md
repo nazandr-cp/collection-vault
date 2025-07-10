@@ -86,14 +86,10 @@ docker compose up deployer
 ## Key Development Patterns
 
 ### Library Usage
-The codebase uses focused libraries for specific functionality:
 - `CollectionYieldLib`: Yield calculation and distribution logic
-- `CollectionOperationsLib`: Collection-specific operations
-- `CollectionValidationLib`: Input validation and security checks
-- `BatchOperationsLib`: Batch operation utilities
+- `CollectionCoreLib`: Core operations and validation
 
 ### Access Control Integration
-All contracts inherit from `RolesBase` or `RolesBaseUpgradeable` providing:
 - Standardized role definitions via `Roles.sol`
 - `onlyRoleOrGuardian` pattern for emergency overrides
 - Unified security features across all contracts
@@ -151,3 +147,7 @@ Upgradeable contracts use OpenZeppelin's proxy pattern:
 - `script/`: Deployment and management scripts
 - `test/`: Test contracts and utilities
 - `echidna/`: Fuzzing test contracts and configurations
+
+## Development Notes
+
+- **Forge Script Environment**: Use source env for forge script running

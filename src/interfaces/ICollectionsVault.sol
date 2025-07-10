@@ -117,8 +117,22 @@ interface ICollectionsVault is IERC4626 {
     error InsufficientBalanceInProtocol();
     error ExcessiveYieldAmount(address collection, uint256 requested, uint256 maxAllowed);
     error ShareBalanceUnderflow();
-    error CollectionNotRegistered(address collectionAddress);
     error UnauthorizedCollectionAccess(address collectionAddress, address operator);
+    error RedeemRoundsToZero(uint256 shares);
+    error EpochManagerNotSet();
+    error AllocationAmountZero();
+    error AllocExceedsAvail();
+    error NoActiveEpoch();
+    error InvalidEpochId();
+    error NoCumulativeYield();
+    error ReqAmountExceeds();
+    error TotalAllocExceeds();
+    error PerfScoreExceedsMax();
+    error CollectionNotRegistered(address collectionAddress);
+    error YieldAlreadyApplied();
+    error AllocationUnderflow();
+    error BatchSizeExceedsLimit();
+    error RepayBorrowFailed();
 
     function ADMIN_ROLE() external view returns (bytes32);
 
@@ -128,9 +142,9 @@ interface ICollectionsVault is IERC4626 {
     function epochManager() external view returns (IEpochManager);
 
     function collectionTotalAssetsDeposited(address collectionAddress) external view returns (uint256);
-    function totalAssetsDepositedAllCollections() external view returns (uint256);
+    function totalAssetsDeposited() external view returns (uint256);
     function totalYieldReserved() external view returns (uint256);
-    function totalYieldAllocatedCumulative() external view returns (uint256);
+    function totalYieldAllocated() external view returns (uint256);
     function getTotalAvailableYield() external view returns (uint256);
     function getRemainingCumulativeYield() external view returns (uint256);
     function validateCumulativeClaims(uint256 totalClaimedAmount) external view returns (bool);

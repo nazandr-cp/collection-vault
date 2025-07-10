@@ -7,11 +7,10 @@ import {ICollectionsVault} from "../interfaces/ICollectionsVault.sol";
 
 /**
  * @title CollectionYieldLib
- * @dev Library for yield calculation and accrual logic
- * @dev Extracted from CollectionsVault to reduce contract size
+ * @dev Library for yield calculation, accrual, and view functions
  */
 library CollectionYieldLib {
-    uint256 public constant GLOBAL_DEPOSIT_INDEX_PRECISION = 1e18;
+    uint256 public constant DEPOSIT_INDEX_PRECISION = 1e18;
 
     event CollectionYieldAccrued(
         address indexed collectionAddress,
@@ -25,13 +24,6 @@ library CollectionYieldLib {
         address indexed collectionAddress, uint256 indexed yieldAmount, uint256 indexed timestamp
     );
 
-    /**
-     * @dev Updates the global deposit index based on lending manager yields
-     * @param lendingManager The lending manager contract
-     * @param totalYieldReserved The total yield currently reserved
-     * @param currentGlobalDepositIndex The current global deposit index
-     * @return newGlobalDepositIndex The updated global deposit index
-     */
     function updateGlobalDepositIndex(
         ILendingManager lendingManager,
         uint256 totalYieldReserved,
@@ -46,50 +38,44 @@ library CollectionYieldLib {
 
         uint256 lmAssets = lendingManager.totalAssets();
         uint256 currentTotalAssets = lmAssets > totalYieldReserved ? lmAssets - totalYieldReserved : 0;
-        uint256 newIndex = (currentTotalAssets * GLOBAL_DEPOSIT_INDEX_PRECISION) / totalPrincipal;
+        uint256 newIndex = (currentTotalAssets * DEPOSIT_INDEX_PRECISION) / totalPrincipal;
 
         return newIndex > currentGlobalDepositIndex ? newIndex : currentGlobalDepositIndex;
     }
 
-    /**
-     * @dev Accrues yield for a specific collection
-     * @param collectionAddress The collection to accrue yield for
-     * @param vaultData The collection's vault data (will be modified)
-     * @param collectionRegistry The collection registry contract
-     * @param globalDepositIndex The current global deposit index
-     * @param totalAssetsDepositedAllCollections Current total assets (will be modified)
-     * @param collectionTotalYieldGenerated Collection yield tracking (will be modified)
-     * @return yieldAccrued The amount of yield accrued
-     */
     function accrueCollectionYield(
         address collectionAddress,
         ICollectionsVault.CollectionVaultData storage vaultData,
         ICollectionRegistry collectionRegistry,
         uint256 globalDepositIndex,
         uint256 totalAssetsDepositedAllCollections,
-        mapping(address => uint256) storage collectionTotalYieldGenerated
-    ) external returns (uint256 yieldAccrued, uint256 newTotalAssetsDepositedAllCollections) {
+        uint256 currentTotalYieldGenerated
+    )
+        external
+        returns (uint256 yieldAccrued, uint256 newTotalAssetsDepositedAllCollections, uint256 newTotalYieldGenerated)
+    {
         ICollectionRegistry.Collection memory registryCollection = collectionRegistry.getCollection(collectionAddress);
 
         if (registryCollection.yieldSharePercentage == 0) {
             vaultData.lastGlobalDepositIndex = globalDepositIndex;
-            return (0, totalAssetsDepositedAllCollections);
+            return (0, totalAssetsDepositedAllCollections, currentTotalYieldGenerated);
         }
 
         uint256 lastIndex = vaultData.lastGlobalDepositIndex;
         newTotalAssetsDepositedAllCollections = totalAssetsDepositedAllCollections;
+        newTotalYieldGenerated = currentTotalYieldGenerated;
 
         if (globalDepositIndex > lastIndex) {
             uint256 accruedRatio = globalDepositIndex - lastIndex;
             yieldAccrued = (vaultData.totalAssetsDeposited * accruedRatio * registryCollection.yieldSharePercentage)
-                / (GLOBAL_DEPOSIT_INDEX_PRECISION * 10000);
+                / (DEPOSIT_INDEX_PRECISION * 10000);
 
             if (yieldAccrued > 0) {
                 vaultData.totalAssetsDeposited += yieldAccrued;
                 newTotalAssetsDepositedAllCollections += yieldAccrued;
 
                 // Track collection-specific yield generation
-                collectionTotalYieldGenerated[collectionAddress] += yieldAccrued;
+                newTotalYieldGenerated += yieldAccrued;
 
                 emit CollectionYieldGenerated(collectionAddress, yieldAccrued, block.timestamp);
                 emit CollectionYieldAccrued(
@@ -100,14 +86,6 @@ library CollectionYieldLib {
         vaultData.lastGlobalDepositIndex = globalDepositIndex;
     }
 
-    /**
-     * @dev Calculates potential yield for a collection without accruing it
-     * @param collectionAddress The collection to calculate yield for
-     * @param vaultData The collection's vault data
-     * @param collectionRegistry The collection registry contract
-     * @param globalDepositIndex The current global deposit index
-     * @return potentialYieldAccrued The amount of yield that would be accrued
-     */
     function calculatePotentialYield(
         address collectionAddress,
         ICollectionsVault.CollectionVaultData memory vaultData,
@@ -126,16 +104,9 @@ library CollectionYieldLib {
         uint256 accruedRatio = globalDepositIndex - vaultData.lastGlobalDepositIndex;
         potentialYieldAccrued = (
             vaultData.totalAssetsDeposited * accruedRatio * registryCollection.yieldSharePercentage
-        ) / (GLOBAL_DEPOSIT_INDEX_PRECISION * 10000);
+        ) / (DEPOSIT_INDEX_PRECISION * 10000);
     }
 
-    /**
-     * @dev Calculates current epoch yield available
-     * @param lendingManager The lending manager contract
-     * @param epochYieldAllocated Amount already allocated for current epoch
-     * @param includeNonShared Whether to include non-shared yield
-     * @return availableYield The available yield amount
-     */
     function getCurrentEpochYield(ILendingManager lendingManager, uint256 epochYieldAllocated, bool includeNonShared)
         external
         view
@@ -154,5 +125,67 @@ library CollectionYieldLib {
         }
 
         return totalLMYield > epochYieldAllocated ? totalLMYield - epochYieldAllocated : 0;
+    }
+
+    // VIEW FUNCTIONS
+    function getCollectionTotalBorrowVolume(
+        mapping(address => uint256) storage collectionTotalBorrowVolume,
+        address collectionAddress
+    ) external view returns (uint256) {
+        return collectionTotalBorrowVolume[collectionAddress];
+    }
+
+    function getCollectionTotalYieldGenerated(
+        mapping(address => uint256) storage collectionTotalYieldGenerated,
+        address collectionAddress
+    ) external view returns (uint256) {
+        return collectionTotalYieldGenerated[collectionAddress];
+    }
+
+    function getCollectionPerformanceScore(
+        mapping(address => uint256) storage collectionPerformanceScore,
+        address collectionAddress
+    ) external view returns (uint256) {
+        return collectionPerformanceScore[collectionAddress];
+    }
+
+    function getTotalAvailableYield(ILendingManager lendingManager)
+        external
+        view
+        returns (uint256 totalAvailableYield)
+    {
+        if (address(lendingManager) == address(0)) {
+            return 0;
+        }
+        return lendingManager.totalAssets() > lendingManager.totalPrincipalDeposited()
+            ? lendingManager.totalAssets() - lendingManager.totalPrincipalDeposited()
+            : 0;
+    }
+
+    function getRemainingCumulativeYield(ILendingManager lendingManager, uint256 totalYieldAllocatedCumulative)
+        external
+        view
+        returns (uint256 remainingYield)
+    {
+        if (address(lendingManager) == address(0)) {
+            return 0;
+        }
+        uint256 totalYield = lendingManager.totalAssets() > lendingManager.totalPrincipalDeposited()
+            ? lendingManager.totalAssets() - lendingManager.totalPrincipalDeposited()
+            : 0;
+        return totalYield > totalYieldAllocatedCumulative ? totalYield - totalYieldAllocatedCumulative : 0;
+    }
+
+    function totalCollectionYieldShareBps(
+        address[] storage allCollectionAddresses,
+        ICollectionRegistry collectionRegistry
+    ) external view returns (uint16 totalBps) {
+        uint256 length = allCollectionAddresses.length;
+        for (uint256 i = 0; i < length;) {
+            totalBps += collectionRegistry.getCollection(allCollectionAddresses[i]).yieldSharePercentage;
+            unchecked {
+                ++i;
+            }
+        }
     }
 }

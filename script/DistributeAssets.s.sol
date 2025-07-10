@@ -5,10 +5,10 @@ import "forge-std/Script.sol";
 import {MockERC20} from "../src/mocks/MockERC20.sol";
 import {MockERC721} from "../src/mocks/MockERC721.sol";
 import {CollectionsVault} from "../src/CollectionsVault.sol";
+import {Roles} from "../src/Roles.sol";
 
 contract DistributeAssets is Script {
     function run() external {
-        // Load environment variables
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
         address assetAddr = vm.envAddress("ASSET_ADDRESS");
         address nftAddr = vm.envAddress("NFT_ADDRESS");
@@ -18,18 +18,14 @@ contract DistributeAssets is Script {
 
         vm.startBroadcast(deployerKey);
 
-        // Attach to deployed contracts
         MockERC20 asset = MockERC20(assetAddr);
         MockERC721 nft = MockERC721(nftAddr);
-
-        // Distribute mDAI
         uint8 decimals = asset.decimals();
         uint256 amount2 = 5000 * 10 ** decimals;
         uint256 amount3 = 10000 * 10 ** decimals;
         asset.transfer(user2, amount2);
         asset.transfer(user3, amount3);
 
-        // Distribute NFTs
         for (uint256 i = 0; i < 2; i++) {
             nft.mint(user2);
         }
@@ -37,20 +33,11 @@ contract DistributeAssets is Script {
             nft.mint(user3);
         }
 
-        // Log results
-        console.log("Distributed", amount2, "tokens to", user2);
-        console.log("Distributed", amount3, "tokens to", user3);
-        console.log("Minted 2 NFTs to", user2);
-        console.log("Minted 4 NFTs to", user3);
-
-        // Whitelist collection and deposit to vault
         CollectionsVault vault = CollectionsVault(vaultAddr);
-        vault.grantRole(vault.COLLECTION_MANAGER_ROLE(), msg.sender);
+        vault.grantRole(Roles.COLLECTION_MANAGER_ROLE, msg.sender);
         uint256 depositAmount = 100000 * 10 ** decimals;
-        // Approve vault to transfer tokens on behalf of deployer
         asset.approve(vaultAddr, depositAmount);
         vault.depositForCollection(depositAmount, msg.sender, nftAddr);
-        console.log("Deposited", depositAmount, "tokens into vault for collection", nftAddr);
 
         vm.stopBroadcast();
     }

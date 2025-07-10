@@ -15,6 +15,7 @@ import {ILendingManager} from "../../src/interfaces/ILendingManager.sol";
 import {IDebtSubsidizer} from "../../src/interfaces/IDebtSubsidizer.sol";
 import {IEpochManager} from "../../src/interfaces/IEpochManager.sol";
 import {ICollectionRegistry} from "../../src/interfaces/ICollectionRegistry.sol";
+import {Roles} from "../../src/Roles.sol";
 
 import {MockTokenFactory} from "../mocks/MockTokenFactory.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
@@ -23,7 +24,6 @@ import {MockCToken} from "../mocks/MockCToken.sol";
 import {MockComptroller} from "../mocks/MockComptroller.sol";
 
 contract TestSetup is Test {
-    // Test accounts with consistent addresses
     address public constant ADMIN = address(0x1001);
     address public constant VAULT_OPERATOR = address(0x1002);
     address public constant COLLECTION_OPERATOR = address(0x1003);
@@ -34,14 +34,12 @@ contract TestSetup is Test {
     address public constant BORROWER_2 = address(0x3002);
     address public constant AUTOMATED_SYSTEM = address(0x4001);
 
-    // Protocol contracts
     CollectionsVault public collectionsVault;
     LendingManager public lendingManager;
     DebtSubsidizer public debtSubsidizer;
     EpochManager public epochManager;
     CollectionRegistry public collectionRegistry;
 
-    // Mock infrastructure
     MockTokenFactory public tokenFactory;
     MockERC20 public usdc;
     MockERC721 public nftCollection1;
@@ -49,31 +47,22 @@ contract TestSetup is Test {
     MockCToken public cUsdc;
     MockComptroller public comptroller;
 
-    // Test configuration
     uint256 public constant EPOCH_DURATION = 7 days;
     uint256 public constant INITIAL_SUPPLY = 1_000_000e6; // 1M USDC
     uint256 public constant INITIAL_EXCHANGE_RATE = 2e17; // 0.2 (1 cToken = 0.2 underlying)
 
-    // Events for test phase tracking
-    event TestPhaseStarted(string phase, uint256 timestamp);
-    event TestPhaseCompleted(string phase, uint256 timestamp, bool success);
     event ContractDeployed(string contractName, address contractAddress);
     event TestDataExported(string fileName, string data);
 
     function setUp() public virtual {
-        emit TestPhaseStarted("Setup", block.timestamp);
-
         _setupAccounts();
         _deployMockInfrastructure();
         _deployProtocolContracts();
         _configureProtocol();
         _exportContractAddresses();
-
-        emit TestPhaseCompleted("Setup", block.timestamp, true);
     }
 
     function _setupAccounts() internal {
-        // Set up account balances and labels
         vm.deal(ADMIN, 100 ether);
         vm.deal(VAULT_OPERATOR, 100 ether);
         vm.deal(COLLECTION_OPERATOR, 100 ether);
@@ -96,21 +85,17 @@ contract TestSetup is Test {
     }
 
     function _deployMockInfrastructure() internal {
-        // Deploy token factory
         tokenFactory = new MockTokenFactory();
         emit ContractDeployed("MockTokenFactory", address(tokenFactory));
 
-        // Create USDC mock
         usdc = tokenFactory.createERC20("USD Coin", "USDC", 6, INITIAL_SUPPLY);
         emit ContractDeployed("MockUSDC", address(usdc));
 
-        // Create NFT collections
         nftCollection1 = tokenFactory.createERC721("Test Collection 1", "TC1");
         nftCollection2 = tokenFactory.createERC721("Test Collection 2", "TC2");
         emit ContractDeployed("NFTCollection1", address(nftCollection1));
         emit ContractDeployed("NFTCollection2", address(nftCollection2));
 
-        // Deploy mock Compound infrastructure
         comptroller = new MockComptroller();
         emit ContractDeployed("MockComptroller", address(comptroller));
 
@@ -119,39 +104,27 @@ contract TestSetup is Test {
         );
         emit ContractDeployed("MockCUSDC", address(cUsdc));
 
-        // Setup token distributions
         _distributeTokens();
     }
 
     function _deployProtocolContracts() internal {
-        // Deploy Collection Registry
         collectionRegistry = new CollectionRegistry(ADMIN);
         emit ContractDeployed("CollectionRegistry", address(collectionRegistry));
 
-        // Deploy Epoch Manager
         epochManager = new EpochManager(EPOCH_DURATION, AUTOMATED_SYSTEM, ADMIN, address(debtSubsidizer));
         emit ContractDeployed("EpochManager", address(epochManager));
 
-        // Deploy Lending Manager
-        lendingManager = new LendingManager(
-            ADMIN,
-            address(0), // Will set vault address later
-            address(usdc),
-            address(cUsdc)
-        );
+        lendingManager = new LendingManager(ADMIN, address(0), address(usdc), address(cUsdc));
         emit ContractDeployed("LendingManager", address(lendingManager));
 
-        // Deploy Collections Vault
         collectionsVault = new CollectionsVault(
             usdc, "Collections Vault USDC", "cvUSDC", ADMIN, address(lendingManager), address(collectionRegistry)
         );
         emit ContractDeployed("CollectionsVault", address(collectionsVault));
 
-        // Deploy Debt Subsidizer (proxy pattern)
         address debtSubsidizerImpl = address(new DebtSubsidizer());
         emit ContractDeployed("DebtSubsidizerImpl", debtSubsidizerImpl);
 
-        // For testing, we'll use the implementation directly (simplified)
         debtSubsidizer = DebtSubsidizer(debtSubsidizerImpl);
         debtSubsidizer.initialize(ADMIN, address(collectionRegistry));
         emit ContractDeployed("DebtSubsidizer", address(debtSubsidizer));
@@ -160,31 +133,23 @@ contract TestSetup is Test {
     function _configureProtocol() internal {
         vm.startPrank(ADMIN);
 
-        // Configure Lending Manager with vault
         lendingManager.grantVaultRole(address(collectionsVault));
 
-        // Configure Collections Vault
         collectionsVault.setEpochManager(address(epochManager));
         collectionsVault.setDebtSubsidizer(address(debtSubsidizer));
 
-        // Grant collection manager role
-        collectionsVault.grantRole(collectionsVault.COLLECTION_MANAGER_ROLE(), COLLECTION_OPERATOR);
+        collectionsVault.grantRole(Roles.COLLECTION_MANAGER_ROLE, COLLECTION_OPERATOR);
 
-        // Configure Epoch Manager
         epochManager.grantVaultRole(address(collectionsVault));
 
-        // Register collections using separate function to reduce stack depth
         _registerCollections();
 
-        // Add vaults to collections
         collectionRegistry.addVaultToCollection(address(nftCollection1), address(collectionsVault));
         collectionRegistry.addVaultToCollection(address(nftCollection2), address(collectionsVault));
 
-        // Configure Debt Subsidizer
         debtSubsidizer.addVault(address(collectionsVault), address(lendingManager));
         debtSubsidizer.whitelistCollection(address(collectionsVault), address(nftCollection1));
         debtSubsidizer.whitelistCollection(address(collectionsVault), address(nftCollection2));
-        // Subsidy pool mechanism removed - subsidies are now tracked per vault automatically
 
         vm.stopPrank();
     }
@@ -225,7 +190,6 @@ contract TestSetup is Test {
     }
 
     function _distributeTokens() internal {
-        // Distribute USDC to test accounts
         usdc.mint(ADMIN, 100_000e6);
         usdc.mint(VAULT_OPERATOR, 50_000e6);
         usdc.mint(USER_1, 25_000e6);
@@ -234,7 +198,6 @@ contract TestSetup is Test {
         usdc.mint(BORROWER_1, 10_000e6);
         usdc.mint(BORROWER_2, 10_000e6);
 
-        // Mint NFTs
         nftCollection1.mint(USER_1, 1);
         nftCollection1.mint(USER_1, 2);
         nftCollection1.mint(USER_2, 3);
@@ -242,7 +205,6 @@ contract TestSetup is Test {
         nftCollection2.mint(USER_3, 2);
         nftCollection2.mint(USER_3, 3);
 
-        // Fund cToken with initial liquidity
         vm.startPrank(ADMIN);
         usdc.approve(address(cUsdc), type(uint256).max);
         cUsdc.mint(100_000e6);
@@ -250,14 +212,12 @@ contract TestSetup is Test {
     }
 
     function _exportContractAddresses() internal {
-        // Simplified approach to avoid stack too deep
         string memory part1 = _buildAddressesPart1();
         string memory part2 = _buildAddressesPart2();
         string memory contractAddresses = string(abi.encodePacked("{\n", part1, part2, "}"));
 
         emit TestDataExported("contract-addresses.json", contractAddresses);
 
-        // Write to file for backend integration
         vm.writeFile("test-exports/contract-addresses.json", contractAddresses);
     }
 
@@ -305,7 +265,6 @@ contract TestSetup is Test {
         );
     }
 
-    // Helper functions for tests
     function createEpochAndAdvanceTime() public {
         vm.prank(AUTOMATED_SYSTEM);
         epochManager.startEpoch();
@@ -336,7 +295,6 @@ contract TestSetup is Test {
         return collectionsVault.collectionTotalAssetsDeposited(collection);
     }
 
-    // State verification helpers
     function verifyContractDeployment() public view returns (bool) {
         return address(collectionsVault) != address(0) && address(lendingManager) != address(0)
             && address(debtSubsidizer) != address(0) && address(epochManager) != address(0)

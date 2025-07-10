@@ -12,8 +12,6 @@ contract DepositToVault is Script {
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
         address assetAddress = vm.envAddress("ASSET_ADDRESS");
         address nftAddress = vm.envAddress("NFT_ADDRESS");
-
-        // Use vault address from environment
         address vaultAddress = vm.envAddress("VAULT_ADDRESS");
         address lendingManagerAddress = vm.envAddress("LENDING_MANAGER_ADDRESS");
 
@@ -21,31 +19,17 @@ contract DepositToVault is Script {
         CollectionsVault vault = CollectionsVault(vaultAddress);
         LendingManager lendingManager = LendingManager(lendingManagerAddress);
 
-        // Amount to deposit: 100,000 MDAI
         uint8 decimals = asset.decimals();
         uint256 depositAmount = 100000 * (10 ** decimals);
-
-        // Use the actual SENDER address as admin (already has all required roles)
         address sender = vm.envAddress("SENDER");
 
         vm.startBroadcast(deployerKey);
 
-        // Grant OPERATOR_ROLE to vault on LendingManager (needed for depositToLendingProtocol)
         lendingManager.grantRole(Roles.OPERATOR_ROLE, vaultAddress);
-
-        // Grant collection manager role to the deployer
-        vault.grantRole(vault.COLLECTION_MANAGER_ROLE(), sender);
-
-        // Approve the vault to spend MDAI tokens
+        vault.grantRole(Roles.COLLECTION_MANAGER_ROLE, sender);
         asset.approve(vaultAddress, depositAmount);
-
-        // Deposit to the vault for the NFT collection
         vault.depositForCollection(depositAmount, sender, nftAddress);
 
         vm.stopBroadcast();
-
-        console.log("Deposited", depositAmount, "MDAI to vault for collection", nftAddress);
-        console.log("Vault address:", vaultAddress);
-        console.log("Asset address:", assetAddress);
     }
 }

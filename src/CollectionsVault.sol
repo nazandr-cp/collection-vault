@@ -17,8 +17,7 @@ import {IEpochManager} from "./interfaces/IEpochManager.sol";
 import {ICollectionRegistry} from "./interfaces/ICollectionRegistry.sol";
 
 import {CollectionYieldLib} from "./libraries/CollectionYieldLib.sol";
-import {CollectionOperationsLib} from "./libraries/CollectionOperationsLib.sol";
-import {CollectionValidationLib} from "./libraries/CollectionValidationLib.sol";
+import {CollectionCoreLib} from "./libraries/CollectionCoreLib.sol";
 import {BatchOperationsLib} from "./libraries/BatchOperationsLib.sol";
 
 interface ICToken {
@@ -29,41 +28,63 @@ interface ICToken {
 contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContractSecurity {
     using SafeERC20 for IERC20;
     using Math for uint256;
-    using CollectionOperationsLib for *;
+    using CollectionCoreLib for *;
 
-    bytes32 public constant ADMIN_ROLE = Roles.ADMIN_ROLE;
-    bytes32 public constant OPERATOR_ROLE = Roles.OPERATOR_ROLE;
-    bytes32 public constant COLLECTION_MANAGER_ROLE = Roles.COLLECTION_MANAGER_ROLE;
+    modifier onlyValidEpochManager() {
+        if (address(epochManager) == address(0)) revert EpochManagerNotSet();
+        _;
+    }
 
-    // Custom errors
-    error RedeemRoundsToZero(uint256 shares);
+    function _getCurrentEpochIdSafe() internal returns (uint256 currentEpochId) {
+        try epochManager.getCurrentEpochId() returns (uint256 epochId) {
+            currentEpochId = epochId;
+            if (currentEpochId == 0) revert NoActiveEpoch();
+        } catch Error(string memory reason) {
+            emit EpochManagerCallUnavailable(address(this), "getCurrentEpochId", reason);
+            revert EpochManagerUnavailable();
+        } catch {
+            emit EpochManagerCallUnavailable(address(this), "getCurrentEpochId", "Unknown");
+            revert EpochManagerUnavailable();
+        }
+    }
+
+    function ADMIN_ROLE() external pure returns (bytes32) {
+        return Roles.ADMIN_ROLE;
+    }
 
     function DEBT_SUBSIDIZER_ROLE() external pure returns (bytes32) {
-        return OPERATOR_ROLE;
+        return Roles.OPERATOR_ROLE;
     }
 
     ILendingManager public lendingManager;
     IEpochManager public epochManager;
     ICollectionRegistry public collectionRegistry;
 
-    mapping(address => CollectionVaultData) public collectionVaultsData;
-    uint256 public totalAssetsDepositedAllCollections;
-    uint256 public totalYieldReserved;
-    uint256 public globalDepositIndex;
-    uint256 public constant GLOBAL_DEPOSIT_INDEX_PRECISION = 1e18;
+    uint256 public constant DEPOSIT_INDEX_PRECISION = 1e18;
     uint256 public constant MAX_BATCH_SIZE = 50;
 
-    address[] private allCollectionAddresses;
+    struct VaultGlobals {
+        uint256 totalAssetsDep;
+        uint256 totalYieldReserved;
+        uint256 globalDepositIndex;
+        uint256 totalYieldAllocated;
+    }
+
+    VaultGlobals public vaultGlobals;
+
+    struct CollectionMetrics {
+        uint256 totalBorrowVolume;
+        uint256 totalYieldGenerated;
+        uint256 performanceScore;
+    }
+
+    mapping(address => CollectionVaultData) public collectionVaultsData;
     mapping(address => bool) private isCollectionRegistered;
-
     mapping(uint256 => uint256) public epochYieldAllocations;
-    mapping(uint256 => mapping(address => bool)) public epochCollectionYieldApplied;
+    mapping(uint256 => mapping(address => bool)) public epochYieldApplied;
+    mapping(address => CollectionMetrics) public collectionMetrics;
 
-    uint256 public totalYieldAllocatedCumulative;
-
-    mapping(address => uint256) public collectionTotalBorrowVolume;
-    mapping(address => uint256) public collectionTotalYieldGenerated;
-    mapping(address => uint256) public collectionPerformanceScore;
+    address[] private allCollectionAddresses;
 
     modifier onlyCollectionOperator(address collection) {
         _requireRoleOrGuardian(Roles.COLLECTION_MANAGER_ROLE, _msgSender());
@@ -75,29 +96,30 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
         string memory _name,
         string memory _symbol,
         address initialAdmin,
-        address _lendingManagerAddress,
-        address _collectionRegistryAddress
+        address _lendingManager,
+        address _collectionRegistry
     ) ERC4626(_asset) ERC20(_name, _symbol) RolesBase(initialAdmin) {
         if (address(_asset) == address(0)) revert AddressZero();
         if (initialAdmin == address(0)) revert AddressZero();
-        if (_collectionRegistryAddress == address(0)) revert AddressZero();
+        if (_collectionRegistry == address(0)) revert AddressZero();
 
-        if (_lendingManagerAddress != address(0)) {
-            ILendingManager tempLendingManager = ILendingManager(_lendingManagerAddress);
+        if (_lendingManager != address(0)) {
+            ILendingManager tempLendingManager = ILendingManager(_lendingManager);
             if (address(tempLendingManager.asset()) != address(_asset)) {
                 revert LendingManagerMismatch();
             }
             lendingManager = tempLendingManager;
-            IERC20(_asset).forceApprove(_lendingManagerAddress, type(uint256).max);
+            IERC20(_asset).forceApprove(_lendingManager, type(uint256).max);
         }
 
-        globalDepositIndex = GLOBAL_DEPOSIT_INDEX_PRECISION;
-        collectionRegistry = ICollectionRegistry(_collectionRegistryAddress);
+        vaultGlobals.globalDepositIndex = DEPOSIT_INDEX_PRECISION;
+        collectionRegistry = ICollectionRegistry(_collectionRegistry);
     }
 
     function _updateGlobalDepositIndex() internal {
-        globalDepositIndex =
-            CollectionYieldLib.updateGlobalDepositIndex(lendingManager, totalYieldReserved, globalDepositIndex);
+        vaultGlobals.globalDepositIndex = CollectionYieldLib.updateGlobalDepositIndex(
+            lendingManager, vaultGlobals.totalYieldReserved, vaultGlobals.globalDepositIndex
+        );
     }
 
     function _accrueCollectionYield(address collectionAddress) internal {
@@ -106,32 +128,33 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
         }
 
         CollectionVaultData storage vaultData = collectionVaultsData[collectionAddress];
-        (, uint256 newTotal) = CollectionYieldLib.accrueCollectionYield(
+        (, uint256 newTotal, uint256 newYieldGenerated) = CollectionYieldLib.accrueCollectionYield(
             collectionAddress,
             vaultData,
             collectionRegistry,
-            globalDepositIndex,
-            totalAssetsDepositedAllCollections,
-            collectionTotalYieldGenerated
+            vaultGlobals.globalDepositIndex,
+            vaultGlobals.totalAssetsDep,
+            collectionMetrics[collectionAddress].totalYieldGenerated
         );
-        totalAssetsDepositedAllCollections = newTotal;
+        vaultGlobals.totalAssetsDep = newTotal;
+        collectionMetrics[collectionAddress].totalYieldGenerated = newYieldGenerated;
     }
 
     function _ensureCollectionKnownAndRegistered(address collectionAddress) private {
-        CollectionValidationLib.ensureCollectionKnownAndRegistered(
+        CollectionCoreLib.ensureCollectionKnownAndRegistered(
             collectionAddress,
             collectionRegistry,
             isCollectionRegistered,
             allCollectionAddresses,
             collectionVaultsData[collectionAddress],
-            globalDepositIndex
+            vaultGlobals.globalDepositIndex
         );
     }
 
-    function setLendingManager(address _lendingManagerAddress) external onlyRole(ADMIN_ROLE) whenNotPaused {
-        CollectionValidationLib.validateAddress(_lendingManagerAddress);
+    function setLendingManager(address _lendingManager) external onlyRole(Roles.ADMIN_ROLE) whenNotPaused {
+        CollectionCoreLib.validateAddress(_lendingManager);
         address oldLendingManagerAddress = address(lendingManager);
-        lendingManager = ILendingManager(_lendingManagerAddress);
+        lendingManager = ILendingManager(_lendingManager);
         if (address(lendingManager.asset()) != address(asset())) {
             revert LendingManagerMismatch();
         }
@@ -140,63 +163,71 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
         if (oldLendingManagerAddress != address(0)) {
             assetToken.forceApprove(oldLendingManagerAddress, 0);
         }
-        assetToken.forceApprove(_lendingManagerAddress, type(uint256).max);
+        assetToken.forceApprove(_lendingManager, type(uint256).max);
 
-        emit LendingManagerChanged(oldLendingManagerAddress, _lendingManagerAddress, _msgSender());
+        emit LendingManagerChanged(oldLendingManagerAddress, _lendingManager, _msgSender());
     }
 
-    function setEpochManager(address _epochManagerAddress) external onlyRole(ADMIN_ROLE) whenNotPaused {
-        CollectionValidationLib.validateAddress(_epochManagerAddress);
-        epochManager = IEpochManager(_epochManagerAddress);
+    function setEpochManager(address _epochManager) external onlyRole(Roles.ADMIN_ROLE) whenNotPaused {
+        CollectionCoreLib.validateAddress(_epochManager);
+        epochManager = IEpochManager(_epochManager);
     }
 
-    function setCollectionRegistry(address _collectionRegistryAddress) external onlyRole(ADMIN_ROLE) whenNotPaused {
-        if (_collectionRegistryAddress == address(0)) revert AddressZero();
+    function setCollectionRegistry(address _collectionRegistry) external onlyRole(Roles.ADMIN_ROLE) whenNotPaused {
+        if (_collectionRegistry == address(0)) revert AddressZero();
         address oldRegistry = address(collectionRegistry);
-        collectionRegistry = ICollectionRegistry(_collectionRegistryAddress);
-        emit CollectionRegistryUpdated(oldRegistry, _collectionRegistryAddress);
+        collectionRegistry = ICollectionRegistry(_collectionRegistry);
+        emit CollectionRegistryUpdated(oldRegistry, _collectionRegistry);
     }
 
-    function setDebtSubsidizer(address _debtSubsidizerAddress) external onlyRole(ADMIN_ROLE) whenNotPaused {
-        if (_debtSubsidizerAddress == address(0)) revert AddressZero();
-        _grantRole(OPERATOR_ROLE, _debtSubsidizerAddress);
+    function setDebtSubsidizer(address _debtSubsidizer) external onlyRole(Roles.ADMIN_ROLE) whenNotPaused {
+        if (_debtSubsidizer == address(0)) revert AddressZero();
+        _grantRole(Roles.OPERATOR_ROLE, _debtSubsidizer);
     }
 
-    function isCollectionOperator(address collectionAddress, address operator) public view returns (bool) {
+    function isCollectionOperator(address, address operator) public view returns (bool) {
         return hasRole(Roles.COLLECTION_MANAGER_ROLE, operator) || hasRole(Roles.GUARDIAN_ROLE, operator);
     }
 
     function collectionTotalAssetsDeposited(address collectionAddress) public view override returns (uint256) {
-        return CollectionValidationLib.calculateCollectionTotalAssets(
+        return CollectionCoreLib.calculateCollectionTotalAssets(
             collectionAddress,
             collectionVaultsData[collectionAddress],
             collectionRegistry,
-            globalDepositIndex,
+            vaultGlobals.globalDepositIndex,
             isCollectionRegistered
         );
     }
 
-    /**
-     * @notice Returns the underlying asset address (same as asset() from ERC4626)
-     * @return The address of the underlying asset
-     */
     function underlying() external view override returns (address) {
         return asset();
     }
 
     function totalAssets() public view override(ERC4626, IERC4626) returns (uint256) {
-        return totalAssetsDepositedAllCollections;
+        return vaultGlobals.totalAssetsDep;
+    }
+
+    function totalAssetsDeposited() external view returns (uint256) {
+        return vaultGlobals.totalAssetsDep;
+    }
+
+    function totalYieldReserved() external view returns (uint256) {
+        return vaultGlobals.totalYieldReserved;
+    }
+
+    function totalYieldAllocated() external view returns (uint256) {
+        return vaultGlobals.totalYieldAllocated;
     }
 
     function deposit(uint256, address) public virtual override(ERC4626, IERC4626) returns (uint256) {
-        revert FunctionDisabledUse("depositForCollection");
+        revert FunctionDisabledUse("depFC");
     }
 
     function _performCollectionDeposit(
         address collectionAddress,
         address receiver,
         uint256 assetsOrShares,
-        CollectionOperationsLib.DepositOperationType operationType
+        CollectionCoreLib.DepositOperationType operationType
     ) internal returns (uint256 assets, uint256 shares) {
         _updateGlobalDepositIndex();
         _ensureCollectionKnownAndRegistered(collectionAddress);
@@ -204,16 +235,15 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
 
         CollectionVaultData storage vaultData = collectionVaultsData[collectionAddress];
 
-        (assets, shares) = CollectionOperationsLib.calculateDepositAmounts(
+        (assets, shares) = CollectionCoreLib.calculateDepositAmounts(
             assetsOrShares, operationType, this.previewDeposit, this.previewMint
         );
 
         _deposit(msg.sender, receiver, assets, shares);
         _hookDeposit(assets);
 
-        totalAssetsDepositedAllCollections = CollectionOperationsLib.updateCollectionDataAfterDeposit(
-            vaultData, assets, shares, totalAssetsDepositedAllCollections
-        );
+        vaultGlobals.totalAssetsDep =
+            CollectionCoreLib.updateCollectionDataAfterDeposit(vaultData, assets, shares, vaultGlobals.totalAssetsDep);
 
         emit CollectionDeposit(collectionAddress, _msgSender(), receiver, assets, shares, shares);
     }
@@ -227,16 +257,16 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
         returns (uint256 shares)
     {
         (, shares) = _performCollectionDeposit(
-            collectionAddress, receiver, assets, CollectionOperationsLib.DepositOperationType.DEPOSIT_FOR_COLLECTION
+            collectionAddress, receiver, assets, CollectionCoreLib.DepositOperationType.DEPOSIT_FOR_COLLECTION
         );
     }
 
     function transfer(address, uint256) public pure override(ERC20, IERC20) returns (bool) {
-        revert FunctionDisabledUse("transferForCollection");
+        revert FunctionDisabledUse("transFC");
     }
 
     function transferFrom(address, address, uint256) public pure override(ERC20, IERC20) returns (bool) {
-        revert FunctionDisabledUse("transferForCollection");
+        revert FunctionDisabledUse("transFC");
     }
 
     function transferForCollection(address collectionAddress, address to, uint256 assets)
@@ -248,12 +278,12 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
         returns (uint256 shares)
     {
         (, shares) = _performCollectionDeposit(
-            collectionAddress, to, assets, CollectionOperationsLib.DepositOperationType.TRANSFER_FOR_COLLECTION
+            collectionAddress, to, assets, CollectionCoreLib.DepositOperationType.TRANSFER_FOR_COLLECTION
         );
     }
 
     function mint(uint256, address) public virtual override(ERC4626, IERC4626) returns (uint256) {
-        revert FunctionDisabledUse("mintForCollection");
+        revert FunctionDisabledUse("mintFC");
     }
 
     function mintForCollection(uint256 shares, address receiver, address collectionAddress)
@@ -265,12 +295,12 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
         returns (uint256 assets)
     {
         (assets,) = _performCollectionDeposit(
-            collectionAddress, receiver, shares, CollectionOperationsLib.DepositOperationType.MINT_FOR_COLLECTION
+            collectionAddress, receiver, shares, CollectionCoreLib.DepositOperationType.MINT_FOR_COLLECTION
         );
     }
 
     function withdraw(uint256, address, address) public virtual override(ERC4626, IERC4626) returns (uint256) {
-        revert FunctionDisabledUse("withdrawForCollection");
+        revert FunctionDisabledUse("withFC");
     }
 
     function withdrawForCollection(uint256 assets, address receiver, address owner, address collectionAddress)
@@ -285,17 +315,17 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
         _accrueCollectionYield(collectionAddress);
 
         CollectionVaultData storage vaultData = collectionVaultsData[collectionAddress];
-        uint256 currentCollectionTotalAssets = vaultData.totalAssetsDeposited;
-        if (assets > currentCollectionTotalAssets) {
-            revert CollectionInsufficientBalance(collectionAddress, assets, currentCollectionTotalAssets);
+        uint256 currentTotalAssets = vaultData.totalAssetsDeposited;
+        if (assets > currentTotalAssets) {
+            revert CollectionInsufficientBalance(collectionAddress, assets, currentTotalAssets);
         }
 
         shares = previewWithdraw(assets);
         _hookWithdraw(assets);
         _withdraw(msg.sender, receiver, owner, assets, shares);
 
-        vaultData.totalAssetsDeposited = currentCollectionTotalAssets - assets;
-        totalAssetsDepositedAllCollections -= assets;
+        vaultData.totalAssetsDeposited = currentTotalAssets - assets;
+        vaultGlobals.totalAssetsDep -= assets;
         if (vaultData.totalSharesMinted < shares || vaultData.totalCTokensMinted < shares) {
             revert ShareBalanceUnderflow();
         }
@@ -306,7 +336,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
     }
 
     function redeem(uint256, address, address) public virtual override(ERC4626, IERC4626) returns (uint256) {
-        revert FunctionDisabledUse("redeemForCollection");
+        revert FunctionDisabledUse("redeemFC");
     }
 
     function redeemForCollection(uint256 shares, address receiver, address owner, address collectionAddress)
@@ -322,7 +352,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
         _accrueCollectionYield(collectionAddress);
 
         CollectionVaultData storage vaultData = collectionVaultsData[collectionAddress];
-        uint256 currentCollectionTotalAssets = vaultData.totalAssetsDeposited;
+        uint256 currentTotalAssets = vaultData.totalAssetsDeposited;
 
         assets = previewRedeem(shares);
         if (assets == 0) {
@@ -337,133 +367,61 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
         uint256 finalAssetsToTransfer = _handleFullRedemption(assets, shares);
 
         _performAssetTransfer(receiver, finalAssetsToTransfer, owner, shares);
-        _updateCollectionData(vaultData, assets, shares, currentCollectionTotalAssets);
+        _updateCollectionData(vaultData, assets, shares, currentTotalAssets);
 
         emit CollectionWithdraw(collectionAddress, _msgSender(), receiver, assets, shares, shares);
         return finalAssetsToTransfer;
     }
 
     function _handleFullRedemption(uint256 assets, uint256 shares) internal returns (uint256 finalAssetsToTransfer) {
-        return CollectionOperationsLib.handleFullRedemption(
-            assets, shares, totalSupply(), lendingManager, totalYieldReserved
+        return CollectionCoreLib.handleFullRedemption(
+            assets, shares, totalSupply(), lendingManager, vaultGlobals.totalYieldReserved
         );
     }
 
     function _performAssetTransfer(address receiver, uint256 finalAssetsToTransfer, address owner, uint256 shares)
         internal
     {
-        CollectionOperationsLib.performAssetTransfer(IERC20(asset()), receiver, finalAssetsToTransfer, owner, shares);
+        CollectionCoreLib.performAssetTransfer(IERC20(asset()), receiver, finalAssetsToTransfer, owner, shares);
     }
 
     function _updateCollectionData(
         CollectionVaultData storage vaultData,
         uint256 assets,
         uint256 shares,
-        uint256 currentCollectionTotalAssets
+        uint256 currentTotalAssets
     ) internal {
-        totalAssetsDepositedAllCollections = CollectionOperationsLib.updateCollectionDataAfterWithdraw(
-            vaultData, assets, shares, currentCollectionTotalAssets, totalAssetsDepositedAllCollections
+        vaultGlobals.totalAssetsDep = CollectionCoreLib.updateCollectionDataAfterWithdraw(
+            vaultData, assets, shares, currentTotalAssets, vaultGlobals.totalAssetsDep
         );
-    }
-
-    function transferForCollection(address to, uint256 amount, address collectionAddress)
-        public
-        virtual
-        nonReentrant
-        whenNotPaused
-        onlyCollectionOperator(collectionAddress)
-        returns (bool)
-    {
-        if (to == address(0)) revert AddressZero();
-        if (amount == 0) return true;
-
-        _updateGlobalDepositIndex();
-        _accrueCollectionYield(collectionAddress); // Ensures collection is known and yield accrued
-
-        CollectionVaultData storage vaultData = collectionVaultsData[collectionAddress];
-        if (!isCollectionRegistered[collectionAddress]) {
-            revert CollectionNotRegistered(collectionAddress);
-        }
-
-        uint256 currentTotalAssetsView = collectionTotalAssetsDeposited(collectionAddress);
-        if (amount > currentTotalAssetsView) {
-            revert CollectionInsufficientBalance(collectionAddress, amount, currentTotalAssetsView);
-        }
-        if (amount > vaultData.totalAssetsDeposited) {
-            revert CollectionInsufficientBalance(collectionAddress, amount, vaultData.totalAssetsDeposited);
-        }
-
-        _transfer(msg.sender, to, amount);
-        emit Transfer(msg.sender, to, amount);
-
-        vaultData.totalAssetsDeposited -= amount;
-        totalAssetsDepositedAllCollections -= amount;
-        if (vaultData.totalSharesMinted < amount || vaultData.totalCTokensMinted < amount) {
-            revert ShareBalanceUnderflow();
-        }
-        vaultData.totalSharesMinted -= amount;
-        vaultData.totalCTokensMinted -= amount;
-
-        emit CollectionTransfer(collectionAddress, msg.sender, to, amount);
-        return true;
     }
 
     function _hookDeposit(uint256 assets) internal virtual {
         if (assets > 0) {
             try lendingManager.depositToLendingProtocol(assets) returns (bool success) {
                 if (!success) {
-                    emit LendingManagerCallFailed(address(this), "deposit", assets, "Deposit returned false");
+                    emit LendingManagerCallFailed(address(this), "deposit", assets, "Deposit failed");
                     revert LendingManagerDepositFailed();
                 }
             } catch Error(string memory reason) {
                 emit LendingManagerCallFailed(address(this), "deposit", assets, reason);
                 revert LendingManagerDepositFailed();
             } catch {
-                emit LendingManagerCallFailed(address(this), "deposit", assets, "Unknown error");
+                emit LendingManagerCallFailed(address(this), "deposit", assets, "Unknown");
                 revert LendingManagerDepositFailed();
             }
         }
     }
 
     function _hookWithdraw(uint256 assets) internal virtual {
-        if (assets == 0) return;
-        IERC20 assetToken = IERC20(asset());
-        uint256 directBalance = assetToken.balanceOf(address(this));
-        if (directBalance < assets) {
-            uint256 neededFromLM = assets - directBalance;
-            uint256 availableInLM = lendingManager.totalAssets();
-            uint256 reserve = totalYieldReserved;
-            uint256 usableInLM = hasRole(OPERATOR_ROLE, _msgSender())
-                ? availableInLM
-                : (availableInLM > reserve ? availableInLM - reserve : 0);
-            if (neededFromLM <= usableInLM) {
-                if (neededFromLM > 0) {
-                    try lendingManager.withdrawFromLendingProtocol(neededFromLM) returns (bool success) {
-                        if (!success) {
-                            emit LendingManagerCallFailed(
-                                address(this), "withdraw", neededFromLM, "Withdraw returned false"
-                            );
-                            revert LendingManagerWithdrawFailed();
-                        }
-                        uint256 balanceAfterLMWithdraw = assetToken.balanceOf(address(this));
-                        if (balanceAfterLMWithdraw < assets) {
-                            revert Vault_InsufficientBalancePostLMWithdraw();
-                        }
-                    } catch Error(string memory reason) {
-                        emit LendingManagerCallFailed(address(this), "withdraw", neededFromLM, reason);
-                        revert LendingManagerWithdrawFailed();
-                    } catch {
-                        emit LendingManagerCallFailed(address(this), "withdraw", neededFromLM, "Unknown error");
-                        revert LendingManagerWithdrawFailed();
-                    }
-                }
-            }
-        }
+        CollectionCoreLib.handleWithdrawOperation(
+            assets, IERC20(asset()), lendingManager, vaultGlobals.totalYieldReserved, _msgSender(), this.hasRole
+        );
     }
 
     function repayBorrowBehalf(uint256 amount, address borrower)
         external
-        onlyRole(OPERATOR_ROLE)
+        onlyRole(Roles.OPERATOR_ROLE)
         whenNotPaused
         nonReentrant
     {
@@ -477,10 +435,10 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
 
         try lendingManager.repayBorrowBehalf(borrower, amount) returns (uint256 lmError) {
             if (lmError != 0) {
-                revert("CollectionsVault: Repay borrow behalf failed via LendingManager");
+                revert RepayBorrowFailed();
             }
         } catch {
-            revert("CollectionsVault: Repay borrow behalf failed via LendingManager");
+            revert RepayBorrowFailed();
         }
 
         if (address(epochManager) != address(0)) {
@@ -488,14 +446,12 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
                 if (epochId != 0 && epochYieldAllocations[epochId] >= amount) {
                     epochYieldAllocations[epochId] -= amount;
                 }
-            } catch {
-                // Continue execution - epoch ID retrieval failure doesn't prevent repayment
-            }
+            } catch {}
         }
-        if (totalYieldReserved >= amount) {
-            totalYieldReserved -= amount;
+        if (vaultGlobals.totalYieldReserved >= amount) {
+            vaultGlobals.totalYieldReserved -= amount;
         } else {
-            totalYieldReserved = 0;
+            vaultGlobals.totalYieldReserved = 0;
         }
 
         assetToken.forceApprove(address(lendingManager), 0);
@@ -503,7 +459,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
 
     function repayBorrowBehalfBatch(uint256[] calldata amounts, address[] calldata borrowers, uint256 totalAmount)
         external
-        onlyRole(OPERATOR_ROLE)
+        onlyRole(Roles.OPERATOR_ROLE)
         whenNotPaused
         nonReentrant
     {
@@ -522,10 +478,10 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
             lendingManager,
             epochManager,
             epochYieldAllocations,
-            totalYieldReserved
+            vaultGlobals.totalYieldReserved
         );
 
-        totalYieldReserved = newTotalYieldReserved;
+        vaultGlobals.totalYieldReserved = newTotalYieldReserved;
         emit YieldBatchRepaid(actualTotalRepaid, msg.sender);
     }
 
@@ -551,16 +507,15 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
     }
 
     function getTotalAvailableYield() public view returns (uint256 totalAvailableYield) {
-        return CollectionYieldLib.getCurrentEpochYield(lendingManager, 0, true);
+        return CollectionYieldLib.getTotalAvailableYield(lendingManager);
     }
 
     function getRemainingCumulativeYield() public view returns (uint256 remainingYield) {
-        uint256 totalYield = getTotalAvailableYield();
-        return totalYield > totalYieldAllocatedCumulative ? totalYield - totalYieldAllocatedCumulative : 0;
+        return CollectionYieldLib.getRemainingCumulativeYield(lendingManager, vaultGlobals.totalYieldAllocated);
     }
 
     function validateCumulativeClaims(uint256 totalClaimedAmount) external view returns (bool isValid) {
-        return totalClaimedAmount <= totalYieldAllocatedCumulative;
+        return totalClaimedAmount <= vaultGlobals.totalYieldAllocated;
     }
 
     function validateMerkleTreeAllocation(uint256 merkleTreeTotal)
@@ -569,84 +524,64 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
         returns (bool canAllocate, uint256 totalAvailable, uint256 currentlyAllocated, uint256 remainingYield)
     {
         totalAvailable = getTotalAvailableYield();
-        currentlyAllocated = totalYieldAllocatedCumulative;
+        currentlyAllocated = vaultGlobals.totalYieldAllocated;
         remainingYield = getRemainingCumulativeYield();
 
         canAllocate = merkleTreeTotal <= remainingYield && (currentlyAllocated + merkleTreeTotal) <= totalAvailable;
     }
 
-    function allocateEpochYield(uint256 amount) external nonReentrant whenNotPaused onlyRole(ADMIN_ROLE) {
-        if (address(epochManager) == address(0)) {
-            revert("CollectionsVault: EpochManager not set");
-        }
-        if (amount == 0) {
-            revert("CollectionsVault: Allocation amount cannot be zero");
-        }
+    function allocateEpochYield(uint256 amount)
+        external
+        nonReentrant
+        whenNotPaused
+        onlyRole(Roles.ADMIN_ROLE)
+        onlyValidEpochManager
+    {
+        if (amount == 0) revert AllocationAmountZero();
 
         uint256 currentAvailableYield = getCurrentEpochYield(false);
-        if (amount > currentAvailableYield) {
-            revert("CollectionsVault: Allocation amount exceeds available yield");
-        }
+        if (amount > currentAvailableYield) revert AllocExceedsAvail();
 
-        uint256 currentEpochId;
-        try epochManager.getCurrentEpochId() returns (uint256 epochId) {
-            currentEpochId = epochId;
-            if (currentEpochId == 0) {
-                revert("CollectionsVault: No active epoch in EpochManager");
-            }
-        } catch Error(string memory reason) {
-            emit EpochManagerCallUnavailable(address(this), "allocateEpochYield", reason);
-            revert EpochManagerUnavailable();
-        } catch {
-            emit EpochManagerCallUnavailable(address(this), "allocateEpochYield", "Unknown error");
-            revert EpochManagerUnavailable();
-        }
+        uint256 currentEpochId = _getCurrentEpochIdSafe();
 
         try epochManager.allocateVaultYield(address(this), amount) {
             epochYieldAllocations[currentEpochId] += amount;
-            totalYieldReserved += amount;
+            vaultGlobals.totalYieldReserved += amount;
         } catch Error(string memory reason) {
             emit EpochManagerCallFailed(address(this), currentEpochId, amount, reason);
             revert EpochManagerAllocationFailed();
         } catch {
-            emit EpochManagerCallFailed(address(this), currentEpochId, amount, "Unknown error");
+            emit EpochManagerCallFailed(address(this), currentEpochId, amount, "Unknown");
             revert EpochManagerAllocationFailed();
         }
 
         emit VaultYieldAllocatedToEpoch(currentEpochId, amount);
     }
 
-    function allocateYieldToEpoch(uint256 epochId) external nonReentrant whenNotPaused onlyRole(ADMIN_ROLE) {
-        if (address(epochManager) == address(0)) revert("CollectionsVault: EpochManager not set");
-        uint256 currentEpochId;
-        try epochManager.getCurrentEpochId() returns (uint256 epochIdFromManager) {
-            currentEpochId = epochIdFromManager;
-            if (epochId != currentEpochId || epochId == 0) {
-                revert("CollectionsVault: Invalid epochId");
-            }
-        } catch Error(string memory reason) {
-            emit EpochManagerCallUnavailable(address(this), "allocateYieldToEpoch", reason);
-            revert EpochManagerUnavailable();
-        } catch {
-            emit EpochManagerCallUnavailable(address(this), "allocateYieldToEpoch", "Unknown error");
-            revert EpochManagerUnavailable();
-        }
+    function allocateYieldToEpoch(uint256 epochId)
+        external
+        nonReentrant
+        whenNotPaused
+        onlyRole(Roles.ADMIN_ROLE)
+        onlyValidEpochManager
+    {
+        uint256 currentEpochId = _getCurrentEpochIdSafe();
+        if (epochId != currentEpochId || epochId == 0) revert InvalidEpochId();
 
-        // Get remaining cumulative yield available for allocation
         uint256 amount = getRemainingCumulativeYield();
         if (amount == 0) {
-            revert("CollectionsVault: No cumulative yield available for allocation");
+            revert NoCumulativeYield();
         }
 
         try epochManager.allocateVaultYield(address(this), amount) {
             epochYieldAllocations[epochId] += amount;
-            totalYieldAllocatedCumulative += amount; // Track cumulative allocation
-            totalYieldReserved += amount;
+            vaultGlobals.totalYieldAllocated += amount; // Track cumulative allocation
+            vaultGlobals.totalYieldReserved += amount;
         } catch Error(string memory reason) {
             emit EpochManagerCallFailed(address(this), epochId, amount, reason);
             revert EpochManagerAllocationFailed();
         } catch {
-            emit EpochManagerCallFailed(address(this), epochId, amount, "Unknown error");
+            emit EpochManagerCallFailed(address(this), epochId, amount, "Unknown");
             revert EpochManagerAllocationFailed();
         }
         emit VaultYieldAllocatedToEpoch(epochId, amount);
@@ -656,47 +591,36 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
         external
         nonReentrant
         whenNotPaused
-        onlyRole(ADMIN_ROLE)
+        onlyRole(Roles.ADMIN_ROLE)
+        onlyValidEpochManager
     {
-        if (address(epochManager) == address(0)) revert("CollectionsVault: EpochManager not set");
-        uint256 currentEpochId;
-        try epochManager.getCurrentEpochId() returns (uint256 epochIdFromManager) {
-            currentEpochId = epochIdFromManager;
-            if (epochId != currentEpochId || epochId == 0) {
-                revert("CollectionsVault: Invalid epochId");
-            }
-        } catch Error(string memory reason) {
-            emit EpochManagerCallUnavailable(address(this), "allocateCumulativeYieldToEpoch", reason);
-            revert EpochManagerUnavailable();
-        } catch {
-            emit EpochManagerCallUnavailable(address(this), "allocateCumulativeYieldToEpoch", "Unknown error");
-            revert EpochManagerUnavailable();
-        }
+        uint256 currentEpochId = _getCurrentEpochIdSafe();
+        if (epochId != currentEpochId || epochId == 0) revert InvalidEpochId();
         if (amount == 0) {
-            revert("CollectionsVault: Allocation amount cannot be zero");
+            revert AllocationAmountZero();
         }
 
         uint256 remainingYield = getRemainingCumulativeYield();
         uint256 totalAvailable = getTotalAvailableYield();
-        uint256 newCumulativeTotal = totalYieldAllocatedCumulative + amount;
+        uint256 newCumulativeTotal = vaultGlobals.totalYieldAllocated + amount;
 
         if (amount > remainingYield) {
-            revert("CollectionsVault: Requested amount exceeds available cumulative yield");
+            revert ReqAmountExceeds();
         }
 
         if (newCumulativeTotal > totalAvailable) {
-            revert("CollectionsVault: Total allocation would exceed total available yield");
+            revert TotalAllocExceeds();
         }
 
         try epochManager.allocateVaultYield(address(this), amount) {
             epochYieldAllocations[epochId] += amount;
-            totalYieldAllocatedCumulative += amount; // Track cumulative allocation
-            totalYieldReserved += amount;
+            vaultGlobals.totalYieldAllocated += amount; // Track cumulative allocation
+            vaultGlobals.totalYieldReserved += amount;
         } catch Error(string memory reason) {
             emit EpochManagerCallFailed(address(this), epochId, amount, reason);
             revert EpochManagerAllocationFailed();
         } catch {
-            emit EpochManagerCallFailed(address(this), epochId, amount, "Unknown error");
+            emit EpochManagerCallFailed(address(this), epochId, amount, "Unknown");
             revert EpochManagerAllocationFailed();
         }
 
@@ -708,16 +632,10 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
     }
 
     function totalCollectionYieldShareBps() public view returns (uint16 totalBps) {
-        uint256 length = allCollectionAddresses.length;
-        for (uint256 i = 0; i < length;) {
-            totalBps += collectionRegistry.getCollection(allCollectionAddresses[i]).yieldSharePercentage;
-            unchecked {
-                ++i;
-            }
-        }
+        return CollectionYieldLib.totalCollectionYieldShareBps(allCollectionAddresses, collectionRegistry);
     }
 
-    function indexCollectionsDeposits() external onlyRole(ADMIN_ROLE) whenNotPaused nonReentrant {
+    function indexCollectionsDeposits() external onlyRole(Roles.ADMIN_ROLE) whenNotPaused nonReentrant {
         _updateGlobalDepositIndex();
         address[] memory collectionList = allCollectionAddresses;
         uint256 length = collectionList.length;
@@ -730,39 +648,37 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
     }
 
     function getCollectionTotalBorrowVolume(address collectionAddress) external view returns (uint256) {
-        return collectionTotalBorrowVolume[collectionAddress];
+        return collectionMetrics[collectionAddress].totalBorrowVolume;
     }
 
     function getCollectionTotalYieldGenerated(address collectionAddress) external view returns (uint256) {
-        return collectionTotalYieldGenerated[collectionAddress];
+        return collectionMetrics[collectionAddress].totalYieldGenerated;
     }
 
     function getCollectionPerformanceScore(address collectionAddress) external view returns (uint256) {
-        return collectionPerformanceScore[collectionAddress];
+        return collectionMetrics[collectionAddress].performanceScore;
     }
 
     function updateCollectionPerformanceScore(address collectionAddress, uint256 score)
         external
-        onlyRole(ADMIN_ROLE)
+        onlyRole(Roles.ADMIN_ROLE)
         whenNotPaused
     {
         if (collectionAddress == address(0)) revert AddressZero();
-        if (score > 10000) {
-            revert("CollectionsVault: Performance score cannot exceed 10000 (100%)");
-        }
-        collectionPerformanceScore[collectionAddress] = score;
+        CollectionCoreLib.validatePerformanceScore(score);
+        collectionMetrics[collectionAddress].performanceScore = score;
         emit CollectionPerformanceUpdated(collectionAddress, score, block.timestamp);
     }
 
     function recordCollectionBorrowVolume(address collectionAddress, uint256 borrowAmount)
         external
-        onlyRole(ADMIN_ROLE)
+        onlyRole(Roles.ADMIN_ROLE)
         whenNotPaused
     {
         if (collectionAddress == address(0)) revert AddressZero();
-        collectionTotalBorrowVolume[collectionAddress] += borrowAmount;
+        collectionMetrics[collectionAddress].totalBorrowVolume += borrowAmount;
         emit CollectionBorrowVolumeUpdated(
-            collectionAddress, collectionTotalBorrowVolume[collectionAddress], borrowAmount, block.timestamp
+            collectionAddress, collectionMetrics[collectionAddress].totalBorrowVolume, borrowAmount, block.timestamp
         );
     }
 
@@ -770,30 +686,28 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
         external
         nonReentrant
         whenNotPaused
-        onlyRole(ADMIN_ROLE)
+        onlyRole(Roles.ADMIN_ROLE)
+        onlyValidEpochManager
     {
-        if (address(epochManager) == address(0)) {
-            revert("CollectionsVault: EpochManager not set");
-        }
         if (collectionAddress == address(0)) {
             revert AddressZero();
         }
         if (!isCollectionRegistered[collectionAddress]) {
-            revert("CollectionsVault: Collection not registered");
+            revert CollectionNotRegistered(collectionAddress);
         }
-        if (epochCollectionYieldApplied[epochId][collectionAddress]) {
-            revert("CollectionsVault: Yield already applied for this collection and epoch");
+        if (epochYieldApplied[epochId][collectionAddress]) {
+            revert YieldAlreadyApplied();
         }
 
         uint256 totalEpochAllocation = epochYieldAllocations[epochId];
         if (totalEpochAllocation == 0) {
-            epochCollectionYieldApplied[epochId][collectionAddress] = true;
+            epochYieldApplied[epochId][collectionAddress] = true;
             emit CollectionYieldAppliedForEpoch(
                 epochId,
                 collectionAddress,
-                collectionRegistry.getCollection(collectionAddress).yieldSharePercentage, // Fetch from registry
+                collectionRegistry.getCollection(collectionAddress).yieldSharePercentage,
                 0,
-                collectionVaultsData[collectionAddress].totalAssetsDeposited // Fetch from vault data
+                collectionVaultsData[collectionAddress].totalAssetsDeposited
             );
             return;
         }
@@ -805,7 +719,7 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
         ICollectionRegistry.Collection memory registryCollection = collectionRegistry.getCollection(collectionAddress);
 
         if (registryCollection.yieldSharePercentage == 0) {
-            epochCollectionYieldApplied[epochId][collectionAddress] = true;
+            epochYieldApplied[epochId][collectionAddress] = true;
             emit CollectionYieldAppliedForEpoch(epochId, collectionAddress, 0, 0, vaultData.totalAssetsDeposited);
             return;
         }
@@ -813,21 +727,21 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
         uint256 collectionYieldFromEpoch = (totalEpochAllocation * registryCollection.yieldSharePercentage) / 10000;
 
         if (collectionYieldFromEpoch > epochYieldAllocations[epochId]) {
-            revert("CollectionsVault: Allocation underflow");
+            revert AllocationUnderflow();
         }
 
         if (collectionYieldFromEpoch > 0) {
             vaultData.totalAssetsDeposited += collectionYieldFromEpoch;
-            totalAssetsDepositedAllCollections += collectionYieldFromEpoch;
+            vaultGlobals.totalAssetsDep += collectionYieldFromEpoch;
             epochYieldAllocations[epochId] -= collectionYieldFromEpoch;
-            if (totalYieldReserved >= collectionYieldFromEpoch) {
-                totalYieldReserved -= collectionYieldFromEpoch;
+            if (vaultGlobals.totalYieldReserved >= collectionYieldFromEpoch) {
+                vaultGlobals.totalYieldReserved -= collectionYieldFromEpoch;
             } else {
-                totalYieldReserved = 0;
+                vaultGlobals.totalYieldReserved = 0;
             }
         }
 
-        epochCollectionYieldApplied[epochId][collectionAddress] = true;
+        epochYieldApplied[epochId][collectionAddress] = true;
 
         emit CollectionYieldAppliedForEpoch(
             epochId,
@@ -840,14 +754,14 @@ contract CollectionsVault is ERC4626, ICollectionsVault, RolesBase, CrossContrac
 
     function resetEpochCollectionYieldFlags(uint256 epochId, address[] calldata collectionsToReset)
         external
-        onlyRole(ADMIN_ROLE)
+        onlyRole(Roles.ADMIN_ROLE)
     {
         uint256 length = collectionsToReset.length;
         if (length > MAX_BATCH_SIZE) {
-            revert("CollectionsVault: Batch size exceeds maximum limit");
+            revert BatchSizeExceedsLimit();
         }
         for (uint256 i = 0; i < length;) {
-            delete epochCollectionYieldApplied[epochId][collectionsToReset[i]];
+            delete epochYieldApplied[epochId][collectionsToReset[i]];
             unchecked {
                 ++i;
             }

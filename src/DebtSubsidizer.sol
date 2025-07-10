@@ -9,13 +9,9 @@ import {Roles} from "./Roles.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
-import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
-import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
-import {IERC1155} from "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
 import {ERC165Checker} from "@openzeppelin/contracts/utils/introspection/ERC165Checker.sol";
 
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 import {IDebtSubsidizer} from "./interfaces/IDebtSubsidizer.sol";
@@ -32,23 +28,21 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, RolesBaseUpgradeable 
         address cToken;
     }
 
-    uint16 private constant MAX_YIELD_SHARE_PERCENTAGE = 10000;
-    uint16 private constant MIN_YIELD_SHARE_PERCENTAGE = 100;
     uint256 private constant MAX_BATCH_SIZE = 50;
 
     mapping(address => InternalVaultInfo) internal _vaultsData;
-    mapping(address => bytes32) internal _merkleRoots; // Vault address => Merkle Root
-    mapping(address => mapping(address => uint256)) internal _claimedTotals; // vault => user => total claimed
-    mapping(address => uint256) internal _totalClaimedByVault; // vault => total claimed across all users
+    mapping(address => bytes32) internal _merkleRoots;
+    mapping(address => mapping(address => uint256)) internal _claimedTotals;
+    mapping(address => uint256) internal _totalClaimedByVault;
 
     mapping(address => mapping(address => bool)) internal _isCollectionWhitelisted;
-    mapping(address => address[]) internal _vaultWhitelistedCollections; // vault => array of whitelisted collections
+    mapping(address => address[]) internal _vaultWhitelistedCollections;
     mapping(address => mapping(address => uint256)) internal _userSecondsClaimed;
     mapping(address => uint256) internal _userTotalSecondsClaimed;
     ICollectionRegistry public collectionRegistry;
 
-    mapping(address => uint256) public totalSubsidies; // vault => total allocated subsidies
-    mapping(address => uint256) public totalSubsidiesClaimed; // vault => total claimed subsidies
+    mapping(address => uint256) public totalSubsidies;
+    mapping(address => uint256) public totalSubsidiesClaimed;
 
     mapping(address => bool) internal _vaultRemoved;
     mapping(address => mapping(address => bool)) internal _collectionRemoved;
@@ -225,12 +219,9 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, RolesBaseUpgradeable 
         if (amountToSubsidize > 0) {
             _vaultHasDeposits[vaultAddress] = true;
 
-            // Check if there are sufficient allocated subsidies for this vault
             if (totalSubsidiesClaimed[vaultAddress] + amountToSubsidize > totalSubsidies[vaultAddress]) {
                 revert IDebtSubsidizer.InsufficientYield();
             }
-
-            // Update claimed amounts
             totalSubsidiesClaimed[vaultAddress] += amountToSubsidize;
             _userTotalSecondsClaimed[recipient] += amountToSubsidize;
 
@@ -313,7 +304,7 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, RolesBaseUpgradeable 
     {
         totalClaimed = _totalClaimedByVault[vaultAddress];
 
-        try ICollectionsVault(vaultAddress).totalYieldAllocatedCumulative() returns (uint256 allocated) {
+        try ICollectionsVault(vaultAddress).totalYieldAllocated() returns (uint256 allocated) {
             totalAllocated = allocated;
             isValid = totalClaimed <= totalAllocated;
         } catch {
@@ -323,16 +314,11 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, RolesBaseUpgradeable 
     }
 
     function emergencyValidateAndPause(address vaultAddress) external onlyRole(Roles.ADMIN_ROLE) {
-        (bool isValid, uint256 totalClaimed, uint256 totalAllocated) = this.validateVaultClaimsIntegrity(vaultAddress);
+        (bool isValid,,) = this.validateVaultClaimsIntegrity(vaultAddress);
 
         if (!isValid) {
             _pause();
-            emit MerkleRootUpdated(
-                vaultAddress,
-                bytes32(0), // Clear merkle root to prevent further claims
-                msg.sender,
-                0 // No subsidies for emergency clear
-            );
+            emit MerkleRootUpdated(vaultAddress, bytes32(0), msg.sender, 0);
         }
     }
 
