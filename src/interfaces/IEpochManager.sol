@@ -62,14 +62,8 @@ interface IEpochManager {
     event EpochFinalized(uint256 indexed epochId, uint256 totalYieldAvailable, uint256 totalSubsidiesDistributed);
 
     /**
-     * @dev Emitted when an epoch's processing has started.
+     * @dev Emitted when processing of an epoch has started.
      * @param epochId The ID of the epoch.
-     */
-    event EpochProcessingStarted(uint256 indexed epochId);
-
-    /**
-     * @dev Emitted when processing of an epoch has started. Alias of
-     * `EpochProcessingStarted` for easier integrations.
      */
     event ProcessingStarted(uint256 indexed epochId);
 
