@@ -32,6 +32,7 @@ contract CollectionRegistry is ICollectionRegistry, RolesBase, CrossContractSecu
     address[] private _allCollections;
     mapping(address => bool) private _isRegistered;
     mapping(address => bool) private _isRemoved;
+    uint16 public totalYieldBps;
 
     constructor(address admin) RolesBase(admin) {
         _grantRole(COLLECTION_MANAGER_ROLE, admin);
@@ -41,6 +42,7 @@ contract CollectionRegistry is ICollectionRegistry, RolesBase, CrossContractSecu
         if (!_isRegistered[collection]) revert CollectionNotRegistered(collection);
         if (!_isRemoved[collection]) {
             _isRemoved[collection] = true;
+            totalYieldBps -= _collections[collection].yieldSharePercentage;
             emit CollectionRemoved(collection);
         }
     }
@@ -48,7 +50,10 @@ contract CollectionRegistry is ICollectionRegistry, RolesBase, CrossContractSecu
     function reactivateCollection(address collection) external onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE) {
         if (!_isRegistered[collection]) revert CollectionNotRegistered(collection);
         if (_isRemoved[collection]) {
+            uint16 newTotal = totalYieldBps + _collections[collection].yieldSharePercentage;
+            require(newTotal <= 10000, "CollectionRegistry: Total yield share exceeds 10000 bps");
             _isRemoved[collection] = false;
+            totalYieldBps = newTotal;
             emit CollectionReactivated(collection);
         }
     }
@@ -65,6 +70,8 @@ contract CollectionRegistry is ICollectionRegistry, RolesBase, CrossContractSecu
             revert YieldShareExceedsLimit(collectionData.yieldSharePercentage, 10000);
         }
         if (!_isRegistered[collectionAddress]) {
+            uint16 newTotal = totalYieldBps + collectionData.yieldSharePercentage;
+            require(newTotal <= 10000, "CollectionRegistry: Total yield share exceeds 10000 bps");
             _isRegistered[collectionAddress] = true;
             _allCollections.push(collectionAddress);
             _collections[collectionAddress] = CollectionInfo({
@@ -74,6 +81,7 @@ contract CollectionRegistry is ICollectionRegistry, RolesBase, CrossContractSecu
                 yieldSharePercentage: collectionData.yieldSharePercentage
             });
             _isRemoved[collectionAddress] = false;
+            totalYieldBps = newTotal;
 
             emit CollectionRegistered(
                 collectionAddress,
@@ -96,6 +104,11 @@ contract CollectionRegistry is ICollectionRegistry, RolesBase, CrossContractSecu
             revert YieldShareExceedsLimit(share, 10000);
         }
         uint16 oldShare = _collections[collection].yieldSharePercentage;
+        if (!_isRemoved[collection]) {
+            uint16 newTotal = totalYieldBps - oldShare + share;
+            require(newTotal <= 10000, "CollectionRegistry: Total yield share exceeds 10000 bps");
+            totalYieldBps = newTotal;
+        }
         _collections[collection].yieldSharePercentage = share;
         emit YieldShareUpdated(collection, oldShare, share);
     }

@@ -55,4 +55,5 @@ interface ICollectionRegistry {
     function isRegistered(address collection) external view returns (bool);
     function getCollection(address collection) external view returns (Collection memory);
     function allCollections() external view returns (address[] memory);
+    function totalYieldBps() external view returns (uint16);
 }

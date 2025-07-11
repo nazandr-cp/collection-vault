@@ -280,6 +280,36 @@ contract CollectionRegistryTest is Test {
         vm.stopPrank();
     }
 
+    function testTotalYieldBpsUpdatesOnRegisterAndRemove() public {
+        vm.startPrank(MANAGER);
+        _registerDefaultCollection(address(nftCollection1));
+        assertEq(registry.totalYieldBps(), 5000);
+        registry.removeCollection(address(nftCollection1));
+        assertEq(registry.totalYieldBps(), 0);
+        registry.reactivateCollection(address(nftCollection1));
+        assertEq(registry.totalYieldBps(), 5000);
+        vm.stopPrank();
+    }
+
+    function testRegisterCollectionRevertsWhenExceedsTotalShare() public {
+        vm.startPrank(MANAGER);
+        _registerDefaultCollection(address(nftCollection1));
+        ICollectionRegistry.Collection memory collectionData = ICollectionRegistry.Collection({
+            collectionAddress: address(nftCollection2),
+            collectionType: ICollectionRegistry.CollectionType.ERC721,
+            weightFunction: ICollectionRegistry.WeightFunction({
+                fnType: ICollectionRegistry.WeightFunctionType.LINEAR,
+                p1: 1e18,
+                p2: 0
+            }),
+            yieldSharePercentage: 6000,
+            vaults: new address[](0)
+        });
+        vm.expectRevert("CollectionRegistry: Total yield share exceeds 10000 bps");
+        registry.registerCollection(collectionData);
+        vm.stopPrank();
+    }
+
     // === Vault Management Tests ===
 
     function testAddVaultToCollection() public {
