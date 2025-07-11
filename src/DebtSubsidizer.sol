@@ -19,10 +19,12 @@ import {ICollectionsVault} from "./interfaces/ICollectionsVault.sol";
 import {ILendingManager} from "./interfaces/ILendingManager.sol";
 import {IEpochManager} from "./interfaces/IEpochManager.sol";
 import {ICollectionRegistry} from "./interfaces/ICollectionRegistry.sol";
+import {PackedMerkleLib} from "./libraries/PackedMerkleLib.sol";
 
 contract DebtSubsidizer is Initializable, IDebtSubsidizer, RolesBaseUpgradeable {
     using SafeERC20 for IERC20;
     using ERC165Checker for address;
+    using PackedMerkleLib for PackedMerkleLib.PackedMerkleVaultData;
 
     struct InternalVaultInfo {
         address cToken;
@@ -41,8 +43,7 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, RolesBaseUpgradeable 
     mapping(address => uint256) internal _userTotalSecondsClaimed;
     ICollectionRegistry public collectionRegistry;
 
-    mapping(address => uint256) public totalSubsidies;
-    mapping(address => uint256) public totalSubsidiesClaimed;
+    mapping(address => PackedMerkleLib.PackedMerkleVaultData) internal _packedVaultData;
 
     mapping(address => bool) internal _vaultRemoved;
     mapping(address => mapping(address => bool)) internal _collectionRemoved;
@@ -106,6 +107,7 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, RolesBaseUpgradeable 
             revert IDebtSubsidizer.VaultNotRegistered(vaultAddress_);
         }
 
+        // Soft delete if vault has deposits, hard delete otherwise
         if (_vaultHasDeposits[vaultAddress_]) {
             _vaultRemoved[vaultAddress_] = true;
             emit VaultDeactivated(vaultAddress_);
@@ -164,6 +166,7 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, RolesBaseUpgradeable 
         if (!_isCollectionWhitelisted[vaultAddress][collectionAddress]) {
             revert IDebtSubsidizer.CollectionNotWhitelistedInVault(vaultAddress, collectionAddress);
         }
+        // Soft delete if vault has deposits, hard delete otherwise
         if (_vaultHasDeposits[vaultAddress]) {
             _collectionRemoved[vaultAddress][collectionAddress] = true;
             emit CollectionDeactivated(vaultAddress, collectionAddress);
@@ -219,14 +222,22 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, RolesBaseUpgradeable 
         if (amountToSubsidize > 0) {
             _vaultHasDeposits[vaultAddress] = true;
 
-            if (totalSubsidiesClaimed[vaultAddress] + amountToSubsidize > totalSubsidies[vaultAddress]) {
+            // Check subsidy availability using packed struct
+            uint256 currentClaimed = _packedVaultData[vaultAddress].getClaimedAmount();
+            uint256 totalAvailable = _packedVaultData[vaultAddress].getRemainingAmount() + currentClaimed;
+
+            if (currentClaimed + amountToSubsidize > totalAvailable) {
                 revert IDebtSubsidizer.InsufficientYield();
             }
-            totalSubsidiesClaimed[vaultAddress] += amountToSubsidize;
+
+            // Update packed vault data
+            _packedVaultData[vaultAddress].addToClaimed(amountToSubsidize);
+            _packedVaultData[vaultAddress].subtractFromRemaining(amountToSubsidize);
             _userTotalSecondsClaimed[recipient] += amountToSubsidize;
 
             emit SubsidyClaimed(vaultAddress, recipient, amountToSubsidize);
 
+            // Circuit breaker protection for vault operations
             bytes32 circuitId = keccak256(abi.encodePacked("vault.repayBorrowBehalf", vaultAddress));
             _checkCircuitBreaker(circuitId);
 
@@ -281,7 +292,9 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, RolesBaseUpgradeable 
             revert IDebtSubsidizer.VaultNotRegistered(vaultAddress);
         }
         _merkleRoots[vaultAddress] = merkleRoot_;
-        totalSubsidies[vaultAddress] += totalSubsidiesForEpoch;
+        // Add new subsidies to remaining amount in packed struct
+        uint256 currentRemaining = _packedVaultData[vaultAddress].getRemainingAmount();
+        _packedVaultData[vaultAddress].updateRemaining(currentRemaining + totalSubsidiesForEpoch);
         emit MerkleRootUpdated(vaultAddress, merkleRoot_, msg.sender, totalSubsidiesForEpoch);
     }
 
@@ -337,15 +350,15 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, RolesBaseUpgradeable 
     }
 
     function getTotalSubsidies(address vaultAddress) external view returns (uint256) {
-        return totalSubsidies[vaultAddress];
+        return _packedVaultData[vaultAddress].getRemainingAmount() + _packedVaultData[vaultAddress].getClaimedAmount();
     }
 
     function getTotalSubsidiesClaimed(address vaultAddress) external view returns (uint256) {
-        return totalSubsidiesClaimed[vaultAddress];
+        return _packedVaultData[vaultAddress].getClaimedAmount();
     }
 
     function getRemainingSubsidies(address vaultAddress) external view returns (uint256) {
-        return totalSubsidies[vaultAddress] - totalSubsidiesClaimed[vaultAddress];
+        return _packedVaultData[vaultAddress].getRemainingAmount();
     }
 
     function isVaultRemoved(address vaultAddress) external view returns (bool) {
@@ -372,6 +385,7 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, RolesBaseUpgradeable 
         emit CollectionRegistryUpdated(oldRegistry, newRegistry);
     }
 
+    /// @notice Circuit breaker: blocks operations after 5 failures within 5 minutes
     function _checkCircuitBreaker(bytes32 circuitId) internal view {
         uint256 failures = _circuitBreakerFailures[circuitId];
         uint256 lastFailure = _circuitBreakerLastFailure[circuitId];
@@ -381,6 +395,7 @@ contract DebtSubsidizer is Initializable, IDebtSubsidizer, RolesBaseUpgradeable 
         }
     }
 
+    /// @notice Records a failure and resets counter if 5 minutes have passed
     function _recordVaultFailure(bytes32 circuitId) internal {
         _circuitBreakerFailures[circuitId]++;
         _circuitBreakerLastFailure[circuitId] = block.timestamp;
