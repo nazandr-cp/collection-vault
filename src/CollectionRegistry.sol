@@ -132,7 +132,7 @@ contract CollectionRegistry is ICollectionRegistry, RolesBase, CrossContractSecu
     {
         if (!_isRegistered[collection]) revert CollectionNotRegistered(collection);
         if (vault == address(0)) revert ZeroAddress();
-        
+
         bool added = _collectionVaults[collection].add(vault);
         if (!added) revert VaultAlreadyAdded(collection, vault);
         emit VaultAddedToCollection(collection, vault);
@@ -144,7 +144,7 @@ contract CollectionRegistry is ICollectionRegistry, RolesBase, CrossContractSecu
         onlyRoleWhenNotPaused(COLLECTION_MANAGER_ROLE)
     {
         if (!_isRegistered[collection]) revert CollectionNotRegistered(collection);
-        
+
         bool removed = _collectionVaults[collection].remove(vault);
         if (!removed) revert VaultNotFound(collection, vault);
         emit VaultRemovedFromCollection(collection, vault);
@@ -154,7 +154,7 @@ contract CollectionRegistry is ICollectionRegistry, RolesBase, CrossContractSecu
 
     function getCollection(address collection) external view override returns (ICollectionRegistry.Collection memory) {
         if (!_isRegistered[collection] || _isRemoved[collection]) revert CollectionNotRegistered(collection);
-        
+
         CollectionInfo storage info = _collections[collection];
         address[] memory vaults = _collectionVaults[collection].values();
         return ICollectionRegistry.Collection({
